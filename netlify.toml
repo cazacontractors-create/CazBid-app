@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Send the browser's /.netlify/functions/estimate call to the function (default path works,
+# this is just explicit). No build step needed — it's a static HTML file plus one function.
+
+# Bundle the trade manuals (markdown) alongside the function so it can read them at runtime.
+# Without this, Netlify's bundler ships only .js and the manuals would be missing.
+[functions]
+  included_files = ["netlify/functions/manuals/**"]
