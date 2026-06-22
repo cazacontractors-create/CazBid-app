@@ -712,14 +712,27 @@ async function callClaudeBackground(messages, opts) {
   const started = Date.now();
   const DEADLINE_MS = 4 * 60 * 1000; // give Opus + search up to 4 minutes
   let delay = 1500;
+  let consecErrors = 0;     // consecutive failed polls
+  let lastServerError = ""; // most recent error message the result fn reported
   while (Date.now() - started < DEADLINE_MS) {
     await new Promise((r) => setTimeout(r, delay));
     let r;
     try { r = await fetch("/.netlify/functions/estimate-result?job=" + encodeURIComponent(jobId)); }
-    catch (e) { continue; } // transient blip — keep polling
-    if (!r || !r.ok) { delay = Math.min(delay + 500, 4000); continue; }
+    catch (e) {
+      if (++consecErrors >= 8) throw new Error("Lost connection while waiting for the estimate — check your network and try again.");
+      continue; // transient blip — keep polling
+    }
+    if (!r || !r.ok) {
+      // a persistent error here means the result function itself is failing (e.g. Blobs not
+      // configured) — capture the real message and surface it instead of spinning silently
+      try { const ed = await r.json(); if (ed && ed.error) lastServerError = ed.error; } catch (e2) {}
+      if (++consecErrors >= 6) throw new Error(lastServerError ? ("Estimate service error — " + lastServerError) : ("The estimate service returned an error (status " + (r ? r.status : "?") + ")."));
+      delay = Math.min(delay + 500, 4000);
+      continue;
+    }
     let data;
-    try { data = await r.json(); } catch (e) { continue; }
+    try { data = await r.json(); } catch (e) { if (++consecErrors >= 6) throw new Error("The estimate service returned an unreadable response."); continue; }
+    consecErrors = 0; // clean response — reset the failure streak
     if (data.status === "done") { __LAST_MANUAL_USED = data.manualUsed; return data.text || ""; }
     if (data.status === "error") { throw new Error(data.error || "The estimate failed on the server"); }
     delay = Math.min(delay + 400, 4000); // still pending — back off gently and keep waiting

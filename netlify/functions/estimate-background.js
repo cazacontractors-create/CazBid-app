@@ -6,9 +6,12 @@
 // function limit on the free plan can't do.
 //
 // Flow: the app POSTs { jobId, prompt, maxTokens, search, trade } here. We run
-// the exact same Opus call as the original `estimate` function, then write the
-// result to the "cazbid-jobs" Blobs store under jobId. The app polls
-// `estimate-result` until it appears. Manual loading is unchanged (still Node/fs).
+// the same Opus call as the original `estimate` function, then write the result
+// to the "cazbid-jobs" Blobs store under jobId. The app polls `estimate-result`
+// until it appears. Manual loading is unchanged (still Node/fs).
+//
+// NOTE: v1 (exports.handler) functions MUST call connectLambda(event) before
+// getStore(), or Netlify Blobs throws MissingBlobsEnvironmentError.
 
 const fs = require("fs");
 const path = require("path");
@@ -62,16 +65,9 @@ function buildSystemPrompt(trade) {
   );
 }
 
-// Write the job outcome to the Blobs store the result-poller reads.
-async function writeResult(jobId, payload) {
-  try {
-    const { getStore } = await import("@netlify/blobs");
-    const store = getStore({ name: "cazbid-jobs", consistency: "strong" });
-    await store.set(jobId, JSON.stringify(payload));
-  } catch (e) {
-    // last resort: nothing else we can do from here; the poller will time out
-    console.error("Failed to write job result:", e && e.message);
-  }
+async function writeResult(store, jobId, payload) {
+  try { await store.set(jobId, JSON.stringify(payload)); }
+  catch (e) { console.error("Failed to write job result:", e && e.message); }
 }
 
 exports.handler = async function (event) {
@@ -84,9 +80,20 @@ exports.handler = async function (event) {
   const jobId = body.jobId;
   if (!jobId) return { statusCode: 400, body: "" };
 
+  // Establish Blobs (v1 functions need connectLambda before getStore).
+  let store;
+  try {
+    const { getStore, connectLambda } = await import("@netlify/blobs");
+    connectLambda(event);
+    store = getStore({ name: "cazbid-jobs", consistency: "strong" });
+  } catch (e) {
+    console.error("Blobs connect failed:", e && e.message);
+    return { statusCode: 202, body: "" }; // nothing to write to; poller will time out
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    await writeResult(jobId, { status: "error", error: "Server missing ANTHROPIC_API_KEY. Set it in Netlify > Site settings > Environment variables." });
+    await writeResult(store, jobId, { status: "error", error: "Server missing ANTHROPIC_API_KEY. Set it in Netlify > Site settings > Environment variables." });
     return { statusCode: 202, body: "" };
   }
 
@@ -95,7 +102,7 @@ exports.handler = async function (event) {
   const useSearch = !!body.search;
   const trade = body.trade || "";
 
-  if (!prompt) { await writeResult(jobId, { status: "error", error: "No prompt provided" }); return { statusCode: 202, body: "" }; }
+  if (!prompt) { await writeResult(store, jobId, { status: "error", error: "No prompt provided" }); return { statusCode: 202, body: "" }; }
 
   let messages;
   if (Array.isArray(prompt)) {
@@ -123,16 +130,16 @@ exports.handler = async function (event) {
     const data = await res.json();
     if (!res.ok) {
       const msg = (data && data.error && data.error.message) ? data.error.message : ("Anthropic API error " + res.status);
-      await writeResult(jobId, { status: "error", error: msg });
+      await writeResult(store, jobId, { status: "error", error: msg });
       return { statusCode: 202, body: "" };
     }
     let text = "";
     if (Array.isArray(data.content)) {
       data.content.forEach(function (block) { if (block && block.type === "text" && block.text) text += block.text; });
     }
-    await writeResult(jobId, { status: "done", text: text, manualUsed: sys ? trade : null });
+    await writeResult(store, jobId, { status: "done", text: text, manualUsed: sys ? trade : null });
   } catch (e) {
-    await writeResult(jobId, { status: "error", error: "Request failed: " + (e.message || String(e)) });
+    await writeResult(store, jobId, { status: "error", error: "Request failed: " + (e.message || String(e)) });
   }
   return { statusCode: 202, body: "" };
 };

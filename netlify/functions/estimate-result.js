@@ -2,6 +2,9 @@
 // The app polls GET /.netlify/functions/estimate-result?job=<jobId> while the
 // background estimate runs. Returns { status: "pending" } until the background
 // function has written { status: "done", text, manualUsed } or { status: "error", error }.
+//
+// NOTE: this is a v1 (exports.handler) function, so it MUST call connectLambda(event)
+// before getStore() — otherwise Netlify Blobs throws MissingBlobsEnvironmentError (a 500).
 
 const HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -17,13 +20,14 @@ exports.handler = async function (event) {
   if (!jobId) return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ status: "error", error: "Missing job id" }) };
 
   try {
-    const { getStore } = await import("@netlify/blobs");
+    const { getStore, connectLambda } = await import("@netlify/blobs");
+    connectLambda(event); // wire up Blobs context for v1 functions
     const store = getStore({ name: "cazbid-jobs", consistency: "strong" });
-    const raw = await store.get(jobId); // a JSON string written by the background fn, or null
+    const raw = await store.get(jobId); // JSON string written by the background fn, or null
     if (!raw) return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ status: "pending" }) };
-    // raw is already the JSON we want ({status, text/error, ...}); pass it straight through
     return { statusCode: 200, headers: HEADERS, body: raw };
   } catch (e) {
-    return { statusCode: 500, headers: HEADERS, body: JSON.stringify({ status: "error", error: "Result lookup failed: " + (e.message || String(e)) }) };
+    const name = (e && e.name) || "Error";
+    return { statusCode: 500, headers: HEADERS, body: JSON.stringify({ status: "error", error: name + ": " + ((e && e.message) || String(e)) }) };
   }
 };
