@@ -27,6 +27,7 @@ exports.handler = async function (event) {
 
   const reqTrades = Array.isArray(body.trades) ? body.trades : [];
   if (!reqTrades.length) return { statusCode: 400, headers: HEADERS, body: JSON.stringify({ error: "No trades provided" }) };
+  const priceBook = body.priceBook && Array.isArray(body.priceBook.entries) ? body.priceBook : null;
 
   const trades = [];
   const errors = [];
@@ -35,7 +36,7 @@ exports.handler = async function (event) {
     const spec = engine.SPECS[key];
     if (!spec) { errors.push({ trade: key, error: "no deterministic spec for this trade" }); continue; }
     try {
-      const result = engine.computeTrade(spec, (t && t.inputs) || {});
+      const result = engine.computeTrade(spec, (t && t.inputs) || {}, priceBook);
       const numericBlock = engine.formatTradeNumericBlock(spec, result);
       const est = engine.buildEstResult(spec, result, "", numericBlock);
       trades.push({ trade: key, estResult: est });
@@ -49,13 +50,18 @@ exports.handler = async function (event) {
   let materialTotal = 0, laborCost = 0, laborHours = 0, grandTotal = 0;
   const combinedItems = [];
   const byTrade = [];
+  const priceSummary = { pricebook: 0, retail: 0, seed: 0 };
   for (const t of trades) {
     const e = t.estResult;
     materialTotal += e.materialTotal;
     laborCost += e.laborCost;
     laborHours += e.laborHours;
     grandTotal += e.grandTotal;
-    byTrade.push({ trade: t.trade, title: e.title, materialTotal: e.materialTotal, laborCost: e.laborCost, grandTotal: e.grandTotal });
+    const ps = e.priceSummary || {};
+    priceSummary.pricebook += ps.pricebook || 0;
+    priceSummary.retail += ps.retail || 0;
+    priceSummary.seed += ps.seed || 0;
+    byTrade.push({ trade: t.trade, title: e.title, materialTotal: e.materialTotal, laborCost: e.laborCost, grandTotal: e.grandTotal, priceSummary: ps });
     e.items.forEach((it) => combinedItems.push(Object.assign({ trade: t.trade }, it)));
   }
 
@@ -74,6 +80,7 @@ exports.handler = async function (event) {
         laborCost: round0(laborCost),
         laborHours: round0(laborHours),
         grandTotal: round0(grandTotal),
+        priceSummary: priceSummary,
         tradeCount: trades.length,
       },
     }),

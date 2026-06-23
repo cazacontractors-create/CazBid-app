@@ -64,6 +64,7 @@ const COSTCACHE_KEY = "cazbid-costcache-v1";
 const MATCOST_KEY = "cazbid-matcosts-v1";
 const PRICEBOOK_KEY = "cazbid-pricebook-v1";
 const RATEBOOK_KEY = "cazbid-ratebook-v1";
+const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -1033,6 +1034,15 @@ function App() {
   const [whInputs, setWhInputs] = useState({});   // { trade: { field: value } }
   const [whResult, setWhResult] = useState(null); // combined estimate from /estimate-multi
   const [whBusy, setWhBusy] = useState(false);
+  const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
+  const [whPbOpen, setWhPbOpen] = useState(false);
+  // ---- CSV importer (Stage 2b/2c) ----
+  const [pbImportOpen, setPbImportOpen] = useState(false);
+  const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
+  const [csvMap, setCsvMap] = useState({ material: -1, cost: -1, unit: -1, category: -1 });
+  const [csvReview, setCsvReview] = useState(null); // [{material,unit,cost,trade,category,confidence}]
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvSupplier, setCsvSupplier] = useState("");
   // ---- homeowner conversational estimate ----
   const [convMsgs, setConvMsgs] = useState([]); // [{role:"ai"|"me", text}]
   const [convInput, setConvInput] = useState("");
@@ -1069,12 +1079,98 @@ function App() {
   };
   const whToggle = (trade) => setWhChecked((p) => ({ ...p, [trade]: !p[trade] }));
   const whSet = (trade, name, val) => setWhInputs((p) => ({ ...p, [trade]: { ...(p[trade] || {}), [name]: val } }));
+  // ---- engine price book (manual entry) ----
+  const saveEnginePB = (next) => { setEnginePB(next); pSet(ENGINE_PB_KEY, next); };
+  const pbAdd = () => saveEnginePB([...enginePB, { id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), trade: (whSpecs && whSpecs[0] && whSpecs[0].trade) || "framing", category: "", material: "", unit: "", unitCost: 0, source: { method: "manual", date: new Date().toISOString().slice(0, 10) } }]);
+  const pbSet = (id, field, val) => saveEnginePB(enginePB.map((e) => (e.id === id ? { ...e, [field]: val } : e)));
+  const pbDel = (id) => saveEnginePB(enginePB.filter((e) => e.id !== id));
+  // Convert the manual price book to the engine's expected shape (valid rows only).
+  const enginePriceBookPayload = () => ({
+    entries: enginePB
+      .filter((e) => e.trade && String(e.material).trim() && num(e.unitCost) > 0)
+      .map((e) => ({ trade: e.trade, category: e.category || "", material: e.material, unit: e.unit || "", unitCost: num(e.unitCost), source: e.source || { method: "manual" } })),
+  });
+  // ---- CSV importer: parse -> column-map -> AI categorize -> review -> commit ----
+  const parseCSV = (text) => {
+    const lines = String(text).replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim().length);
+    const parseLine = (line) => {
+      const out = []; let cur = "", q = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+        else { if (c === '"') q = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c; }
+      }
+      out.push(cur); return out.map((s) => s.trim());
+    };
+    const rows = lines.map(parseLine);
+    return { headers: rows[0] || [], rows: rows.slice(1) };
+  };
+  const csvAutoMap = (headers) => {
+    const find = (res) => headers.findIndex((h) => res.some((r) => r.test(String(h).toLowerCase())));
+    return {
+      material: find([/materi/, /descr/, /\bitem\b/, /product/, /\bname\b/]),
+      cost: find([/unit.?cost/, /\bcost\b/, /\bprice\b/, /each/, /\$/]),
+      unit: find([/\bunit\b/, /\buom\b/, /^um$/]),
+      category: find([/categ/, /\btype\b/, /group/]),
+    };
+  };
+  const onCsvText = (text) => {
+    const p = parseCSV(text);
+    setCsvParsed(p); setCsvReview(null);
+    if (p.headers.length) setCsvMap(csvAutoMap(p.headers));
+  };
+  const onCsvFile = async (file) => {
+    if (!file) return;
+    try { onCsvText(await file.text()); }
+    catch (e) { flash("Couldn't read file: " + errMsg(e)); }
+  };
+  const csvParseAndCategorize = async () => {
+    if (!csvParsed || csvMap.material < 0 || csvMap.cost < 0) { flash("Map at least the Material and Cost columns."); return; }
+    const base = csvParsed.rows.map((r) => ({
+      material: (r[csvMap.material] || "").trim(),
+      unit: csvMap.unit >= 0 ? (r[csvMap.unit] || "").trim() : "",
+      cost: num(String(r[csvMap.cost] || "").replace(/[^0-9.\-]/g, "")),
+      category: csvMap.category >= 0 ? (r[csvMap.category] || "").trim() : "",
+    })).filter((x) => x.material && x.cost > 0);
+    if (!base.length) { flash("No valid rows — need a material name and a cost > 0."); return; }
+    if (base.length > 120) { flash("Too many rows (" + base.length + "). Split the file to ≤120 rows."); return; }
+    setCsvBusy(true);
+    try {
+      const res = await fetch("/.netlify/functions/categorize-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ materials: base.map((b) => b.material) }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+      setCsvReview(base.map((b, i) => {
+        const c = (d.rows && d.rows[i]) || {};
+        return { material: b.material, unit: b.unit, cost: b.cost, trade: c.trade || "other", category: b.category || c.category || "", confidence: c.confidence != null ? c.confidence : 0 };
+      }));
+    } catch (e) { flash("Categorize failed: " + errMsg(e)); }
+    setCsvBusy(false);
+  };
+  const csvReviewSet = (i, field, val) => setCsvReview((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
+  const csvResetImport = () => { setCsvParsed(null); setCsvReview(null); setCsvMap({ material: -1, cost: -1, unit: -1, category: -1 }); };
+  const csvCommit = () => {
+    const valid = (csvReview || []).filter((r) => r.material && num(r.cost) > 0 && r.trade && r.trade !== "other");
+    if (!valid.length) { flash("Nothing to commit — give at least one row a real trade (not 'other') and a cost."); return; }
+    const date = new Date().toISOString().slice(0, 10);
+    const next = [...enginePB];
+    let added = 0, updated = 0;
+    valid.forEach((r) => {
+      const key = (r.trade + "|" + r.material).toLowerCase().replace(/\s+/g, " ").trim();
+      const idx = next.findIndex((e) => (e.trade + "|" + e.material).toLowerCase().replace(/\s+/g, " ").trim() === key);
+      const entry = { trade: r.trade, category: r.category || "", material: r.material, unit: r.unit || "", unitCost: num(r.cost), source: { method: "csv", supplier: csvSupplier || "", date: date } };
+      if (idx >= 0) { next[idx] = { ...next[idx], ...entry }; updated++; }
+      else { next.push({ id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ...entry }); added++; }
+    });
+    saveEnginePB(next);
+    csvResetImport(); setPbImportOpen(false);
+    flash("Committed " + added + " new + " + updated + " updated to your price book.");
+  };
   const buildWholeHouse = async () => {
     const req = (whSpecs || []).filter((t) => whChecked[t.trade]).map((t) => ({ trade: t.trade, inputs: whInputs[t.trade] || {} }));
     if (!req.length) { flash("Check at least one trade to estimate."); return; }
     setWhBusy(true); setWhResult(null);
     try {
-      const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: req }) });
+      const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: req, priceBook: enginePriceBookPayload() }) });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
       setWhResult(d);
@@ -1139,6 +1235,8 @@ function App() {
       if (pbz && Array.isArray(pbz) && pbz.length) setPriceBook(pbz);
       const rbz = await pGet(RATEBOOK_KEY);
       if (rbz && Array.isArray(rbz) && rbz.length) setRateBook(rbz);
+      const epb = await pGet(ENGINE_PB_KEY);
+      if (epb && Array.isArray(epb)) setEnginePB(epb);
       loaded.current = true;
       setTimeout(() => seedDemo(), 2500);
     })();
@@ -4024,6 +4122,86 @@ function App() {
           <section className="card">
             <div className="h1">Whole House / Addition <span className="propill">PRO</span></div>
             <p className="hint">All trades are on by default — uncheck any you're not providing on this job. Enter each checked trade's dimensions, then build one combined estimate. Every quantity, labor figure, and total is computed deterministically by Caza's engine (same numbers every time for the same inputs).</p>
+            {whSpecs && (
+              <div className="card" style={{ marginTop: 10 }}>
+                <label className="estf" style={{ alignItems: "center", cursor: "pointer" }} onClick={() => setWhPbOpen((o) => !o)}>
+                  <span className="seclabel">{whPbOpen ? "▾" : "▸"} My price book <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}</span></span>
+                  <span className="hint" style={{ marginLeft: 8 }}>your material costs — matched per trade, override seed pricing</span>
+                </label>
+                {whPbOpen && (
+                  <div>
+                    {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
+                    {enginePB.map((e) => (
+                      <div className="estfields" key={e.id} style={{ alignItems: "end" }}>
+                        <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
+                        <label className="estf"><span>Trade</span>
+                          <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
+                            {whSpecs.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                          </select>
+                        </label>
+                        <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
+                        <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
+                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
+                        <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+                      </div>
+                    ))}
+                    <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
+
+                    <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
+                      <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
+                      {pbImportOpen && !csvReview && (
+                        <div style={{ marginTop: 8 }}>
+                          <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
+                          <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
+                          <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
+                          {csvParsed && csvParsed.headers.length > 0 && (
+                            <div>
+                              <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
+                              <div className="estfields">
+                                {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
+                                  <label className="estf" key={k}><span>{lbl}</span>
+                                    <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
+                                      <option value={-1}>—</option>
+                                      {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
+                                    </select>
+                                  </label>
+                                ))}
+                              </div>
+                              <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
+                                {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {pbImportOpen && csvReview && (
+                        <div style={{ marginTop: 8 }}>
+                          <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
+                          {csvReview.map((r, i) => (
+                            <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
+                              <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
+                              <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
+                                <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
+                                  {(whSpecs || []).map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                                  <option value="other">other (skip)</option>
+                                </select>
+                              </label>
+                              <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
+                              <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
+                              <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
+                            </div>
+                          ))}
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
+                            <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {!whSpecs && <p className="hint">Loading trades…</p>}
             {whSpecs && whSpecs.map((t) => (
               <div className="card" style={{ marginTop: 10 }} key={t.trade}>
@@ -4067,6 +4245,9 @@ function App() {
                 <div className="costrow"><span>Materials — all trades</span><b>{$0(whResult.combined.materialTotal)}</b></div>
                 <div className="costrow"><span>Labor — all trades · {whResult.combined.laborHours} hrs</span><b>{$0(whResult.combined.laborCost)}</b></div>
                 <div className="costrow total"><span>Combined total</span><b>{$0(whResult.combined.grandTotal)}</b></div>
+                {whResult.combined.priceSummary && (whResult.combined.priceSummary.pricebook + whResult.combined.priceSummary.retail) > 0 && (
+                  <p className="hint">💲 {whResult.combined.priceSummary.pricebook} material line{whResult.combined.priceSummary.pricebook === 1 ? "" : "s"} priced from your book{whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : ""} · {whResult.combined.priceSummary.seed} on seed pricing.</p>
+                )}
                 <p className="hint">⚠️ Placeholder pricing — material unit costs and crew rates are seed values pending your real ABC Supply pricing and crew-history calibration. Treat as a rough order of magnitude until tuned.</p>
               </section>
             )}

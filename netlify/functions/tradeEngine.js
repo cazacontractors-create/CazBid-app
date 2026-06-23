@@ -53,17 +53,17 @@ SPECS.framing = {
     { name: "stories", label: "Stories", unit: "", type: "number", default: 1, description: "Number of stories." },
   ],
   lineItems: [
-    { id: "wall_studs", name: "Wall studs (2x studs)", unit: "EA", takeoff: "(((wallLF * 12) / ocSpacingIN) + 1) * 1.15", rounding: "round up to whole stud", materialUnitCost: 4.25 },
-    { id: "wall_plates", name: "Plates (1 bottom + double top)", unit: "LF", takeoff: "wallLF * 3", rounding: "round up to whole stock length (stockPlateLF)", materialUnitCost: 0.95 },
-    { id: "headers", name: "Headers over openings", unit: "BF", takeoff: "openingCount * 12", rounding: "round up to whole board", materialUnitCost: 1.85 },
-    { id: "wall_sheathing", name: "Wall sheathing (OSB/CDX)", unit: "EA", takeoff: "(wallAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0 },
-    { id: "housewrap", name: "House wrap", unit: "ROLL", takeoff: "(wallAreaSF * 1.10) / rollCoverageSF", rounding: "round up to whole roll", materialUnitCost: 165.0, params: { rollCoverageSF: 1000 } },
-    { id: "floor_joists", name: "Floor joists (priced per SF)", unit: "SF", takeoff: "floorAreaSF * 1.05", rounding: "none", materialUnitCost: 2.40 },
-    { id: "rim_joist", name: "Rim / band joist", unit: "LF", takeoff: "floorPerimeterLF", rounding: "round up to whole stock length", materialUnitCost: 2.10 },
-    { id: "subfloor", name: "Subfloor (3/4 T&G OSB)", unit: "EA", takeoff: "(floorAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 32.0 },
-    { id: "roof_trusses", name: "Roof trusses / rafters", unit: "EA", takeoff: "((buildingLengthLF * 12) / trussSpacingIN) + 1", rounding: "round up to whole truss", materialUnitCost: 145.0 },
-    { id: "roof_sheathing", name: "Roof sheathing (OSB/CDX)", unit: "EA", takeoff: "(roofAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0 },
-    { id: "fasteners", name: "Framing nails / structural screws", unit: "SF", takeoff: "(wallAreaSF + floorAreaSF + roofAreaSF)", rounding: "none", materialUnitCost: 0.12 },
+    { id: "wall_studs", name: "Wall studs (2x studs)", unit: "EA", takeoff: "(((wallLF * 12) / ocSpacingIN) + 1) * 1.15", rounding: "round up to whole stud", materialUnitCost: 4.25, priceMatch: "2x4 2x6 stud spf" },
+    { id: "wall_plates", name: "Plates (1 bottom + double top)", unit: "LF", takeoff: "wallLF * 3", rounding: "round up to whole stock length (stockPlateLF)", materialUnitCost: 0.95, priceMatch: "2x4 2x6 plate spf" },
+    { id: "headers", name: "Headers over openings", unit: "BF", takeoff: "openingCount * 12", rounding: "round up to whole board", materialUnitCost: 1.85, priceMatch: "header lvl 2x10 2x12" },
+    { id: "wall_sheathing", name: "Wall sheathing (OSB/CDX)", unit: "EA", takeoff: "(wallAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0, priceMatch: "osb cdx sheathing 7/16 4x8" },
+    { id: "housewrap", name: "House wrap", unit: "ROLL", takeoff: "(wallAreaSF * 1.10) / rollCoverageSF", rounding: "round up to whole roll", materialUnitCost: 165.0, params: { rollCoverageSF: 1000 }, priceMatch: "housewrap tyvek wrb wrap" },
+    { id: "floor_joists", name: "Floor joists (priced per SF)", unit: "SF", takeoff: "floorAreaSF * 1.05", rounding: "none", materialUnitCost: 2.40, priceMatch: "floor joist 2x10 i-joist" },
+    { id: "rim_joist", name: "Rim / band joist", unit: "LF", takeoff: "floorPerimeterLF", rounding: "round up to whole stock length", materialUnitCost: 2.10, priceMatch: "rim band joist" },
+    { id: "subfloor", name: "Subfloor (3/4 T&G OSB)", unit: "EA", takeoff: "(floorAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 32.0, priceMatch: "3/4 tongue groove osb subfloor 4x8" },
+    { id: "roof_trusses", name: "Roof trusses / rafters", unit: "EA", takeoff: "((buildingLengthLF * 12) / trussSpacingIN) + 1", rounding: "round up to whole truss", materialUnitCost: 145.0, priceMatch: "roof truss rafter" },
+    { id: "roof_sheathing", name: "Roof sheathing (OSB/CDX)", unit: "EA", takeoff: "(roofAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0, priceMatch: "osb cdx roof sheathing 7/16 4x8" },
+    { id: "fasteners", name: "Framing nails / structural screws", unit: "SF", takeoff: "(wallAreaSF + floorAreaSF + roofAreaSF)", rounding: "none", materialUnitCost: 0.12, priceMatch: "framing nails screws fasteners" },
   ],
   labor: {
     laborBasis: "area_per_day",
@@ -522,9 +522,81 @@ function laborCostLine(adjHours, rate, mult, laborCost) {
 }
 
 // ---------------------------------------------------------------------------
+// PRICE BOOK — per-line lookup waterfall (Stage 2)
+//   priceBook = { entries: [ { trade, category, material, unit, unitCost,
+//                              source:{method,supplier,date} } ] }
+//   Per estimate line, try (scoped to the line's TRADE): a matching builder
+//   price-book entry (fuzzy) -> seed materialUnitCost. (A best-effort HD/Lowe's
+//   tier will slot between price-book and seed later — entries whose source is
+//   HD/Lowe's are tagged tier "retail".) Pure JS, deterministic.
+// ---------------------------------------------------------------------------
+const PRICE_STOP = new Set(["the", "a", "an", "of", "for", "per", "and", "or", "with", "in", "to", "by", "ea", "each", "x", "in"]);
+function priceTokens(s) {
+  const raw = String(s == null ? "" : s)
+    .toLowerCase()
+    .replace(/[''"]/g, "")
+    .replace(/(\d)\s*[x×]\s*(\d)/g, "$1x$2") // "2 x 4" -> "2x4"
+    .replace(/[^a-z0-9.\/x-]+/g, " ")
+    .split(/\s+/)
+    .filter((t) => t && t.length > 1 && !PRICE_STOP.has(t));
+  // Expand dimension tokens so "2x4x8" also yields "2x4"/"4x8" (matches "2x4").
+  const out = [];
+  for (const tok of raw) {
+    out.push(tok);
+    const m = tok.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x(\d+(?:\.\d+)?))?$/);
+    if (m && m[3]) { out.push(m[1] + "x" + m[2]); out.push(m[2] + "x" + m[3]); }
+  }
+  return out;
+}
+// Overlap coefficient: shared tokens ÷ the SMALLER token set. Matches a short
+// supplier SKU ("2x4x8 SPF") against a verbose line ("Wall studs (2x studs)…")
+// without the verbose side tanking the score (Jaccard's union would).
+function priceMatchScore(aSet, bSet) {
+  if (!aSet.size || !bSet.size) return { score: 0, inter: 0 };
+  const small = aSet.size <= bSet.size ? aSet : bSet;
+  const big = small === aSet ? bSet : aSet;
+  let inter = 0;
+  for (const t of small) if (big.has(t)) inter++;
+  return { score: inter / small.size, inter: inter };
+}
+// Returns { unitCost, tier, matchType, matchScore, material, source } or null.
+function lookupLinePrice(trade, line, priceBook) {
+  if (!priceBook || !Array.isArray(priceBook.entries)) return null;
+  const t = String(trade).toLowerCase();
+  const cand = priceBook.entries.filter((e) => e && String(e.trade).toLowerCase() === t && isFinite(Number(e.unitCost)) && Number(e.unitCost) > 0);
+  if (!cand.length) return null;
+  const isFrac = (x) => /^\d+\/\d+$/.test(x);
+  const lineSet = new Set(priceTokens(line.name + " " + (line.priceMatch || "")));
+  const lineFracs = [...lineSet].filter(isFrac);
+  let best = null, bestScore = 0;
+  for (const e of cand) {
+    const eTok = priceTokens(e.material);
+    const eFracs = eTok.filter(isFrac);
+    // thickness/size conflict: both name a fraction (e.g. 7/16 vs 3/4) but share
+    // none -> different product, skip (avoids a 7/16 OSB price on 3/4 subfloor).
+    if (eFracs.length && lineFracs.length && !eFracs.some((f) => lineSet.has(f))) continue;
+    const m = priceMatchScore(new Set(eTok), lineSet);
+    // require >=2 shared meaningful tokens to avoid spurious single-token hits
+    if (m.inter >= 2 && m.score > bestScore) { bestScore = m.score; best = e; }
+  }
+  if (!best || bestScore < 0.5) return null; // too weak -> fall through to seed
+  const srcStr = best.source ? String(best.source.method || best.source.supplier || "") : "";
+  const isRetail = /hd|lowe|home.?depot|retail/i.test(srcStr);
+  const exact = priceTokens(line.name).slice().sort().join(" ") === priceTokens(best.material).slice().sort().join(" ");
+  return {
+    unitCost: Number(best.unitCost),
+    tier: isRetail ? "retail" : "pricebook",
+    matchType: exact ? "exact" : "fuzzy",
+    matchScore: Math.round(bestScore * 100) / 100,
+    material: best.material,
+    source: best.source || null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // THE DETERMINISTIC COMPUTE
 // ---------------------------------------------------------------------------
-function computeTrade(spec, rawInputs) {
+function computeTrade(spec, rawInputs, priceBook) {
   const inputs = coerceInputs(spec, rawInputs);
   const cal = spec.calibration;
 
@@ -533,8 +605,16 @@ function computeTrade(spec, rawInputs) {
     const rawQty = evalFormula(li.takeoff, scope);
     let qty = applyRounding(rawQty, li.rounding, scope);
     if (qty < 0) qty = 0;
-    const lineCost = qty * li.materialUnitCost;
-    return { id: li.id, name: li.name, unit: li.unit, rawQty, qty, materialUnitCost: li.materialUnitCost, lineCost };
+    // PRICE WATERFALL: builder price-book entry (fuzzy, per-trade) -> seed.
+    const pb = lookupLinePrice(spec.trade, li, priceBook);
+    const unitCost = pb ? pb.unitCost : li.materialUnitCost;
+    const lineCost = qty * unitCost;
+    return {
+      id: li.id, name: li.name, unit: li.unit, rawQty, qty,
+      materialUnitCost: unitCost, seedUnitCost: li.materialUnitCost, lineCost,
+      priceTier: pb ? pb.tier : "seed",
+      priceMatch: pb ? { matchType: pb.matchType, score: pb.matchScore, material: pb.material, source: pb.source } : null,
+    };
   });
 
   const materialSubtotal = lineItems.reduce((s, li) => s + li.lineCost, 0);
@@ -720,9 +800,15 @@ function buildEstResult(spec, result, narrative, numericBlock) {
   const round0 = (n) => Math.round(Number(n) || 0);
   const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
   const L = result.labor;
+  // priceTier transparency (Stage 2f): each line carries where its $ came from.
   const items = result.lineItems.map((li) => ({
     name: li.name, qty: round2(li.qty), unit: li.unit, cost: round0(li.lineCost),
+    unitCost: Math.round((Number(li.materialUnitCost) + Number.EPSILON) * 100) / 100,
+    priceTier: li.priceTier || "seed",
+    matchType: li.priceMatch ? li.priceMatch.matchType : null,
   }));
+  const priceSummary = { pricebook: 0, retail: 0, seed: 0 };
+  result.lineItems.forEach((li) => { const t = li.priceTier || "seed"; priceSummary[t] = (priceSummary[t] || 0) + 1; });
   const laborHours = round0(L.laborHours);
   const laborRate = round0(spec.labor.crewHourlyRate * (L.laborMultiplier || 1));
   const crew = 2;
@@ -749,8 +835,11 @@ function buildEstResult(spec, result, narrative, numericBlock) {
     notes: (narrative || "").trim(),
     checks: [
       "Quantities + labor computed deterministically by Caza's engine (basis: " + L.laborBasis.replace(/_/g, " ") + ")",
-      "Seed/placeholder pricing — tune unit costs + crew rate to your ABC Supply + job history",
+      priceSummary.pricebook > 0
+        ? (priceSummary.pricebook + " of " + items.length + " material lines priced from your price book; " + priceSummary.seed + " on seed pricing")
+        : "Seed/placeholder pricing — tune unit costs + crew rate to your ABC Supply + job history",
     ],
+    priceSummary: priceSummary,
     numericBlock: numericBlock,
   };
 }
@@ -799,7 +888,7 @@ async function runDeterministicTrade(spec, opts) {
   if (!raw || typeof raw !== "object") throw new Error(spec.trade + " extraction returned no tool input");
 
   // 2. COMPUTE + 3. FORMAT (numbers only; byte-identical for identical inputs).
-  const result = computeTrade(spec, raw);
+  const result = computeTrade(spec, raw, opts.priceBook);
   const numericBlock = formatTradeNumericBlock(spec, result);
   const assumptionsBlock = formatAssumptions(raw.assumptions);
 
@@ -828,7 +917,7 @@ async function runDeterministicTrade(spec, opts) {
 
 module.exports = {
   SPECS,
-  evalFormula, applyRounding, coerceInputs,
+  evalFormula, applyRounding, coerceInputs, lookupLinePrice, priceTokens,
   computeTrade, formatTradeNumericBlock, formatAssumptions, buildEstResult,
   buildExtractionTool, buildExtractionSystem, buildNarrativeSystem, buildNarrativeUserText,
   callAnthropic, runDeterministicTrade,
