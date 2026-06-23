@@ -944,6 +944,28 @@ function Party({ data, onClose }) {
 }
 
 /* ============================================================ */
+// Stage 3: shared Job Context panel — photos + measurement report + measurements
+// + a "get measured" entry. Display-only (no estimating logic); IDENTICAL on the
+// contractor and homeowner views (job context isn't sensitive pricing data).
+function JobContextPanel({ photos, measurements }) {
+  const ph = Array.isArray(photos) ? photos : [];
+  const meas = (measurements || "").trim();
+  return (
+    <section className="card jobcontext">
+      <div className="seclabel">📋 Job context</div>
+      {ph.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>{ph.map((p, i) => (<div className="thumb" key={i}><img src={p} alt="" /></div>))}</div>
+      )}
+      {meas && <p className="hint" style={{ marginTop: 6 }}>📐 <b>Measurements:</b> {meas}</p>}
+      {!ph.length && !meas && <p className="hint">No photos or measurements yet — add photos below, or get measured.</p>}
+      <p className="hint" style={{ marginTop: 6 }}>
+        📐 Get measured: <a href="https://www.eagleview.com" target="_blank" rel="noopener noreferrer">EagleView</a> / <a href="https://hover.to" target="_blank" rel="noopener noreferrer">Hover</a> (roof &amp; exterior) · <a href="https://poly.cam" target="_blank" rel="noopener noreferrer">Polycam</a> (interior), then upload the report.
+      </p>
+    </section>
+  );
+}
+
+/* ============================================================ */
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
   const [profH, setProfH] = useState({ name: "", contact: "", town: "", address: "", bio: "", avatar: "" });
@@ -3226,6 +3248,7 @@ function App() {
       {me.role === "homeowner" && tab === "chat" && !overlay && (
         <main className="page">
           <>
+              <JobContextPanel photos={convPhotos} measurements={""} />
               {convBid && (
                 <section className="card convbidcard">
                   <div className="convbidtop">
@@ -3939,6 +3962,7 @@ function App() {
             </section>
           ) : (
             <>
+              <JobContextPanel photos={estPhotos} measurements={estDims} />
               <section className="card">
                 <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>Pro Estimator</div></div>
                 {estTyping && (
