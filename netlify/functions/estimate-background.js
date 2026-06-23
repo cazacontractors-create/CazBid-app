@@ -15,6 +15,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const engine = require("./tradeEngine.js");
 
 const MANUAL_FILES = {
   roofing:    "Caza_Roofing_Estimating_Manual.md",
@@ -85,7 +86,7 @@ exports.handler = async function (event) {
   try {
     const { getStore, connectLambda } = await import("@netlify/blobs");
     connectLambda(event);
-    store = getStore({ name: "cazbid-jobs", consistency: "strong" });
+    store = getStore({ name: "cazbid-jobs" }); // eventual consistency (v1 has no uncachedEdgeURL for strong)
   } catch (e) {
     console.error("Blobs connect failed:", e && e.message);
     return { statusCode: 202, body: "" }; // nothing to write to; poller will time out
@@ -116,8 +117,27 @@ exports.handler = async function (event) {
     messages = [{ role: "user", content: prompt }];
   }
 
-  const payload = { model: "claude-opus-4-8", max_tokens: maxTokens, messages: messages };
   const sys = buildSystemPrompt(trade);
+
+  // DETERMINISTIC TRADE PATH: any trade with a spec in tradeEngine.SPECS gets the
+  // extract -> JS-compute -> prose flow. On any failure we fall through to the
+  // original single-call LLM path below.
+  let tradeErr = null;
+  const spec = engine.SPECS[String(trade).toLowerCase()];
+  if (spec) {
+    try {
+      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys });
+      // Emit the app's estResult JSON shape as `text` so the app's parseJSON +
+      // itemized UI render it natively (the markdown lives in estResult.numericBlock).
+      await writeResult(store, jobId, { status: "done", text: JSON.stringify(out.estResult), manualUsed: trade, engine: "deterministic-trade" });
+      return { statusCode: 202, body: "" };
+    } catch (e) {
+      tradeErr = (e && e.stack) ? e.stack : ((e && e.message) || String(e));
+      console.error("Deterministic trade failed; falling back to LLM path:", tradeErr);
+    }
+  }
+
+  const payload = { model: "claude-opus-4-8", max_tokens: maxTokens, messages: messages };
   if (sys) payload.system = sys;
   if (useSearch) payload.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
 
@@ -137,7 +157,7 @@ exports.handler = async function (event) {
     if (Array.isArray(data.content)) {
       data.content.forEach(function (block) { if (block && block.type === "text" && block.text) text += block.text; });
     }
-    await writeResult(store, jobId, { status: "done", text: text, manualUsed: sys ? trade : null });
+    await writeResult(store, jobId, { status: "done", text: text, manualUsed: sys ? trade : null, engine: tradeErr ? "llm-fallback" : undefined, tradeError: tradeErr || undefined });
   } catch (e) {
     await writeResult(store, jobId, { status: "error", error: "Request failed: " + (e.message || String(e)) });
   }
