@@ -2661,6 +2661,60 @@ function Party({
 }
 
 /* ============================================================ */
+// Stage 3: shared Job Context panel — photos + measurement report + measurements
+// + a "get measured" entry. Display-only (no estimating logic); IDENTICAL on the
+// contractor and homeowner views (job context isn't sensitive pricing data).
+function JobContextPanel({
+  photos,
+  measurements
+}) {
+  const ph = Array.isArray(photos) ? photos : [];
+  const meas = (measurements || "").trim();
+  return /*#__PURE__*/React.createElement("section", {
+    className: "card jobcontext"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "📋 Job context"), ph.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      marginTop: 6
+    }
+  }, ph.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    className: "thumb",
+    key: i
+  }, /*#__PURE__*/React.createElement("img", {
+    src: p,
+    alt: ""
+  })))), meas && /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "📐 ", /*#__PURE__*/React.createElement("b", null, "Measurements:"), " ", meas), !ph.length && !meas && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No photos or measurements yet — add photos below, or get measured."), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "📐 Get measured: ", /*#__PURE__*/React.createElement("a", {
+    href: "https://www.eagleview.com",
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "EagleView"), " / ", /*#__PURE__*/React.createElement("a", {
+    href: "https://hover.to",
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "Hover"), " (roof & exterior) · ", /*#__PURE__*/React.createElement("a", {
+    href: "https://poly.cam",
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, "Polycam"), " (interior), then upload the report."));
+}
+
+/* ============================================================ */
 function App() {
   const [me, setMe] = useState({
     uidH: "",
@@ -6398,7 +6452,10 @@ function App() {
     onClick: postJob
   }, busy === "post" ? "Posting…" : "Post to local contractors"))), me.role === "homeowner" && tab === "chat" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
-  }, /*#__PURE__*/React.createElement(React.Fragment, null, convBid && /*#__PURE__*/React.createElement("section", {
+  }, /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(JobContextPanel, {
+    photos: convPhotos,
+    measurements: ""
+  }), convBid && /*#__PURE__*/React.createElement("section", {
     className: "card convbidcard"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convbidtop"
@@ -7646,7 +7703,10 @@ function App() {
   }, "Upgrade to Pro ($149/mo)"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => goTab("profile")
-  }, "See all plans")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("section", {
+  }, "See all plans")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(JobContextPanel, {
+    photos: estPhotos,
+    measurements: estDims
+  }), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convhead"
