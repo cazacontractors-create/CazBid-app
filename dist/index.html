@@ -2936,6 +2936,50 @@ function App() {
       flash("Couldn't read file: " + errMsg(e));
     }
   };
+  // PDF / photo of a price sheet -> Claude vision extracts priced lines -> same review gate.
+  const onPriceFile = async file => {
+    if (!file) return;
+    setCsvBusy(true);
+    try {
+      let mediaType = file.type || "";
+      let fileData;
+      if (mediaType === "application/pdf") {
+        fileData = await readDataURL(file);
+      } else {
+        fileData = await imageToJpeg(file, 1500, 0.8);
+        mediaType = "image/jpeg";
+      }
+      const res = await fetch("/.netlify/functions/extract-prices", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileData: fileData,
+          mediaType: mediaType
+        })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
+      if (!d.rows || !d.rows.length) {
+        flash("No priced material lines found in that file.");
+        setCsvBusy(false);
+        return;
+      }
+      setCsvParsed(null);
+      setCsvReview(d.rows.map(r => ({
+        material: r.material,
+        unit: r.unit || "",
+        cost: num(r.cost),
+        trade: r.trade || "other",
+        category: r.category || "",
+        confidence: r.confidence != null ? r.confidence : 0
+      })));
+    } catch (e) {
+      flash("Couldn't read prices: " + errMsg(e));
+    }
+    setCsvBusy(false);
+  };
   const csvParseAndCategorize = async () => {
     if (!csvParsed || csvMap.material < 0 || csvMap.cost < 0) {
       flash("Map at least the Material and Cost columns.");
@@ -8141,6 +8185,24 @@ function App() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "📷 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,application/pdf,.pdf",
+    disabled: csvBusy,
+    onChange: e => onPriceFile(e.target.files && e.target.files[0])
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Reading the price sheet…"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      textAlign: "center",
+      margin: "8px 0",
+      fontWeight: 600
+    }
+  }, "— or import a CSV —"), /*#__PURE__*/React.createElement("label", {
     className: "estf"
   }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
     value: csvSupplier,

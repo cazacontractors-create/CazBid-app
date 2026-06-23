@@ -86,11 +86,11 @@ SPECS.drywall = {
     { name: "outsideCornerLF", label: "Outside corners", unit: "LF", type: "number", default: 0, description: "Linear feet of outside corners (drives corner bead)." },
   ],
   lineItems: [
-    { id: "drywall_sheets", name: "Drywall sheets (4x8)", unit: "EA", takeoff: "(((boardAreaSF - (openingCount * 17)) * 1.10) / sheetSF)", rounding: "round up to whole sheet", materialUnitCost: 14.0, note: "17 SF = blended door/window deduct." },
-    { id: "joint_compound", name: "Joint compound", unit: "LB", takeoff: "boardAreaSF * 0.053", rounding: "round up to whole bucket", materialUnitCost: 0.45 },
-    { id: "joint_tape", name: "Joint tape", unit: "LF", takeoff: "boardAreaSF * 0.5", rounding: "round up to whole roll", materialUnitCost: 0.03 },
-    { id: "drywall_screws", name: "Drywall screws", unit: "LB", takeoff: "boardAreaSF / 300", rounding: "round up to whole box", materialUnitCost: 2.50 },
-    { id: "corner_bead", name: "Corner bead", unit: "LF", takeoff: "outsideCornerLF * 1.05", rounding: "round up to whole stick", materialUnitCost: 0.85 },
+    { id: "drywall_sheets", name: "Drywall sheets (4x8)", unit: "EA", takeoff: "(((boardAreaSF - (openingCount * 17)) * 1.10) / sheetSF)", rounding: "round up to whole sheet", materialUnitCost: 14.0, note: "17 SF = blended door/window deduct.", priceMatch: "drywall gypsum board sheetrock 1/2 5/8 4x8" },
+    { id: "joint_compound", name: "Joint compound", unit: "LB", takeoff: "boardAreaSF * 0.053", rounding: "round up to whole bucket", materialUnitCost: 0.45, priceMatch: "joint compound mud all-purpose bucket" },
+    { id: "joint_tape", name: "Joint tape", unit: "LF", takeoff: "boardAreaSF * 0.5", rounding: "round up to whole roll", materialUnitCost: 0.03, priceMatch: "drywall joint tape paper mesh" },
+    { id: "drywall_screws", name: "Drywall screws", unit: "LB", takeoff: "boardAreaSF / 300", rounding: "round up to whole box", materialUnitCost: 2.50, priceMatch: "drywall screws coarse fine" },
+    { id: "corner_bead", name: "Corner bead", unit: "LF", takeoff: "outsideCornerLF * 1.05", rounding: "round up to whole stick", materialUnitCost: 0.85, priceMatch: "corner bead metal vinyl" },
   ],
   labor: {
     laborBasis: "area_per_day",
@@ -116,10 +116,10 @@ SPECS.insulation = {
     { name: "rValueAttic", label: "Target attic R-value", unit: "", type: "number", default: 0, description: "Target attic R-value (context; drives bag coverage in real pricing)." },
   ],
   lineItems: [
-    { id: "wall_batts", name: "Wall batts (faced)", unit: "SF", takeoff: "wallCavityAreaSF * 1.10", rounding: "round up to whole bag coverage", materialUnitCost: 0.85 },
-    { id: "attic_blown", name: "Attic blown-in (uses FLOOR footprint)", unit: "BAG", takeoff: "atticFloorSF / coveragePerBagSF", rounding: "round up to whole bag", materialUnitCost: 38.0, params: { coveragePerBagSF: 40 } },
-    { id: "cathedral_batts", name: "Cathedral / sloped ceiling batts (uses PITCHED area)", unit: "SF", takeoff: "cathedralAreaSF * 1.15", rounding: "round up to whole bag coverage", materialUnitCost: 1.10 },
-    { id: "rim_joist", name: "Rim joist insulation", unit: "LF", takeoff: "rimJoistLF", rounding: "none", materialUnitCost: 3.50 },
+    { id: "wall_batts", name: "Wall batts (faced)", unit: "SF", takeoff: "wallCavityAreaSF * 1.10", rounding: "round up to whole bag coverage", materialUnitCost: 0.85, priceMatch: "batt insulation faced fiberglass r-13 r-15 r-21 wall" },
+    { id: "attic_blown", name: "Attic blown-in (uses FLOOR footprint)", unit: "BAG", takeoff: "atticFloorSF / coveragePerBagSF", rounding: "round up to whole bag", materialUnitCost: 38.0, params: { coveragePerBagSF: 40 }, priceMatch: "blown-in cellulose fiberglass attic insulation bag" },
+    { id: "cathedral_batts", name: "Cathedral / sloped ceiling batts (uses PITCHED area)", unit: "SF", takeoff: "cathedralAreaSF * 1.15", rounding: "round up to whole bag coverage", materialUnitCost: 1.10, priceMatch: "batt insulation r-30 r-38 cathedral sloped ceiling" },
+    { id: "rim_joist", name: "Rim joist insulation", unit: "LF", takeoff: "rimJoistLF", rounding: "none", materialUnitCost: 3.50, priceMatch: "rim joist rigid foam board insulation" },
   ],
   labor: {
     laborBasis: "area_per_day",
@@ -143,12 +143,12 @@ SPECS.trim = {
     { name: "crownLF", label: "Crown molding", unit: "LF", type: "number", default: 0, description: "Crown molding length, LF (0 if none)." },
   ],
   lineItems: [
-    { id: "baseboard", name: "Baseboard", unit: "LF", takeoff: "((roomPerimeterLF - (doorCount * 3)) * 1.10)", rounding: "round up to whole stick", materialUnitCost: 1.95 },
-    { id: "door_casing", name: "Door casing", unit: "LF", takeoff: "(doorCount * casingPerDoorLF) * 1.10", rounding: "round up to whole stick", materialUnitCost: 1.75 },
-    { id: "window_casing", name: "Window casing", unit: "LF", takeoff: "(windowCount * casingPerWindowLF) * 1.10", rounding: "round up to whole stick", materialUnitCost: 1.75 },
-    { id: "interior_doors", name: "Interior doors (prehung)", unit: "EA", takeoff: "doorCount", rounding: "none", materialUnitCost: 145.0 },
-    { id: "door_hardware", name: "Door hardware (knob/hinges)", unit: "SET", takeoff: "doorCount", rounding: "none", materialUnitCost: 28.0 },
-    { id: "crown", name: "Crown molding (optional)", unit: "LF", takeoff: "crownLF * 1.12", rounding: "round up to whole stick", materialUnitCost: 2.85 },
+    { id: "baseboard", name: "Baseboard", unit: "LF", takeoff: "((roomPerimeterLF - (doorCount * 3)) * 1.10)", rounding: "round up to whole stick", materialUnitCost: 1.95, priceMatch: "baseboard base molding mdf primed trim" },
+    { id: "door_casing", name: "Door casing", unit: "LF", takeoff: "(doorCount * casingPerDoorLF) * 1.10", rounding: "round up to whole stick", materialUnitCost: 1.75, priceMatch: "door casing molding trim" },
+    { id: "window_casing", name: "Window casing", unit: "LF", takeoff: "(windowCount * casingPerWindowLF) * 1.10", rounding: "round up to whole stick", materialUnitCost: 1.75, priceMatch: "window casing molding trim" },
+    { id: "interior_doors", name: "Interior doors (prehung)", unit: "EA", takeoff: "doorCount", rounding: "none", materialUnitCost: 145.0, priceMatch: "interior prehung door slab" },
+    { id: "door_hardware", name: "Door hardware (knob/hinges)", unit: "SET", takeoff: "doorCount", rounding: "none", materialUnitCost: 28.0, priceMatch: "door knob handle hinges lockset hardware" },
+    { id: "crown", name: "Crown molding (optional)", unit: "LF", takeoff: "crownLF * 1.12", rounding: "round up to whole stick", materialUnitCost: 2.85, priceMatch: "crown molding trim" },
   ],
   labor: {
     laborBasis: "lf_plus_per_opening",
@@ -177,12 +177,12 @@ SPECS.siding = {
     { name: "starterLF", label: "Starter (wall base perimeter)", unit: "LF", type: "number", default: 0, description: "Perimeter at base of walls, LF (starter strip)." },
   ],
   lineItems: [
-    { id: "siding_field", name: "Siding field", unit: "SQ", takeoff: "(((wallAreaSF - (openingCount * 17)) * 1.10) / sqSF)", rounding: "round up to whole square", materialUnitCost: 185.0 },
-    { id: "starter_strip", name: "Starter strip", unit: "LF", takeoff: "starterLF * 1.05", rounding: "round up", materialUnitCost: 0.65 },
-    { id: "j_channel", name: "J-channel (openings)", unit: "LF", takeoff: "(openingCount * 17) * 1.10", rounding: "round up to whole stick", materialUnitCost: 0.75 },
-    { id: "corner_posts", name: "Outside corner posts", unit: "LF", takeoff: "outsideCornerLF * 1.05", rounding: "round up to whole post", materialUnitCost: 2.25 },
-    { id: "soffit", name: "Soffit", unit: "SF", takeoff: "soffitAreaSF * 1.10", rounding: "none", materialUnitCost: 2.40 },
-    { id: "fascia", name: "Fascia", unit: "LF", takeoff: "fasciaLF * 1.05", rounding: "round up to whole stick", materialUnitCost: 2.10 },
+    { id: "siding_field", name: "Siding field", unit: "SQ", takeoff: "(((wallAreaSF - (openingCount * 17)) * 1.10) / sqSF)", rounding: "round up to whole square", materialUnitCost: 185.0, priceMatch: "vinyl lap fiber cement hardie cedar siding square" },
+    { id: "starter_strip", name: "Starter strip", unit: "LF", takeoff: "starterLF * 1.05", rounding: "round up", materialUnitCost: 0.65, priceMatch: "siding starter strip" },
+    { id: "j_channel", name: "J-channel (openings)", unit: "LF", takeoff: "(openingCount * 17) * 1.10", rounding: "round up to whole stick", materialUnitCost: 0.75, priceMatch: "j-channel j channel siding trim" },
+    { id: "corner_posts", name: "Outside corner posts", unit: "LF", takeoff: "outsideCornerLF * 1.05", rounding: "round up to whole post", materialUnitCost: 2.25, priceMatch: "outside corner post siding" },
+    { id: "soffit", name: "Soffit", unit: "SF", takeoff: "soffitAreaSF * 1.10", rounding: "none", materialUnitCost: 2.40, priceMatch: "soffit vinyl aluminum panel vented" },
+    { id: "fascia", name: "Fascia", unit: "LF", takeoff: "fasciaLF * 1.05", rounding: "round up to whole stick", materialUnitCost: 2.10, priceMatch: "fascia board aluminum coil" },
   ],
   labor: {
     laborBasis: "area_per_day",
@@ -213,14 +213,14 @@ SPECS.concrete = {
     { name: "anchorBoltSpacingFT", label: "Anchor bolt spacing", unit: "ft", type: "number", default: 6, min: 0.1, description: "Anchor bolt spacing, ft (default 6)." },
   ],
   lineItems: [
-    { id: "footing_concrete", name: "Footing concrete", unit: "CY", takeoff: "((footingLF * (footingWidthIN/12) * (footingDepthIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0 },
-    { id: "wall_concrete", name: "Foundation wall concrete", unit: "CY", takeoff: "((wallLF * wallHeightFT * (wallThicknessIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0 },
-    { id: "slab_concrete", name: "Slab concrete", unit: "CY", takeoff: "((slabAreaSF * (slabThicknessIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0 },
-    { id: "gravel_base", name: "Gravel base under slab", unit: "CY", takeoff: "((slabAreaSF * (gravelDepthIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 45.0 },
-    { id: "rebar", name: "Rebar", unit: "LF", takeoff: "(footingLF * 2) + (slabAreaSF * 0.5)", rounding: "round up to whole stick", materialUnitCost: 0.55 },
-    { id: "wire_mesh", name: "Welded wire mesh (slab)", unit: "SF", takeoff: "slabAreaSF * 1.10", rounding: "round up to whole sheet/roll", materialUnitCost: 0.35 },
-    { id: "vapor_barrier", name: "Under-slab vapor barrier", unit: "SF", takeoff: "slabAreaSF * 1.15", rounding: "round up to whole roll", materialUnitCost: 0.18 },
-    { id: "anchor_bolts", name: "Anchor bolts", unit: "EA", takeoff: "(wallLF / anchorBoltSpacingFT) + 1", rounding: "round up", materialUnitCost: 2.75 },
+    { id: "footing_concrete", name: "Footing concrete", unit: "CY", takeoff: "((footingLF * (footingWidthIN/12) * (footingDepthIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0, priceMatch: "concrete ready-mix readymix 3000 3500 psi footing yard" },
+    { id: "wall_concrete", name: "Foundation wall concrete", unit: "CY", takeoff: "((wallLF * wallHeightFT * (wallThicknessIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0, priceMatch: "concrete ready-mix readymix 3000 psi wall yard" },
+    { id: "slab_concrete", name: "Slab concrete", unit: "CY", takeoff: "((slabAreaSF * (slabThicknessIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 165.0, priceMatch: "concrete ready-mix readymix 3000 4000 psi slab yard" },
+    { id: "gravel_base", name: "Gravel base under slab", unit: "CY", takeoff: "((slabAreaSF * (gravelDepthIN/12)) / 27) * 1.10", rounding: "round up to 0.5 CY", materialUnitCost: 45.0, priceMatch: "gravel crushed stone base 57 ton" },
+    { id: "rebar", name: "Rebar", unit: "LF", takeoff: "(footingLF * 2) + (slabAreaSF * 0.5)", rounding: "round up to whole stick", materialUnitCost: 0.55, priceMatch: "rebar reinforcing steel bar" },
+    { id: "wire_mesh", name: "Welded wire mesh (slab)", unit: "SF", takeoff: "slabAreaSF * 1.10", rounding: "round up to whole sheet/roll", materialUnitCost: 0.35, priceMatch: "welded wire mesh remesh reinforcement" },
+    { id: "vapor_barrier", name: "Under-slab vapor barrier", unit: "SF", takeoff: "slabAreaSF * 1.15", rounding: "round up to whole roll", materialUnitCost: 0.18, priceMatch: "vapor barrier poly 6 mil plastic" },
+    { id: "anchor_bolts", name: "Anchor bolts", unit: "EA", takeoff: "(wallLF / anchorBoltSpacingFT) + 1", rounding: "round up", materialUnitCost: 2.75, priceMatch: "anchor bolt j-bolt foundation" },
   ],
   labor: {
     laborBasis: "forming_plus_placement",
@@ -245,12 +245,12 @@ SPECS.electrical = {
     { name: "panelType", label: "Panel type", unit: "", type: "enum", enumValues: ["new_panel", "subpanel", "none"], default: "none", description: "new_panel | subpanel | none." },
   ],
   lineItems: [
-    { id: "rough_wire", name: "Branch wiring (Romex) allowance", unit: "LF", takeoff: "floorAreaSF * romexLFperSF", rounding: "round up to whole roll", materialUnitCost: 0.55 },
-    { id: "devices", name: "Devices (receptacle/switch + box + plate)", unit: "EA", takeoff: "deviceCount", rounding: "none", materialUnitCost: 6.50 },
-    { id: "fixtures", name: "Light fixtures / fans (allowance)", unit: "EA", takeoff: "fixtureCount", rounding: "none", materialUnitCost: 65.0 },
-    { id: "breakers", name: "Breakers", unit: "EA", takeoff: "circuitCount", rounding: "none", materialUnitCost: 12.0 },
-    { id: "panel", name: "Panel / subpanel", unit: "EA", takeoff: "panelType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 350.0 },
-    { id: "misc", name: "Misc (staples, connectors, wire nuts)", unit: "LS", takeoff: "1", rounding: "none", materialUnitCost: 120.0 },
+    { id: "rough_wire", name: "Branch wiring (Romex) allowance", unit: "LF", takeoff: "floorAreaSF * romexLFperSF", rounding: "round up to whole roll", materialUnitCost: 0.55, priceMatch: "romex nm-b 12-2 14-2 wire copper" },
+    { id: "devices", name: "Devices (receptacle/switch + box + plate)", unit: "EA", takeoff: "deviceCount", rounding: "none", materialUnitCost: 6.50, priceMatch: "receptacle switch outlet device box plate 15a 20a duplex gfci tamper" },
+    { id: "fixtures", name: "Light fixtures / fans (allowance)", unit: "EA", takeoff: "fixtureCount", rounding: "none", materialUnitCost: 65.0, priceMatch: "light fixture ceiling fan can recessed" },
+    { id: "breakers", name: "Breakers", unit: "EA", takeoff: "circuitCount", rounding: "none", materialUnitCost: 12.0, priceMatch: "breaker 15a 20a single pole" },
+    { id: "panel", name: "Panel / subpanel", unit: "EA", takeoff: "panelType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 350.0, priceMatch: "panel load center subpanel main" },
+    { id: "misc", name: "Misc (staples, connectors, wire nuts)", unit: "LS", takeoff: "1", rounding: "none", materialUnitCost: 120.0, priceMatch: "wire nuts connectors staples electrical misc" },
   ],
   labor: {
     laborBasis: "per_device_per_fixture",
@@ -275,13 +275,13 @@ SPECS.plumbing = {
     { name: "supplyRunLF", label: "Explicit supply run (optional)", unit: "LF", type: "number", default: 0, description: "Explicit PEX supply run, LF; 0 to use the per-fixture allowance." },
   ],
   lineItems: [
-    { id: "toilets", name: "Toilets (fixture + rough + trim)", unit: "EA", takeoff: "toiletCount", rounding: "none", materialUnitCost: 240.0 },
-    { id: "sinks", name: "Sinks / lavatories", unit: "EA", takeoff: "sinkCount", rounding: "none", materialUnitCost: 210.0 },
-    { id: "tubs_showers", name: "Tubs / showers", unit: "EA", takeoff: "tubShowerCount", rounding: "none", materialUnitCost: 520.0 },
-    { id: "other_fixtures", name: "Other fixtures (hose bibs, washer box, etc.)", unit: "EA", takeoff: "otherFixtureCount", rounding: "none", materialUnitCost: 95.0 },
-    { id: "water_heater", name: "Water heater", unit: "EA", takeoff: "waterHeaterCount", rounding: "none", materialUnitCost: 850.0 },
-    { id: "supply_pipe", name: "Supply pipe (PEX) allowance", unit: "LF", takeoff: "supplyRunLF > 0 ? supplyRunLF : ((toiletCount+sinkCount+tubShowerCount+otherFixtureCount) * supplyLFperFixture)", rounding: "round up to whole roll", materialUnitCost: 0.85 },
-    { id: "dwv_pipe", name: "DWV pipe allowance", unit: "LF", takeoff: "(toiletCount+sinkCount+tubShowerCount+otherFixtureCount) * dwvLFperFixture", rounding: "round up to whole length", materialUnitCost: 2.40 },
+    { id: "toilets", name: "Toilets (fixture + rough + trim)", unit: "EA", takeoff: "toiletCount", rounding: "none", materialUnitCost: 240.0, priceMatch: "toilet water closet" },
+    { id: "sinks", name: "Sinks / lavatories", unit: "EA", takeoff: "sinkCount", rounding: "none", materialUnitCost: 210.0, priceMatch: "sink lavatory vanity faucet basin" },
+    { id: "tubs_showers", name: "Tubs / showers", unit: "EA", takeoff: "tubShowerCount", rounding: "none", materialUnitCost: 520.0, priceMatch: "tub shower bathtub surround" },
+    { id: "other_fixtures", name: "Other fixtures (hose bibs, washer box, etc.)", unit: "EA", takeoff: "otherFixtureCount", rounding: "none", materialUnitCost: 95.0, priceMatch: "hose bib washer box floor drain fixture" },
+    { id: "water_heater", name: "Water heater", unit: "EA", takeoff: "waterHeaterCount", rounding: "none", materialUnitCost: 850.0, priceMatch: "water heater tank tankless gas electric" },
+    { id: "supply_pipe", name: "Supply pipe (PEX) allowance", unit: "LF", takeoff: "supplyRunLF > 0 ? supplyRunLF : ((toiletCount+sinkCount+tubShowerCount+otherFixtureCount) * supplyLFperFixture)", rounding: "round up to whole roll", materialUnitCost: 0.85, priceMatch: "pex supply pipe tubing 1/2 3/4" },
+    { id: "dwv_pipe", name: "DWV pipe allowance", unit: "LF", takeoff: "(toiletCount+sinkCount+tubShowerCount+otherFixtureCount) * dwvLFperFixture", rounding: "round up to whole length", materialUnitCost: 2.40, priceMatch: "pvc abs dwv drain waste vent pipe" },
   ],
   labor: {
     laborBasis: "per_fixture",
@@ -304,11 +304,11 @@ SPECS.hvac = {
     { name: "tonsOverride", label: "Tonnage override (Manual J)", unit: "ton", type: "number", default: 0, description: "If a load calc exists, tons here; else 0 to use the SF/500 rule." },
   ],
   lineItems: [
-    { id: "equipment", name: "Equipment (furnace/AC or heat pump) by tonnage", unit: "TON", takeoff: "tonsOverride > 0 ? tonsOverride : (conditionedSF / sfPerTon)", rounding: "round up to 0.5 ton", materialUnitCost: 1400.0 },
-    { id: "ductwork", name: "Ductwork (trunk + branches) allowance", unit: "EA", takeoff: "registerCount", rounding: "none", materialUnitCost: 85.0 },
-    { id: "registers", name: "Registers / grilles", unit: "EA", takeoff: "registerCount", rounding: "none", materialUnitCost: 22.0 },
-    { id: "lineset_misc", name: "Lineset / condensate / misc", unit: "LS", takeoff: "systemType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 280.0 },
-    { id: "thermostat", name: "Thermostat", unit: "EA", takeoff: "systemType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 120.0 },
+    { id: "equipment", name: "Equipment (furnace/AC or heat pump) by tonnage", unit: "TON", takeoff: "tonsOverride > 0 ? tonsOverride : (conditionedSF / sfPerTon)", rounding: "round up to 0.5 ton", materialUnitCost: 1400.0, priceMatch: "furnace ac condenser heat pump air handler ton" },
+    { id: "ductwork", name: "Ductwork (trunk + branches) allowance", unit: "EA", takeoff: "registerCount", rounding: "none", materialUnitCost: 85.0, priceMatch: "duct ductwork flex trunk sheet metal" },
+    { id: "registers", name: "Registers / grilles", unit: "EA", takeoff: "registerCount", rounding: "none", materialUnitCost: 22.0, priceMatch: "register grille vent supply return" },
+    { id: "lineset_misc", name: "Lineset / condensate / misc", unit: "LS", takeoff: "systemType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 280.0, priceMatch: "lineset refrigerant condensate pump" },
+    { id: "thermostat", name: "Thermostat", unit: "EA", takeoff: "systemType === 'none' ? 0 : 1", rounding: "none", materialUnitCost: 120.0, priceMatch: "thermostat nest ecobee" },
   ],
   labor: {
     laborBasis: "per_system_per_register",
@@ -532,6 +532,9 @@ function laborCostLine(adjHours, rate, mult, laborCost) {
 // ---------------------------------------------------------------------------
 const PRICE_STOP = new Set(["the", "a", "an", "of", "for", "per", "and", "or", "with", "in", "to", "by", "ea", "each", "x", "in"]);
 function priceTokens(s) {
+  // light stemmer: drop a trailing plural "s" (studs->stud, sheets->sheet,
+  // toilets->toilet) but keep "ss" words (glass) and short tokens.
+  const stem = (t) => (t.length > 3 && t.charAt(t.length - 1) === "s" && t.charAt(t.length - 2) !== "s") ? t.slice(0, -1) : t;
   const raw = String(s == null ? "" : s)
     .toLowerCase()
     .replace(/[''"]/g, "")
@@ -541,7 +544,8 @@ function priceTokens(s) {
     .filter((t) => t && t.length > 1 && !PRICE_STOP.has(t));
   // Expand dimension tokens so "2x4x8" also yields "2x4"/"4x8" (matches "2x4").
   const out = [];
-  for (const tok of raw) {
+  for (const t0 of raw) {
+    const tok = stem(t0);
     out.push(tok);
     const m = tok.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x(\d+(?:\.\d+)?))?$/);
     if (m && m[3]) { out.push(m[1] + "x" + m[2]); out.push(m[2] + "x" + m[3]); }
@@ -576,8 +580,10 @@ function lookupLinePrice(trade, line, priceBook) {
     // none -> different product, skip (avoids a 7/16 OSB price on 3/4 subfloor).
     if (eFracs.length && lineFracs.length && !eFracs.some((f) => lineSet.has(f))) continue;
     const m = priceMatchScore(new Set(eTok), lineSet);
-    // require >=2 shared meaningful tokens to avoid spurious single-token hits
-    if (m.inter >= 2 && m.score > bestScore) { bestScore = m.score; best = e; }
+    // qualify on >=2 shared tokens, OR a clean single-token subset (e.g. "rebar",
+    // "toilet") where that token covers the whole smaller side.
+    const qualifies = m.inter >= 2 || (m.inter >= 1 && m.score >= 0.7);
+    if (qualifies && m.score > bestScore) { bestScore = m.score; best = e; }
   }
   if (!best || bestScore < 0.5) return null; // too weak -> fall through to seed
   const srcStr = best.source ? String(best.source.method || best.source.supplier || "") : "";
