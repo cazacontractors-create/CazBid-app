@@ -966,6 +966,175 @@ function JobContextPanel({ photos, measurements }) {
 }
 
 /* ============================================================ */
+// STAGE 5 — Interactive cutaway house. A VISUAL SKIN over the Whole House
+// trade selector: it adds zero estimating accuracy — every zone tap just toggles
+// that trade in the SAME `checked` map the checkbox list uses, and the estimate
+// still comes from estimate-multi (contractor) / estimate-range (homeowner).
+// Three layers peel the house apart: Outside (roof/siding/foundation) ->
+// Inside (drywall/insulation/trim, roof lifts off) -> Systems (electrical/
+// plumbing/HVAC, walls turn to glass). AL reacts to the current layer.
+const HOUSE_LAYERS = [
+  { key: "exterior", label: "Outside", hint: "Tap the roof, siding, or foundation to add those trades." },
+  { key: "interior", label: "Inside", hint: "Roof's off — tap drywall, insulation, or trim." },
+  { key: "systems", label: "Systems", hint: "Walls are open — tap the wiring, plumbing, or heating & cooling." },
+];
+const HOUSE_ZONES = {
+  exterior: [{ trade: "framing", label: "Roof & framing" }, { trade: "siding", label: "Siding" }, { trade: "concrete", label: "Foundation" }],
+  interior: [{ trade: "drywall", label: "Drywall & ceilings" }, { trade: "insulation", label: "Insulation" }, { trade: "trim", label: "Trim & doors" }],
+  systems: [{ trade: "electrical", label: "Electrical" }, { trade: "plumbing", label: "Plumbing" }, { trade: "hvac", label: "Heating & cooling" }],
+};
+const HOUSE_TRADE_LABEL = {};
+Object.keys(HOUSE_ZONES).forEach((k) => HOUSE_ZONES[k].forEach((z) => { HOUSE_TRADE_LABEL[z.trade] = z.label; }));
+
+function InteractiveHouse({ checked, onToggle, role }) {
+  const [layer, setLayer] = useState("exterior");
+  const ck = checked || {};
+  const isActive = (tr) => HOUSE_ZONES[layer].some((z) => z.trade === tr);
+  // colors: selected = green; active-but-off = "tap me" blue; inactive = muted gray
+  const fill = (tr) => ck[tr] ? "#0a7d36" : (isActive(tr) ? "#dbe9ff" : "#eef2f6");
+  const stroke = (tr) => ck[tr] ? "#086a2e" : (isActive(tr) ? "#7da7ec" : "#d7dee6");
+  const tcol = (tr) => ck[tr] ? "#ffffff" : "#3a4a5c";
+  const zProps = (tr) => isActive(tr)
+    ? { onClick: () => onToggle(tr), style: { cursor: "pointer" }, role: "button", tabIndex: 0 }
+    : { style: { pointerEvents: "none" } };
+  const peeled = layer !== "exterior";
+  const roofT = { transition: "transform .6s ease, opacity .6s ease", transformOrigin: "180px 150px", transform: peeled ? "translateY(-34px) rotate(-7deg)" : "none", opacity: peeled ? (layer === "interior" ? 0.7 : 0.4) : 1 };
+  const sidingT = { transition: "opacity .6s ease, transform .6s ease", opacity: peeled ? (layer === "systems" ? 0.1 : 0.16) : 1, transform: layer === "systems" ? "translateX(14px)" : "none" };
+  const drywallOpacity = layer === "systems" ? 0.2 : 1; // walls go to glass in Systems
+  const selectedTrades = Object.keys(ck).filter((t) => ck[t] && HOUSE_TRADE_LABEL[t]);
+  const cur = HOUSE_LAYERS.find((l) => l.key === layer) || HOUSE_LAYERS[0];
+
+  return (
+    <div className="card househero" style={{ marginTop: 10 }}>
+      <div className="househead" style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}>
+        <img src={AL_NOTEPAD} alt="AL" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", flex: "0 0 auto" }} />
+        <div>
+          <div style={{ fontWeight: 700 }}>Build your project on the house</div>
+          <div className="hint">{cur.hint}{selectedTrades.length ? " · " + selectedTrades.length + " trade" + (selectedTrades.length === 1 ? "" : "s") + " selected" : ""}</div>
+        </div>
+      </div>
+
+      <div className="houselayers" style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        {HOUSE_LAYERS.map((l) => (
+          <button key={l.key} className={"btn " + (layer === l.key ? "primary" : "ghost")} style={{ flex: 1, padding: "6px 4px" }} onClick={() => setLayer(l.key)}>{l.label}</button>
+        ))}
+      </div>
+
+      <svg viewBox="0 0 360 300" style={{ width: "100%", height: "auto", display: "block", userSelect: "none" }} aria-label="Interactive cutaway house">
+        <line x1="20" y1="258" x2="340" y2="258" stroke="#cbd5e1" strokeWidth="2" />
+
+        {/* ---- SYSTEMS (behind the walls) — only in Systems layer ---- */}
+        {layer === "systems" && (
+          <g>
+            {/* HVAC: duct band across the top + a wall unit */}
+            <g {...zProps("hvac")}>
+              <rect x="92" y="156" width="176" height="20" rx="3" fill={fill("hvac")} stroke={stroke("hvac")} strokeWidth="1.5" />
+              <g style={{ pointerEvents: "none" }} stroke={ck.hvac ? "#ffffff" : "#7a8aa0"} strokeWidth="1.4">
+                <line x1="218" y1="166" x2="260" y2="166" /><circle cx="210" cy="166" r="4" fill="none" /><line x1="206" y1="166" x2="214" y2="166" /><line x1="210" y1="162" x2="210" y2="170" />
+              </g>
+              <text x="100" y="170" fontSize="9" fontWeight="700" fill={tcol("hvac")} style={{ pointerEvents: "none" }}>Heating & cooling</text>
+            </g>
+            {/* Electrical: panel + zigzag run (lower-left) */}
+            <g {...zProps("electrical")}>
+              <rect x="92" y="182" width="84" height="48" rx="3" fill={fill("electrical")} stroke={stroke("electrical")} strokeWidth="1.5" />
+              <g style={{ pointerEvents: "none" }} stroke={ck.electrical ? "#ffffff" : "#b07a16"} strokeWidth="1.6" fill="none">
+                <rect x="99" y="190" width="12" height="16" rx="1" fill={ck.electrical ? "#ffffff" : "#f4cf86"} />
+                <polyline points="111,198 126,192 126,210 142,204 142,216 160,210" />
+              </g>
+              <text x="100" y="226" fontSize="9" fontWeight="700" fill={tcol("electrical")} style={{ pointerEvents: "none" }}>Electrical</text>
+            </g>
+            {/* Plumbing: pipes + P-trap (lower-right) */}
+            <g {...zProps("plumbing")}>
+              <rect x="184" y="182" width="84" height="48" rx="3" fill={fill("plumbing")} stroke={stroke("plumbing")} strokeWidth="1.5" />
+              <g style={{ pointerEvents: "none" }} stroke={ck.plumbing ? "#ffffff" : "#2f7fc0"} strokeWidth="2.2" fill="none" strokeLinecap="round">
+                <path d="M200 188 V214 H214 V200" /><path d="M232 188 V206 q0 8 8 8 t8 -8" />
+              </g>
+              <text x="192" y="226" fontSize="9" fontWeight="700" fill={tcol("plumbing")} style={{ pointerEvents: "none" }}>Plumbing</text>
+            </g>
+          </g>
+        )}
+
+        {/* ---- INTERIOR (drywall / trim) — Inside + Systems layers ---- */}
+        {peeled && (
+          <g>
+            {/* Drywall & ceilings — the room's wall surfaces */}
+            <g {...zProps("drywall")} style={{ ...(zProps("drywall").style || {}), opacity: drywallOpacity, transition: "opacity .6s ease" }}>
+              <rect x="92" y="152" width="176" height="80" rx="2" fill={fill("drywall")} stroke={stroke("drywall")} strokeWidth="1.5" />
+              <text x="100" y="168" fontSize="9" fontWeight="700" fill={tcol("drywall")} style={{ pointerEvents: "none" }}>Drywall & ceilings</text>
+            </g>
+            {/* Trim & doors — baseboard + door casing (kept above the foundation) */}
+            <g {...zProps("trim")}>
+              <rect x="92" y="220" width="176" height="10" fill={fill("trim")} stroke={stroke("trim")} strokeWidth="1" />
+              <rect x="158" y="194" width="34" height="36" fill="none" stroke={ck.trim ? "#0a7d36" : (isActive("trim") ? "#7da7ec" : "#cdd6e0")} strokeWidth="2.5" />
+              <text x="98" y="228" fontSize="7.5" fontWeight="700" fill={tcol("trim")} style={{ pointerEvents: "none" }}>Trim & doors</text>
+            </g>
+          </g>
+        )}
+
+        {/* ---- FOUNDATION (concrete) — always ---- */}
+        <g {...zProps("concrete")}>
+          <rect x="78" y="236" width="204" height="22" rx="2" fill={fill("concrete")} stroke={stroke("concrete")} strokeWidth="1.5" />
+          <text x="180" y="251" fontSize="9" fontWeight="700" textAnchor="middle" fill={tcol("concrete")} style={{ pointerEvents: "none" }}>Foundation</text>
+        </g>
+
+        {/* ---- SIDING (front wall) — turns to glass when peeled ---- */}
+        <g style={sidingT}>
+          <g {...zProps("siding")}>
+            <rect x="84" y="150" width="192" height="86" rx="2" fill={fill("siding")} stroke={stroke("siding")} strokeWidth="1.5" />
+            <g style={{ pointerEvents: "none" }} stroke={ck.siding ? "rgba(255,255,255,.45)" : "#c2ccd6"} strokeWidth="1">
+              <line x1="84" y1="166" x2="276" y2="166" /><line x1="84" y1="182" x2="276" y2="182" /><line x1="84" y1="198" x2="276" y2="198" /><line x1="84" y1="214" x2="276" y2="214" />
+            </g>
+            {layer === "exterior" && <text x="180" y="146" fontSize="9" fontWeight="700" textAnchor="middle" fill="#3a4a5c" style={{ pointerEvents: "none" }}>Siding</text>}
+          </g>
+          {/* door + windows (decoration) */}
+          <g style={{ pointerEvents: "none" }}>
+            <rect x="160" y="196" width="30" height="40" rx="1" fill={ck.siding ? "#0a5c28" : "#cdd6e0"} stroke="#8a97a6" strokeWidth="1" />
+            <circle cx="184" cy="216" r="1.6" fill="#fff" />
+            <rect x="104" y="176" width="26" height="24" fill="#cfe4f7" stroke="#8a97a6" strokeWidth="1.2" /><line x1="117" y1="176" x2="117" y2="200" stroke="#8a97a6" /><line x1="104" y1="188" x2="130" y2="188" stroke="#8a97a6" />
+            <rect x="222" y="176" width="26" height="24" fill="#cfe4f7" stroke="#8a97a6" strokeWidth="1.2" /><line x1="235" y1="176" x2="235" y2="200" stroke="#8a97a6" /><line x1="222" y1="188" x2="248" y2="188" stroke="#8a97a6" />
+          </g>
+        </g>
+
+        {/* ---- ROOF (framing) + insulation under it — lifts off when peeled ---- */}
+        <g style={roofT}>
+          <g {...zProps("framing")}>
+            <polygon points="68,150 180,68 292,150" fill={fill("framing")} stroke={stroke("framing")} strokeWidth="1.5" strokeLinejoin="round" />
+            <g style={{ pointerEvents: "none" }} stroke={ck.framing ? "rgba(255,255,255,.4)" : "#c2ccd6"} strokeWidth="1">
+              <line x1="92" y1="150" x2="156" y2="103" /><line x1="124" y1="150" x2="188" y2="103" /><line x1="204" y1="103" x2="268" y2="150" /><line x1="172" y1="103" x2="236" y2="150" />
+            </g>
+            <text x="180" y="132" fontSize="9.5" fontWeight="700" textAnchor="middle" fill={tcol("framing")} style={{ pointerEvents: "none" }}>Roof & framing</text>
+          </g>
+          {/* insulation batts inside the roof cavity — Inside/Systems only */}
+          {peeled && (
+            <g {...zProps("insulation")}>
+              <polygon points="96,146 180,84 264,146" fill={fill("insulation")} stroke={stroke("insulation")} strokeWidth="1.5" opacity={layer === "systems" ? 0.55 : 1} />
+              <g style={{ pointerEvents: "none" }} stroke={ck.insulation ? "#ffffff" : "#d98aa6"} strokeWidth="1.3" fill="none">
+                <path d="M120 142 q6 -8 12 0 q6 -8 12 0 q6 -8 12 0 q6 -8 12 0 q6 -8 12 0" />
+              </g>
+              <text x="180" y="140" fontSize="8.5" fontWeight="700" textAnchor="middle" fill={tcol("insulation")} style={{ pointerEvents: "none" }}>Insulation</text>
+            </g>
+          )}
+        </g>
+
+        {/* chimney */}
+        <rect x="232" y="88" width="15" height="30" fill="#b5651d" stroke="#8a4e16" strokeWidth="1" style={{ ...roofT }} />
+      </svg>
+
+      {selectedTrades.length > 0 && (
+        <div className="housechips" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {selectedTrades.map((t) => (
+            <span key={t} style={{ fontSize: 12, background: "#e7f6ec", color: "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "2px 9px" }}>
+              {HOUSE_TRADE_LABEL[t]} <span style={{ cursor: "pointer", fontWeight: 700 }} onClick={() => onToggle(t)}>×</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="hint" style={{ marginTop: 8 }}>The house is just a friendlier way to pick trades — your selections sync with the checklist below{role === "homeowner" ? ", and you'll get a price range." : ", with full per-trade numbers."}</p>
+    </div>
+  );
+}
+
+/* ============================================================ */
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
   const [profH, setProfH] = useState({ name: "", contact: "", town: "", address: "", bio: "", avatar: "" });
@@ -4239,6 +4408,7 @@ function App() {
           <section className="card">
             <div className="h1">Whole House / Addition <span className="propill">PRO</span></div>
             <p className="hint">All trades are on by default — uncheck any you're not providing on this job. Enter each checked trade's dimensions, then build one combined estimate. Every quantity, labor figure, and total is computed deterministically by Caza's engine (same numbers every time for the same inputs).</p>
+            {whSpecs && <InteractiveHouse checked={whChecked} onToggle={whToggle} role={me.role} />}
             {whSpecs && (
               <div className="card" style={{ marginTop: 10 }}>
                 <label className="estf" style={{ alignItems: "center", cursor: "pointer" }} onClick={() => setWhPbOpen((o) => !o)}>
