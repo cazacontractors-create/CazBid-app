@@ -701,7 +701,7 @@ async function callClaudeBackground(messages, opts) {
     startRes = await fetch("/.netlify/functions/estimate-background", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, prompt: norm, maxTokens: opts.maxTokens || 4000, search: !!opts.search, trade: opts.trade || "" }),
+      body: JSON.stringify({ jobId, prompt: norm, maxTokens: opts.maxTokens || 4000, search: !!opts.search, trade: opts.trade || "", priceBook: opts.priceBook || null }),
     });
   } catch (e) {
     throw new Error("Network: couldn't start the estimate — check your connection and try again");
@@ -1043,6 +1043,8 @@ function App() {
   const [csvReview, setCsvReview] = useState(null); // [{material,unit,cost,trade,category,confidence}]
   const [csvBusy, setCsvBusy] = useState(false);
   const [csvSupplier, setCsvSupplier] = useState("");
+  const [csvMethod, setCsvMethod] = useState("csv"); // csv | photo | pdf | api — source metadata
+  const [csvUrl, setCsvUrl] = useState("");
   // ---- homeowner conversational estimate ----
   const [convMsgs, setConvMsgs] = useState([]); // [{role:"ai"|"me", text}]
   const [convInput, setConvInput] = useState("");
@@ -1116,7 +1118,7 @@ function App() {
   };
   const onCsvText = (text) => {
     const p = parseCSV(text);
-    setCsvParsed(p); setCsvReview(null);
+    setCsvParsed(p); setCsvReview(null); setCsvMethod("csv");
     if (p.headers.length) setCsvMap(csvAutoMap(p.headers));
   };
   const onCsvFile = async (file) => {
@@ -1131,6 +1133,7 @@ function App() {
     try {
       let mediaType = file.type || "";
       let fileData;
+      setCsvMethod(mediaType === "application/pdf" ? "pdf" : "photo");
       if (mediaType === "application/pdf") { fileData = await readDataURL(file); }
       else { fileData = await imageToJpeg(file, 1500, 0.8); mediaType = "image/jpeg"; }
       const res = await fetch("/.netlify/functions/extract-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fileData: fileData, mediaType: mediaType }) });
@@ -1164,18 +1167,48 @@ function App() {
     } catch (e) { flash("Categorize failed: " + errMsg(e)); }
     setCsvBusy(false);
   };
+  // Supplier API / URL feed -> proxy fetch -> same column-map -> review gate.
+  const fetchSupplierUrl = async () => {
+    const u = csvUrl.trim();
+    if (!/^https:\/\//i.test(u)) { flash("Enter your supplier feed URL (https://…)."); return; }
+    setCsvBusy(true);
+    try {
+      const res = await fetch("/.netlify/functions/fetch-url?url=" + encodeURIComponent(u));
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+      const text = String(d.text || "").trim();
+      if (!text) { flash("Feed returned nothing."); setCsvBusy(false); return; }
+      let host = ""; try { host = new URL(u).hostname; } catch (e) { /* ignore */ }
+      if (!csvSupplier) setCsvSupplier(host);
+      setCsvMethod("api"); setCsvReview(null);
+      if (text.charAt(0) === "[" || text.charAt(0) === "{" || (d.contentType || "").indexOf("json") >= 0) {
+        let arr; try { arr = JSON.parse(text); } catch (e) { throw new Error("Feed wasn't valid JSON or CSV"); }
+        if (!Array.isArray(arr)) arr = arr.items || arr.data || arr.products || arr.rows || [];
+        if (!arr.length || typeof arr[0] !== "object") { flash("Feed had no usable rows."); setCsvBusy(false); return; }
+        const headers = Object.keys(arr[0]);
+        const rows = arr.map((o) => headers.map((h) => (o[h] == null ? "" : String(o[h]))));
+        setCsvParsed({ headers: headers, rows: rows }); setCsvMap(csvAutoMap(headers));
+      } else {
+        const p = parseCSV(text); setCsvParsed(p); if (p.headers.length) setCsvMap(csvAutoMap(p.headers));
+      }
+    } catch (e) { flash("Supplier feed failed: " + errMsg(e)); }
+    setCsvBusy(false);
+  };
   const csvReviewSet = (i, field, val) => setCsvReview((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
   const csvResetImport = () => { setCsvParsed(null); setCsvReview(null); setCsvMap({ material: -1, cost: -1, unit: -1, category: -1 }); };
   const csvCommit = () => {
     const valid = (csvReview || []).filter((r) => r.material && num(r.cost) > 0 && r.trade && r.trade !== "other");
     if (!valid.length) { flash("Nothing to commit — give at least one row a real trade (not 'other') and a cost."); return; }
     const date = new Date().toISOString().slice(0, 10);
+    // fuzzy dedup: within the same trade, a near-identical material name updates
+    // the existing entry instead of adding a duplicate.
+    const tok = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((t) => t.length > 1);
+    const sim = (a, b) => { const A = new Set(tok(a)), B = new Set(tok(b)); if (!A.size || !B.size) return 0; const sm = A.size <= B.size ? A : B, bg = sm === A ? B : A; let i = 0; sm.forEach((x) => { if (bg.has(x)) i++; }); return i / sm.size; };
     const next = [...enginePB];
     let added = 0, updated = 0;
     valid.forEach((r) => {
-      const key = (r.trade + "|" + r.material).toLowerCase().replace(/\s+/g, " ").trim();
-      const idx = next.findIndex((e) => (e.trade + "|" + e.material).toLowerCase().replace(/\s+/g, " ").trim() === key);
-      const entry = { trade: r.trade, category: r.category || "", material: r.material, unit: r.unit || "", unitCost: num(r.cost), source: { method: "csv", supplier: csvSupplier || "", date: date } };
+      const idx = next.findIndex((e) => e.trade === r.trade && sim(e.material, r.material) >= 0.8);
+      const entry = { trade: r.trade, category: r.category || "", material: r.material, unit: r.unit || "", unitCost: num(r.cost), source: { method: csvMethod || "csv", supplier: csvSupplier || "", date: date } };
       if (idx >= 0) { next[idx] = { ...next[idx], ...entry }; updated++; }
       else { next.push({ id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ...entry }); added++; }
     });
@@ -1859,8 +1892,8 @@ function App() {
         { type: "text", text: prompt },
       ];
       let text;
-      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: __manualKey }); }
-      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 4000, trade: __manualKey }); }
+      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
+      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 4000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
       const __manualLoaded = !!__LAST_MANUAL_USED;
       let d;
       try { d = parseJSON(text); }
@@ -1876,7 +1909,7 @@ function App() {
         const qty = num(it.qty) || 0;
         const cost = Math.round(num(it.cost) || 0);
         const unitPrice = qty > 0 ? cost / qty : cost; // per-unit so qty edits recompute cost
-        return { name: String(it.name || "Item"), qty: qty, unit: String(it.unit || ""), unitPrice: unitPrice, cost: cost };
+        return { name: String(it.name || "Item"), qty: qty, unit: String(it.unit || ""), unitPrice: unitPrice, cost: cost, priceTier: it.priceTier || null, matchType: it.matchType || null };
       }) : [];
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
@@ -4092,7 +4125,7 @@ function App() {
                           <input className="toqty" type="number" value={it.qty} onChange={(e) => estItemSet(i, "qty", e.target.value)} />
                           <input className="tounit" value={it.unit} onChange={(e) => estItemSet(i, "unit", e.target.value)} placeholder="unit" />
                           <span className="todollar" title="unit price">$<input className="tocost" type="number" value={it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0} onChange={(e) => estItemSet(i, "unitPrice", e.target.value)} /></span>
-                          <b className="tolinecost">{$0(it.cost)}</b>
+                          <b className="tolinecost" title={it.priceTier === "pricebook" ? ("Priced from your price book (" + (it.matchType || "match") + ")") : it.priceTier === "retail" ? "HD/Lowe's retail price — verify before bidding" : it.priceTier === "seed" ? "Seed/estimated price — add it to your price book to lock it in" : ""}>{it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
                           <button className="todel" onClick={() => estItemDel(i)}><X size={14} /></button>
                         </div>
                       ))}
@@ -4174,6 +4207,8 @@ function App() {
                           {csvBusy && <p className="hint">Reading the price sheet…</p>}
                           <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
                           <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
+                          <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
+                          <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
                           <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
                           <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
                           {csvParsed && csvParsed.headers.length > 0 && (
