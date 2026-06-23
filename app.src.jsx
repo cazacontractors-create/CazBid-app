@@ -1081,6 +1081,7 @@ function App() {
   const [convReportOpen, setConvReportOpen] = useState(false);
   const convEndRef = useRef(null);
   const convGreeting = useRef(false);
+  const engineRangeSig = useRef(""); // dedupe + last-write-wins guard for the engine-backed range
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 6000); };
   // ---- Whole House / Addition handlers ----
@@ -2150,6 +2151,39 @@ function App() {
     setConvOptions(Array.isArray(d.options) ? d.options.slice(0, 4).map(String).filter(Boolean) : []);
   };
 
+  // STAGE 4 — refine the homeowner range off the SAME deterministic engine the
+  // contractor side uses. We send ONLY the description + confirmed facts; the
+  // server classifies the job, extracts inputs, computes, and returns ONLY a
+  // {scope, priceLow, priceHigh, disclaimer} range — never rates/line costs/
+  // margins (that data never leaves the server). If the job isn't a deterministic
+  // trade (roofing, landscaping, a repair, …) the server says usedEngine:false
+  // and we keep AL's own LLM range. Fire-and-forget; never blocks the chat.
+  const homeownerDesc = (msgs) => msgs.filter((m) => m.role === "me").map((m) => m.text).join("\n").trim();
+  const maybeEngineRange = async (d, msgs) => {
+    if (!(num(d.priceLow) || num(d.priceHigh))) return; // nothing to anchor yet
+    const facts = (Array.isArray(d.facts) && d.facts.length) ? d.facts.map(String) : convFacts;
+    if (!d.done && facts.length < 2) return; // too thin — let AL's wide early range stand
+    const desc = homeownerDesc(msgs);
+    if (!desc && !facts.length) return;
+    const sig = JSON.stringify({ d: desc, f: facts, done: !!d.done });
+    if (engineRangeSig.current === sig) return; // already requested this exact state
+    engineRangeSig.current = sig;
+    try {
+      const res = await fetch("/.netlify/functions/estimate-range", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: desc, facts: facts }),
+      });
+      const j = await res.json();
+      if (engineRangeSig.current !== sig) return; // a newer turn superseded this request
+      if (j && j.usedEngine && (num(j.priceLow) || num(j.priceHigh))) {
+        setConvBid((b) => b ? { ...b, priceLow: num(j.priceLow), priceHigh: num(j.priceHigh), engineBacked: true, engineScope: Array.isArray(j.scope) ? j.scope : [], disclaimer: j.disclaimer || "" } : b);
+      } else {
+        // engine declined (non-deterministic job) — drop any stale engine flag, keep AL's range
+        setConvBid((b) => (b && b.engineBacked) ? { ...b, engineBacked: false } : b);
+      }
+    } catch (e) { /* keep AL's range on any failure */ }
+  };
+
   // one shared submit path for typing, choice buttons, and material-tier picks
   const convSubmit = async (textArg) => {
     const text = (textArg != null ? textArg : convInput).trim();
@@ -2174,6 +2208,7 @@ function App() {
       applyConvBid(d);
       setConvMsgs([...msgs, { role: "ai", text: String(d.message || "Got it — go on?") }]);
       if (d.done) setConvDone(true);
+      maybeEngineRange(d, msgs); // refine range off the deterministic engine (fire-and-forget)
     } else {
       // genuine failure after a retry — keep the user's message, let them resend, don't wipe progress
       setConvMsgs([...msgs, { role: "ai", text: "I didn't quite catch that one — mind sending it again?" }]);
@@ -2214,12 +2249,13 @@ function App() {
       applyConvBid(dd);
       setConvMsgs([...msgs, { role: "ai", text: String(dd.message || "Got those measurements, thanks!") }]);
       if (dd.done) setConvDone(true);
+      maybeEngineRange(dd, msgs); // refine range off the deterministic engine (fire-and-forget)
     } catch (e) { flash("Couldn't read that report — try a screenshot of the summary page, or just tell me the numbers."); }
     setConvBusy(false);
   };
   const convReset = () => {
     setConvMsgs([]); setConvInput(""); setConvStarted(false); setConvBid(null);
-    setConvFacts([]); setConvDone(false); setConvPhotos([]); setConvOptions([]); setConvConfirmReset(false); setAddrPublic(false); convGreeting.current = false;
+    setConvFacts([]); setConvDone(false); setConvPhotos([]); setConvOptions([]); setConvConfirmReset(false); setAddrPublic(false); convGreeting.current = false; engineRangeSig.current = "";
   };
   const handleReport = async (file) => {
     if (!file) return;
@@ -3257,6 +3293,12 @@ function App() {
                   </div>
                   <div className="bid-price">{$0(convBid.priceLow)} – {$0(convBid.priceHigh)}</div>
                   <div className="bid-days">≈ {convBid.days} day{convBid.days !== 1 ? "s" : ""} on site</div>
+                  {convBid.engineBacked && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#0a7d36" }}>✓ Priced by Caza’s estimating engine{convBid.engineScope && convBid.engineScope.length ? " · " + convBid.engineScope.join(", ") : ""}</div>
+                      {convBid.disclaimer && <div style={{ fontSize: 11, color: "#667085", marginTop: 2 }}>{convBid.disclaimer}</div>}
+                    </div>
+                  )}
                   {convBid.chosen ? (
                     <div className="convchosen">
                       <span className="convchosenlbl">✓ Material</span>
