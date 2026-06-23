@@ -19,6 +19,77 @@
 
 ---
 
+# 0. AUTHORITATIVE TAKEOFF & LABOR ENGINE  ⭐ (this section overrides the prose below)
+
+**READ THIS FIRST AND USE IT FOR THE NUMBERS.** Sections 1–5 are trade context (what the systems are, what drives them, best practices, ⚠️ structural cautions). When you actually compute the framing estimate, the **formulas, material lines, and labor model in this Section 0 are authoritative**. Where they conflict with the prose, **Section 0 wins.**
+
+> **⚙️ DETERMINISTIC CALCULATOR IS LIVE.** Framing estimates no longer rely on the model doing this arithmetic. The app now (1) has the model **extract the takeoff inputs** in §0.1, then (2) runs the formulas/labor model/calibration below in **JavaScript** (`netlify/functions/framingCalculator.js`) so the numbers are reproducible, and (3) asks the model to write only the surrounding scope/⚠️-flag prose around the engine-computed numbers. **This Section 0 is the spec the calculator mirrors** (keep them in sync) and is also the fallback the model computes from if the calculator ever fails — so the formulas, seeds, and labor model below remain authoritative either way.
+
+**LABOR — IMPORTANT METHOD CHANGE.** Compute framing labor **only** with the crew-production (area/day) model below. **Do NOT** sum the MH-per-unit figures in §1.4, §2.4, §3.4, §4.4, §5.4 to build the labor total — those MH/unit numbers are now descriptive context only (they explain what drives time, not the total). Framers work by **area per day**, not hours-per-stud; the old per-unit method under-counted real jobs (a 28×30 two-story came back ~75 hrs, far too low). The model below replaces it.
+
+### 0.1 Inputs the takeoff must establish (from dimensions / the photo)
+`wallLF` (total wall length, all stories) · `wallAreaSF` (perimeter × wall height × stories) · `floorAreaSF` (footprint × stories) · `floorPerimeterLF` · `roofAreaSF` (pitch-adjusted surface) · `buildingLengthLF` (longest run, for truss/rafter count) · `ocSpacingIN` (default 16) · `trussSpacingIN` (default 24) · `openingCount` (doors + windows) · `stories`.
+If any input is missing, **state the assumption** and estimate conservatively. **Defaults:** ocSpacingIN 16 · trussSpacingIN 24 · stockPlateLF 16 · sheetSF 32 (4×8).
+
+### 0.2 Material line items — formula → rounding → seed unit cost
+> **⚠️ PLACEHOLDER PRICING — DISCLOSE IT.** Every `$` unit cost, the crew rate, and the production rate below are **seed placeholders**, not Caza's verified numbers. In **every** framing estimate you produce, add a clear note: *"Material unit costs, crew rate, and production rate are placeholder values pending Caza's real ABC Supply pricing and crew-history calibration — treat the total as a rough order of magnitude until tuned."* Do not present placeholder-based totals as final.
+
+| Item | Unit | Takeoff formula | Rounding | Seed cost (PLACEHOLDER) |
+|---|---|---|---|---|
+| Wall studs | EA | `(((wallLF*12)/ocSpacingIN)+1) * 1.15` (1.15 = corners/blocking/opening framing/cut waste) | up to whole stud | $4.25/stud |
+| Plates (1 bottom + double top) | LF | `wallLF * 3` (use ×2 for non-bearing partitions) | up to whole stockPlateLF | $0.95/LF |
+| Headers over openings | BF | `openingCount * 12` (avg; itemize big spans — garage/sliders — separately) | up to whole board | $1.85/BF |
+| Wall sheathing (OSB/CDX) | SH | `(wallAreaSF * 1.10) / sheetSF` | up to whole sheet | $18.00/sheet |
+| House wrap | ROLL | `(wallAreaSF * 1.10) / rollCoverageSF` (rollCoverageSF 1000) | up to whole roll | $165.00/roll |
+| Floor joists (priced per SF) | SF | `floorAreaSF * 1.05` (spacing/span baked into $/SF) | none | $2.40/SF |
+| Rim / band joist | LF | `floorPerimeterLF` | up to whole stock | $2.10/LF |
+| Subfloor (¾ T&G OSB) | SH | `(floorAreaSF * 1.10) / sheetSF` | up to whole sheet | $32.00/sheet |
+| Roof trusses / rafters | EA | `((buildingLengthLF*12)/trussSpacingIN)+1` (usually supplier-quoted — treat seed as placeholder) | up to whole truss | $145.00/truss |
+| Roof sheathing (OSB/CDX) | SH | `(roofAreaSF * 1.10) / sheetSF` | up to whole sheet | $18.00/sheet |
+| Framing nails / structural screws | SF | `wallAreaSF + floorAreaSF + roofAreaSF` (allowance per SF) | none | $0.12/SF |
+
+**No double-counting with ROOFING:** roof *sheathing* and *structure* live here, but felt/shingles/drip/underlayment are in the Roofing manual. If a roofing scope already counts roof sheathing, **drop the roof-sheathing line here.**
+
+### 0.3 Labor — crew-production model (THE labor method)
+```
+totalFramedAreaSF = wallAreaSF + floorAreaSF + roofAreaSF
+framerDays        = totalFramedAreaSF / productionRateSFPerDay
+rawHours          = framerDays * hoursPerDay
+adjustedHours     = rawHours * complexityFactor
+laborCost         = adjustedHours * crewHourlyRate * calibration.laborMultiplier
+```
+**Seed labor values (PLACEHOLDER — TUNE from job history):** `productionRateSFPerDay = 350` · `hoursPerDay = 8` · `crewHourlyRate = $40.00` (blended, Lewis County) · `complexityFactor = 1.4`.
+**complexityFactor guide:** 1.0 simple box → 1.4 typical → 1.8 cut-up / addition tie-in to existing structure. Two-story + tie-in runs slower; 40–80% over a straightforward layout is normal. The fastest path to accuracy is to back `productionRateSFPerDay` out of 3–4 of Caza's own past framing jobs.
+
+### 0.4 Global calibration (one knob each, scale without editing lines)
+`calibration.laborMultiplier = 1.0` (applied to laborCost above) · `calibration.materialMultiplier = 1.0` (applied to the summed material cost — regional/markup). Start at 1.0 and nudge as job-cost actuals come in.
+
+### 0.5 Source spec (verbatim — runtime mirror is `netlify/functions/framingCalculator.js`; documented copy is `engine/framingManual.js`. Keep all three in sync.)
+```javascript
+export const framingManual = {
+  trade: "framing", version: "0.1-template",
+  basis: "wood platform framing — addition / new shell",
+  defaults: { ocSpacingIN: 16, trussSpacingIN: 24, stockPlateLF: 16, sheetSF: 32 },
+  lineItems: [
+    { id: "wall_studs",     unit: "EA",   takeoff: "(((wallLF*12)/ocSpacingIN)+1)*1.15", rounding: "up to whole stud",   materialUnitCost: 4.25 },
+    { id: "wall_plates",    unit: "LF",   takeoff: "wallLF*3",                            rounding: "up to stockPlateLF",  materialUnitCost: 0.95 },
+    { id: "headers",        unit: "BF",   takeoff: "openingCount*12",                     rounding: "up to whole board",   materialUnitCost: 1.85 },
+    { id: "wall_sheathing", unit: "EA",   takeoff: "(wallAreaSF*1.10)/sheetSF",           rounding: "up to whole sheet",   materialUnitCost: 18.0 },
+    { id: "housewrap",      unit: "ROLL", takeoff: "(wallAreaSF*1.10)/rollCoverageSF",    rounding: "up to whole roll",    materialUnitCost: 165.0, params: { rollCoverageSF: 1000 } },
+    { id: "floor_joists",   unit: "SF",   takeoff: "floorAreaSF*1.05",                    rounding: "none",                materialUnitCost: 2.40 },
+    { id: "rim_joist",      unit: "LF",   takeoff: "floorPerimeterLF",                    rounding: "up to whole stock",   materialUnitCost: 2.10 },
+    { id: "subfloor",       unit: "EA",   takeoff: "(floorAreaSF*1.10)/sheetSF",          rounding: "up to whole sheet",   materialUnitCost: 32.0 },
+    { id: "roof_trusses",   unit: "EA",   takeoff: "((buildingLengthLF*12)/trussSpacingIN)+1", rounding: "up to whole truss", materialUnitCost: 145.0 },
+    { id: "roof_sheathing", unit: "EA",   takeoff: "(roofAreaSF*1.10)/sheetSF",           rounding: "up to whole sheet",   materialUnitCost: 18.0 },
+    { id: "fasteners",      unit: "SF",   takeoff: "(wallAreaSF+floorAreaSF+roofAreaSF)", rounding: "none",                materialUnitCost: 0.12 },
+  ],
+  labor: { productionRateSFPerDay: 350, hoursPerDay: 8, crewHourlyRate: 40.0, complexityFactor: 1.4 },
+  calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
+};
+```
+
+---
+
 # 1. WALL FRAMING
 
 ## 1.1 System overview & sub-types
@@ -68,6 +139,8 @@ Stud count rule: **studs = (wall length in inches ÷ OC spacing) + 1, then add f
 | **Anchor bolts / sill connection** | EA | ~6' OC + within 12" of ends/corners (code) | — | Bottom plate to foundation; PT sill + anchor bolts or approved fasteners. |
 
 ## 1.4 Labor tasks & production rates
+
+> **⚠️ Labor total comes from §0, not from this table.** The MH/unit rates below (and in §2.4/§3.4/§4.4/§5.4) are descriptive — they explain what drives time. Do **not** sum them for the estimate's labor total; compute labor with the crew-production (area/day) model in §0.
 
 | Task | Unit | Base MH/unit (2-person, ground-level, simple) | Notes |
 |---|---|---|---|

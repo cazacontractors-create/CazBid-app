@@ -9,6 +9,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const engine = require("./tradeEngine.js");
 
 // trade key -> manual filename (the files live in ./manuals next to this function)
 const MANUAL_FILES = {
@@ -113,14 +114,28 @@ exports.handler = async function (event) {
     messages = [{ role: "user", content: prompt }];
   }
 
+  // NEW: load the relevant trade manual as a system prompt (if we have one)
+  const sys = buildSystemPrompt(trade);
+
+  // DETERMINISTIC TRADE PATH: any trade with a spec in tradeEngine.SPECS gets the
+  // extract -> JS-compute -> prose flow. (Two Opus calls — best run via
+  // estimate-background; supported here for parity. Falls through on any failure.)
+  const spec = engine.SPECS[String(trade).toLowerCase()];
+  if (spec) {
+    try {
+      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys });
+      // Emit the app's estResult JSON shape as `text` (markdown in estResult.numericBlock).
+      return { statusCode: 200, headers, body: JSON.stringify({ text: JSON.stringify(out.estResult), manualUsed: trade, engine: "deterministic-trade" }) };
+    } catch (e) {
+      console.error("Deterministic trade failed; falling back to LLM path:", e && e.message);
+    }
+  }
+
   const payload = {
     model: "claude-opus-4-8",
     max_tokens: maxTokens,
     messages: messages,
   };
-
-  // NEW: load the relevant trade manual as a system prompt (if we have one)
-  const sys = buildSystemPrompt(trade);
   if (sys) payload.system = sys;
 
   if (useSearch) {

@@ -1027,6 +1027,12 @@ function App() {
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
+  // ---- Whole House / Addition (deterministic multi-trade) ----
+  const [whSpecs, setWhSpecs] = useState(null);   // trade input schemas from /trade-specs
+  const [whChecked, setWhChecked] = useState({}); // { trade: bool }
+  const [whInputs, setWhInputs] = useState({});   // { trade: { field: value } }
+  const [whResult, setWhResult] = useState(null); // combined estimate from /estimate-multi
+  const [whBusy, setWhBusy] = useState(false);
   // ---- homeowner conversational estimate ----
   const [convMsgs, setConvMsgs] = useState([]); // [{role:"ai"|"me", text}]
   const [convInput, setConvInput] = useState("");
@@ -1043,7 +1049,39 @@ function App() {
   const convGreeting = useRef(false);
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 6000); };
-  const goTab = (k) => { setTab(k); setViewing(null); setChatJob(null); window.scrollTo(0, 0); };
+  // ---- Whole House / Addition handlers ----
+  const loadWholeHouseSpecs = async () => {
+    if (whSpecs) return;
+    try {
+      const res = await fetch("/.netlify/functions/trade-specs");
+      const d = await res.json();
+      const list = d.trades || [];
+      const checked = {}, inputs = {};
+      list.forEach((t) => {
+        checked[t.trade] = true; // pre-check all trades
+        const iv = {};
+        t.inputs.forEach((inp) => { iv[inp.name] = inp.default; });
+        iv.complexityFactor = t.complexity.default;
+        inputs[t.trade] = iv;
+      });
+      setWhSpecs(list); setWhChecked(checked); setWhInputs(inputs);
+    } catch (e) { flash("Couldn't load trades: " + errMsg(e)); }
+  };
+  const whToggle = (trade) => setWhChecked((p) => ({ ...p, [trade]: !p[trade] }));
+  const whSet = (trade, name, val) => setWhInputs((p) => ({ ...p, [trade]: { ...(p[trade] || {}), [name]: val } }));
+  const buildWholeHouse = async () => {
+    const req = (whSpecs || []).filter((t) => whChecked[t.trade]).map((t) => ({ trade: t.trade, inputs: whInputs[t.trade] || {} }));
+    if (!req.length) { flash("Check at least one trade to estimate."); return; }
+    setWhBusy(true); setWhResult(null);
+    try {
+      const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: req }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+      setWhResult(d);
+    } catch (e) { flash("Combined estimate failed: " + errMsg(e)); }
+    setWhBusy(false);
+  };
+  const goTab = (k) => { setTab(k); setViewing(null); setChatJob(null); if (k === "wholehouse") loadWholeHouseSpecs(); window.scrollTo(0, 0); };
   const shareApp = async () => {
     const url = (typeof window !== "undefined" && window.location && window.location.href) || "";
     const data = { title: "CazBid", text: "Check out CazBid — snap a photo of a home project, get an instant price, and pick a local contractor. (Open in Safari for the best experience.)", url };
@@ -1728,7 +1766,8 @@ function App() {
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
       const sysStr = (estScope + " " + estDesc).toLowerCase();
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
-      if (isRoof) {
+      // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
+      if (isRoof && !d.deterministic) {
         const q = computeRoofQuantities(estDims, sysStr, num(estPanelW));
         if (q && q.length) {
           const matchers = [
@@ -1765,16 +1804,19 @@ function App() {
       const crewN = num(d.crew) || 2, daysN = num(d.days) || 1;
       let laborHours = Math.round(num(d.laborHours) || 0);
       let laborRate = Math.round(num(d.laborRate) || 0);
-      let laborSrc = String(d.laborSource || "").toLowerCase() === "ratebook" ? "ratebook" : "estimate";
-      // DETERMINISTIC labor: compute from the rate book in code so it never depends on the AI doing the lookup.
-      const calc = computeLaborFromRateBook(items, rateBook, estDims, estScope, estDesc);
-      if (calc && calc.hours > 0) { laborHours = calc.hours; laborSrc = "ratebook"; }
-      // size-scaled safety floor: only if we still have no real number
-      let sqGuess = 0;
-      items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
-      if (!sqGuess && estDims) { const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
-      const minHrsBySize = sqGuess > 0 ? Math.round(sqGuess * 2) : crewN * daysN * 8;
-      if (!calc && laborHours < minHrsBySize * 0.5) { laborHours = Math.max(laborHours, minHrsBySize); laborSrc = "estimate"; }
+      // Deterministic engine: trust its labor (computed from the trade's laborBasis) — do NOT override.
+      let laborSrc = d.deterministic ? "engine" : (String(d.laborSource || "").toLowerCase() === "ratebook" ? "ratebook" : "estimate");
+      if (!d.deterministic) {
+        // DETERMINISTIC labor: compute from the rate book in code so it never depends on the AI doing the lookup.
+        const calc = computeLaborFromRateBook(items, rateBook, estDims, estScope, estDesc);
+        if (calc && calc.hours > 0) { laborHours = calc.hours; laborSrc = "ratebook"; }
+        // size-scaled safety floor: only if we still have no real number
+        let sqGuess = 0;
+        items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
+        if (!sqGuess && estDims) { const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
+        const minHrsBySize = sqGuess > 0 ? Math.round(sqGuess * 2) : crewN * daysN * 8;
+        if (!calc && laborHours < minHrsBySize * 0.5) { laborHours = Math.max(laborHours, minHrsBySize); laborSrc = "estimate"; }
+      }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
       if (laborRate <= 0) laborRate = 60;
       setEstResult({
@@ -2651,7 +2693,7 @@ function App() {
   const hoDone = myJobsHO.filter((j) => j.status === "complete").length;
 
   const tabs = me.role === "contractor"
-? [["feed", "Feed", ClipboardList], ["myjobs", "My Jobs", Briefcase], ["estimator", "Estimate", Calculator], ["work", "My Work", Camera], ["settings", "Profile", User]]
+? [["feed", "Feed", ClipboardList], ["myjobs", "My Jobs", Briefcase], ["estimator", "Estimate", Calculator], ["wholehouse", "Whole House", ListChecks], ["work", "My Work", Camera], ["settings", "Profile", User]]
     : [["chat", "Get Estimate", MessageCircle], ["myjobs", "My Jobs", Briefcase], ["pros", "Pros", Users], ["profile", "Profile", User]];
 
   const overlay = viewing || chatJob;
@@ -3974,6 +4016,61 @@ function App() {
               })()}
             </>
           )}
+        </main>
+      )}
+
+      {me.role === "contractor" && tab === "wholehouse" && !overlay && (
+        <main className="page">
+          <section className="card">
+            <div className="h1">Whole House / Addition <span className="propill">PRO</span></div>
+            <p className="hint">All trades are on by default — uncheck any you're not providing on this job. Enter each checked trade's dimensions, then build one combined estimate. Every quantity, labor figure, and total is computed deterministically by Caza's engine (same numbers every time for the same inputs).</p>
+            {!whSpecs && <p className="hint">Loading trades…</p>}
+            {whSpecs && whSpecs.map((t) => (
+              <div className="card" style={{ marginTop: 10 }} key={t.trade}>
+                <label className="estf" style={{ alignItems: "center", cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!whChecked[t.trade]} onChange={() => whToggle(t.trade)} />
+                  <span className="seclabel" style={{ marginLeft: 8 }}>{t.label}</span>
+                  <span className="hint" style={{ marginLeft: 8 }}>{t.basis}</span>
+                </label>
+                {whChecked[t.trade] && (
+                  <div className="estfields">
+                    {t.inputs.map((inp) => (
+                      <label className="estf" key={inp.name}>
+                        <span>{inp.label}{inp.unit ? " (" + inp.unit + ")" : ""}{inp.required ? " *" : ""}</span>
+                        {inp.type === "enum"
+                          ? <select value={(whInputs[t.trade] && whInputs[t.trade][inp.name] != null) ? whInputs[t.trade][inp.name] : inp.default} onChange={(e) => whSet(t.trade, inp.name, e.target.value)}>
+                              {(inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
+                            </select>
+                          : <input type="number" value={(whInputs[t.trade] && whInputs[t.trade][inp.name] != null) ? whInputs[t.trade][inp.name] : ""} onChange={(e) => whSet(t.trade, inp.name, num(e.target.value))} />}
+                      </label>
+                    ))}
+                    <label className="estf">
+                      <span>Complexity ({t.complexity.min}–{t.complexity.max})</span>
+                      <input type="number" step="0.05" value={(whInputs[t.trade] && whInputs[t.trade].complexityFactor != null) ? whInputs[t.trade].complexityFactor : t.complexity.default} onChange={(e) => whSet(t.trade, "complexityFactor", num(e.target.value))} />
+                    </label>
+                  </div>
+                )}
+              </div>
+            ))}
+            {whSpecs && (
+              <button className="btn primary full" disabled={whBusy} style={{ marginTop: 12 }} onClick={buildWholeHouse}>
+                {whBusy ? "Building combined estimate…" : "✦ Build combined estimate"}
+              </button>
+            )}
+            {whResult && (
+              <section className="costbox" style={{ marginTop: 14 }}>
+                <div className="h1">Combined estimate — {whResult.combined.tradeCount} trade{whResult.combined.tradeCount === 1 ? "" : "s"}</div>
+                {whResult.errors && whResult.errors.length > 0 && <p className="hint">Skipped (no engine spec): {whResult.errors.map((e) => e.trade).join(", ")}</p>}
+                {whResult.combined.byTrade.map((b) => (
+                  <div className="costrow" key={b.trade}><span>{b.title}</span><b>{$0(b.grandTotal)}</b></div>
+                ))}
+                <div className="costrow"><span>Materials — all trades</span><b>{$0(whResult.combined.materialTotal)}</b></div>
+                <div className="costrow"><span>Labor — all trades · {whResult.combined.laborHours} hrs</span><b>{$0(whResult.combined.laborCost)}</b></div>
+                <div className="costrow total"><span>Combined total</span><b>{$0(whResult.combined.grandTotal)}</b></div>
+                <p className="hint">⚠️ Placeholder pricing — material unit costs and crew rates are seed values pending your real ABC Supply pricing and crew-history calibration. Treat as a rough order of magnitude until tuned.</p>
+              </section>
+            )}
+          </section>
         </main>
       )}
 

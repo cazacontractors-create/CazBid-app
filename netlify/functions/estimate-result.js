@@ -22,7 +22,11 @@ exports.handler = async function (event) {
   try {
     const { getStore, connectLambda } = await import("@netlify/blobs");
     connectLambda(event); // wire up Blobs context for v1 functions
-    const store = getStore({ name: "cazbid-jobs", consistency: "strong" });
+    // NOTE: do NOT request strong consistency here. v1 (Lambda-compat) functions are not
+    // given the 'uncachedEdgeURL' that strong-consistency reads require, so a strong read
+    // throws BlobsConsistencyError -> every poll 500s and the estimate never returns.
+    // The background fn writes the result once and we poll, so eventual consistency is fine.
+    const store = getStore({ name: "cazbid-jobs" });
     const raw = await store.get(jobId); // JSON string written by the background fn, or null
     if (!raw) return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ status: "pending" }) };
     return { statusCode: 200, headers: HEADERS, body: raw };
