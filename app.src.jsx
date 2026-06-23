@@ -1124,6 +1124,24 @@ function App() {
     try { onCsvText(await file.text()); }
     catch (e) { flash("Couldn't read file: " + errMsg(e)); }
   };
+  // PDF / photo of a price sheet -> Claude vision extracts priced lines -> same review gate.
+  const onPriceFile = async (file) => {
+    if (!file) return;
+    setCsvBusy(true);
+    try {
+      let mediaType = file.type || "";
+      let fileData;
+      if (mediaType === "application/pdf") { fileData = await readDataURL(file); }
+      else { fileData = await imageToJpeg(file, 1500, 0.8); mediaType = "image/jpeg"; }
+      const res = await fetch("/.netlify/functions/extract-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fileData: fileData, mediaType: mediaType }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+      if (!d.rows || !d.rows.length) { flash("No priced material lines found in that file."); setCsvBusy(false); return; }
+      setCsvParsed(null);
+      setCsvReview(d.rows.map((r) => ({ material: r.material, unit: r.unit || "", cost: num(r.cost), trade: r.trade || "other", category: r.category || "", confidence: r.confidence != null ? r.confidence : 0 })));
+    } catch (e) { flash("Couldn't read prices: " + errMsg(e)); }
+    setCsvBusy(false);
+  };
   const csvParseAndCategorize = async () => {
     if (!csvParsed || csvMap.material < 0 || csvMap.cost < 0) { flash("Map at least the Material and Cost columns."); return; }
     const base = csvParsed.rows.map((r) => ({
@@ -4151,6 +4169,10 @@ function App() {
                       <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
                       {pbImportOpen && !csvReview && (
                         <div style={{ marginTop: 8 }}>
+                          <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
+                          <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
+                          {csvBusy && <p className="hint">Reading the price sheet…</p>}
+                          <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
                           <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
                           <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
                           <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
