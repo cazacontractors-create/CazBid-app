@@ -97,6 +97,7 @@ exports.handler = async function (event) {
   const maxTokens = body.maxTokens || 4000;
   const useSearch = !!body.search;
   const trade = body.trade || "";        // NEW: which manual to load
+  const priceBook = (body.priceBook && Array.isArray(body.priceBook.entries)) ? body.priceBook : null;
   if (!prompt) return { statusCode: 400, headers, body: JSON.stringify({ error: "No prompt provided" }) };
 
   // prompt may be a plain string (one user message) OR a full messages array
@@ -123,7 +124,7 @@ exports.handler = async function (event) {
   const spec = engine.SPECS[String(trade).toLowerCase()];
   if (spec) {
     try {
-      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys });
+      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys, priceBook: priceBook });
       // Emit the app's estResult JSON shape as `text` (markdown in estResult.numericBlock).
       return { statusCode: 200, headers, body: JSON.stringify({ text: JSON.stringify(out.estResult), manualUsed: trade, engine: "deterministic-trade" }) };
     } catch (e) {

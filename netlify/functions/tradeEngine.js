@@ -600,6 +600,29 @@ function lookupLinePrice(trade, line, priceBook) {
 }
 
 // ---------------------------------------------------------------------------
+// HD / LOWE'S RETAIL TIER (Stage 2e) — BEST-EFFORT, NEVER LOAD-BEARING.
+//   Tier 3 of the waterfall (after the builder's price book, before seed).
+//   Neither HD nor Lowe's has a clean public price API, so this is a SWAPPABLE
+//   stub: by default it returns null (→ the line falls through to seed). Plug a
+//   scraper or licensed pricing-data API in here; it must (a) tag results tier
+//   "retail" (retail = a price CEILING, higher than contractor/ABC pricing —
+//   flagged for sanity-check) and (b) NEVER throw — any failure/timeout/empty
+//   result returns null so the estimate never breaks. Kept synchronous so the
+//   compute stays sync; a live source would do its own (timeout-guarded) lookup
+//   in the caller and pass results in as retail-tagged price-book entries.
+let RETAIL_SOURCE = null; // injectable: (trade, materialName) => number|null
+function setRetailSource(fn) { RETAIL_SOURCE = typeof fn === "function" ? fn : null; }
+function lookupRetailPrice(trade, line) {
+  if (!RETAIL_SOURCE) return null;
+  try {
+    const v = RETAIL_SOURCE(trade, line.name);
+    return (typeof v === "number" && isFinite(v) && v > 0)
+      ? { unitCost: v, tier: "retail", matchType: "retail", source: { method: "hd_lowes", supplier: "HD/Lowe's (retail)" } }
+      : null;
+  } catch (e) { return null; } // best-effort: never break the estimate
+}
+
+// ---------------------------------------------------------------------------
 // THE DETERMINISTIC COMPUTE
 // ---------------------------------------------------------------------------
 function computeTrade(spec, rawInputs, priceBook) {
@@ -611,8 +634,9 @@ function computeTrade(spec, rawInputs, priceBook) {
     const rawQty = evalFormula(li.takeoff, scope);
     let qty = applyRounding(rawQty, li.rounding, scope);
     if (qty < 0) qty = 0;
-    // PRICE WATERFALL: builder price-book entry (fuzzy, per-trade) -> seed.
-    const pb = lookupLinePrice(spec.trade, li, priceBook);
+    // PRICE WATERFALL: builder price book (fuzzy, per-trade) -> HD/Lowe's retail
+    // (best-effort, usually off) -> seed materialUnitCost.
+    const pb = lookupLinePrice(spec.trade, li, priceBook) || lookupRetailPrice(spec.trade, li);
     const unitCost = pb ? pb.unitCost : li.materialUnitCost;
     const lineCost = qty * unitCost;
     return {
@@ -923,7 +947,7 @@ async function runDeterministicTrade(spec, opts) {
 
 module.exports = {
   SPECS,
-  evalFormula, applyRounding, coerceInputs, lookupLinePrice, priceTokens,
+  evalFormula, applyRounding, coerceInputs, lookupLinePrice, priceTokens, lookupRetailPrice, setRetailSource,
   computeTrade, formatTradeNumericBlock, formatAssumptions, buildEstResult,
   buildExtractionTool, buildExtractionSystem, buildNarrativeSystem, buildNarrativeUserText,
   callAnthropic, runDeterministicTrade,

@@ -102,6 +102,7 @@ exports.handler = async function (event) {
   const maxTokens = body.maxTokens || 4000;
   const useSearch = !!body.search;
   const trade = body.trade || "";
+  const priceBook = (body.priceBook && Array.isArray(body.priceBook.entries)) ? body.priceBook : null;
 
   if (!prompt) { await writeResult(store, jobId, { status: "error", error: "No prompt provided" }); return { statusCode: 202, body: "" }; }
 
@@ -126,7 +127,7 @@ exports.handler = async function (event) {
   const spec = engine.SPECS[String(trade).toLowerCase()];
   if (spec) {
     try {
-      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys });
+      const out = await engine.runDeterministicTrade(spec, { apiKey: apiKey, messages: messages, maxTokens: maxTokens, manualSystem: sys, priceBook: priceBook });
       // Emit the app's estResult JSON shape as `text` so the app's parseJSON +
       // itemized UI render it natively (the markdown lives in estResult.numericBlock).
       await writeResult(store, jobId, { status: "done", text: JSON.stringify(out.estResult), manualUsed: trade, engine: "deterministic-trade" });
