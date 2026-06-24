@@ -986,7 +986,7 @@ const HOUSE_ZONES = {
 const HOUSE_TRADE_LABEL = {};
 Object.keys(HOUSE_ZONES).forEach((k) => HOUSE_ZONES[k].forEach((z) => { HOUSE_TRADE_LABEL[z.trade] = z.label; }));
 
-function InteractiveHouse({ checked, onToggle, role }) {
+function House2D({ checked, onToggle, role }) {
   const [layer, setLayer] = useState("exterior");
   const ck = checked || {};
   const isActive = (tr) => HOUSE_ZONES[layer].some((z) => z.trade === tr);
@@ -1130,6 +1130,377 @@ function InteractiveHouse({ checked, onToggle, role }) {
         </div>
       )}
       <p className="hint" style={{ marginTop: 8 }}>The house is just a friendlier way to pick trades — your selections sync with the checklist below{role === "homeowner" ? ", and you'll get a price range." : ", with full per-trade numbers."}</p>
+    </div>
+  );
+}
+
+// ---- Three.js lazy loader (UMD global, fetched only when the 3D house opens) --
+// Pinned to r149: last line that still ships build/three.min.js (window.THREE)
+// AND the examples/js UMD loaders we'll need for the real GLB in a later pass.
+let _threePromise = null;
+function loadThree() {
+  if (typeof window !== "undefined" && window.THREE) return Promise.resolve(window.THREE);
+  if (_threePromise) return _threePromise;
+  _threePromise = new Promise(function (resolve, reject) {
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/three@0.149.0/build/three.min.js";
+    s.async = true;
+    s.onload = function () { window.THREE ? resolve(window.THREE) : reject(new Error("three loaded but window.THREE missing")); };
+    s.onerror = function () { _threePromise = null; reject(new Error("failed to load three.js")); };
+    document.head.appendChild(s);
+  });
+  return _threePromise;
+}
+
+// Zone -> trade map for the 3D greybox (same deterministic trades as House2D, so
+// taps drive the SAME whChecked state). Each entry: which layer it lives in.
+const HOUSE3D_ZONES = [
+  { trade: "framing", layer: "exterior", label: "Roof & framing" },
+  { trade: "siding", layer: "exterior", label: "Siding" },
+  { trade: "concrete", layer: "exterior", label: "Foundation" },
+  { trade: "drywall", layer: "interior", label: "Drywall & ceilings" },
+  { trade: "insulation", layer: "interior", label: "Insulation" },
+  { trade: "trim", layer: "interior", label: "Trim & doors" },
+  { trade: "electrical", layer: "systems", label: "Electrical" },
+  { trade: "plumbing", layer: "systems", label: "Plumbing" },
+  { trade: "hvac", layer: "systems", label: "Heating & cooling" },
+];
+
+// STAGE 5 v2 — real-time greybox cutaway in raw Three.js. Pass 1 (camera peel) +
+// Pass 2 (raycast hotspots -> trades). A VISUAL SKIN: a zone click just toggles
+// that trade in the same whChecked map. Greybox geometry now; a separable photo-
+// real GLB swaps in later. Correct render pipeline (ACES + sRGB + sun/soft
+// shadows) is set from the start so it doesn't read flat. Falls back to House2D
+// (via onError) if WebGL / three.js is unavailable.
+function House3D({ checked, onToggle, role, onError }) {
+  const mountRef = useRef(null);
+  const apiRef = useRef(null);
+  const [layer, setLayer] = useState("exterior");
+  const [ready, setReady] = useState(false);
+  const checkedRef = useRef(checked);
+  const toggleRef = useRef(onToggle);
+  checkedRef.current = checked; toggleRef.current = onToggle;
+
+  useEffect(function () {
+    let disposed = false;
+    let raf = 0;
+    loadThree().then(function (THREE) {
+      if (disposed || !mountRef.current) return;
+      const mount = mountRef.current;
+      const W = mount.clientWidth || 360, H = Math.round((mount.clientWidth || 360) * 0.62);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.setSize(W, H);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
+      mount.appendChild(renderer.domElement);
+      renderer.domElement.style.display = "block";
+      renderer.domElement.style.width = "100%";
+      renderer.domElement.style.borderRadius = "10px";
+      renderer.domElement.style.cursor = "pointer";
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xcddcea);
+
+      const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 200);
+      camera.position.set(10, 5, 11);
+
+      // lights: sun + soft shadow, hemisphere fill, low ambient
+      const sun = new THREE.DirectionalLight(0xfff4e6, 2.4);
+      sun.position.set(9, 15, 7);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(1024, 1024);
+      sun.shadow.camera.near = 1; sun.shadow.camera.far = 60;
+      sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
+      sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
+      sun.shadow.bias = -0.0004;
+      scene.add(sun);
+      scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x6b5a45, 0.7));
+      scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+
+      // ground
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(120, 120),
+        new THREE.MeshStandardMaterial({ color: 0x9bb18a, roughness: 1 })
+      );
+      ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+      // ---- colors ----
+      const COL_OFF = { framing: 0xb08968, siding: 0xc9d3df, concrete: 0x9aa3ad, drywall: 0xe6e2da, insulation: 0xe2a6bd, trim: 0xcdb89a, electrical: 0xe6b34d, plumbing: 0x5aa0d6, hvac: 0xbcc4cf };
+      const COL_SEL = 0x14a04a;
+      const zones = []; // {trade, layer, mesh, baseColor, label}
+      const labels = []; // sprites
+
+      function mat(trade) {
+        return new THREE.MeshStandardMaterial({ color: COL_OFF[trade], roughness: 0.85, metalness: trade === "hvac" ? 0.2 : 0.0 });
+      }
+      function addZone(mesh, z) {
+        mesh.castShadow = true; mesh.receiveShadow = true;
+        mesh.userData = { trade: z.trade, layer: z.layer };
+        zones.push({ trade: z.trade, layer: z.layer, mesh: mesh });
+      }
+      function zdef(trade) { return HOUSE3D_ZONES.find(function (z) { return z.trade === trade; }); }
+
+      // label sprite
+      function makeLabel(text) {
+        const c = document.createElement("canvas"); c.width = 256; c.height = 64;
+        const g = c.getContext("2d");
+        g.fillStyle = "rgba(17,24,39,0.82)"; g.strokeStyle = "rgba(255,255,255,0.9)";
+        const rw = 248, rh = 40, rx = 4, ry = 12, rr = 10;
+        g.beginPath(); g.moveTo(rx + rr, ry); g.arcTo(rx + rw, ry, rx + rw, ry + rh, rr); g.arcTo(rx + rw, ry + rh, rx, ry + rh, rr); g.arcTo(rx, ry + rh, rx, ry, rr); g.arcTo(rx, ry, rx + rw, ry, rr); g.closePath(); g.fill();
+        g.font = "bold 22px Inter, sans-serif"; g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText(text, 128, 33);
+        const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+        sp.scale.set(3.2, 0.8, 1);
+        return sp;
+      }
+      function addLabel(trade, pos) {
+        const z = zdef(trade); const sp = makeLabel(z.label);
+        sp.position.copy(pos); sp.userData = { layer: z.layer }; scene.add(sp); labels.push(sp); return sp;
+      }
+
+      // ===== GREYBOX HOUSE =====
+      const HW = 4, HD = 3, WALL_H = 3, WALL_T = 0.18; // half-width/depth, wall height/thickness
+
+      // foundation (concrete) — exterior
+      const found = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 + 0.5, 0.6, HD * 2 + 0.5), mat("concrete"));
+      found.position.set(0, 0.3, 0); addZone(found, zdef("concrete")); scene.add(found);
+      addLabel("concrete", new THREE.Vector3(0, 0.7, HD + 0.6));
+
+      // interior floor (drywall proxy / finishes) — interior, sits on foundation
+      const floor = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.1, 0.12, HD * 2 - 0.1), mat("drywall"));
+      floor.position.set(0, 0.66, 0); addZone(floor, zdef("drywall")); scene.add(floor);
+      addLabel("drywall", new THREE.Vector3(0, 1.1, 0));
+
+      // trim — baseboard ring (thin box frame, here a flat slab just inside walls) interior
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.3, 0.18, HD * 2 - 0.3), mat("trim"));
+      trim.position.set(0, 0.78, 0); addZone(trim, zdef("trim")); scene.add(trim);
+      addLabel("trim", new THREE.Vector3(HW - 1.2, 1.0, HD - 0.9));
+
+      // exterior walls (siding) — a group so the FRONT wall can drop for Systems
+      const wallsGroup = new THREE.Group(); scene.add(wallsGroup);
+      const sidingMat = mat("siding");
+      function wallBox(w, d, x, z) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_H, d), sidingMat);
+        m.position.set(x, 0.72 + WALL_H / 2, z); m.castShadow = true; m.receiveShadow = true;
+        m.userData = { trade: "siding", layer: "exterior" }; return m;
+      }
+      const wBack = wallBox(HW * 2, WALL_T, 0, -HD); wallsGroup.add(wBack); zones.push({ trade: "siding", layer: "exterior", mesh: wBack });
+      const wLeft = wallBox(WALL_T, HD * 2, -HW, 0); wallsGroup.add(wLeft); zones.push({ trade: "siding", layer: "exterior", mesh: wLeft });
+      const wRight = wallBox(WALL_T, HD * 2, HW, 0); wallsGroup.add(wRight); zones.push({ trade: "siding", layer: "exterior", mesh: wRight });
+      const wFront = wallBox(HW * 2, WALL_T, 0, HD); wallsGroup.add(wFront); zones.push({ trade: "siding", layer: "exterior", mesh: wFront });
+      addLabel("siding", new THREE.Vector3(-HW - 0.7, 2.2, 0));
+
+      // MEP (systems) — boxes inside, revealed when the front wall drops
+      const elec = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.3), mat("electrical"));
+      elec.position.set(-HW + 0.5, 1.6, -HD + 0.6); addZone(elec, zdef("electrical")); scene.add(elec);
+      addLabel("electrical", new THREE.Vector3(-HW + 0.6, 2.4, -HD + 0.6));
+      const plumb = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.2, 12), mat("plumbing"));
+      plumb.position.set(HW - 0.6, 1.7, -HD + 0.6); addZone(plumb, zdef("plumbing")); scene.add(plumb);
+      addLabel("plumbing", new THREE.Vector3(HW - 0.6, 2.6, -HD + 0.6));
+      const hvac = new THREE.Mesh(new THREE.BoxGeometry(HW, 0.45, 0.5), mat("hvac"));
+      hvac.position.set(0, 2.5, -HD + 0.7); addZone(hvac, zdef("hvac")); scene.add(hvac);
+      addLabel("hvac", new THREE.Vector3(0, 3.0, -HD + 0.7));
+
+      // roof (framing) — gable prism via extruded triangle, in a group so it peels
+      const roofGroup = new THREE.Group(); scene.add(roofGroup);
+      const tri = new THREE.Shape();
+      tri.moveTo(-HW - 0.3, 0); tri.lineTo(HW + 0.3, 0); tri.lineTo(0, 2.4); tri.lineTo(-HW - 0.3, 0);
+      const roofGeo = new THREE.ExtrudeGeometry(tri, { depth: HD * 2 + 0.6, bevelEnabled: false });
+      roofGeo.translate(0, 0, -(HD + 0.3));
+      const roofMat = mat("framing");
+      const roof = new THREE.Mesh(roofGeo, roofMat);
+      roof.position.set(0, 0.72 + WALL_H, 0); roof.castShadow = true; roof.receiveShadow = true;
+      roof.userData = { trade: "framing", layer: "exterior" };
+      roofGroup.add(roof); zones.push({ trade: "framing", layer: "exterior", mesh: roof });
+      addLabel("framing", new THREE.Vector3(0, 0.72 + WALL_H + 2.9, 0));
+
+      // insulation (interior) — batt slab tucked under the roof, revealed when roof lifts
+      const insul = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.4, 0.25, HD * 2 - 0.4), mat("insulation"));
+      insul.position.set(0, 0.72 + WALL_H + 0.2, 0); addZone(insul, zdef("insulation")); scene.add(insul);
+      addLabel("insulation", new THREE.Vector3(0, 0.72 + WALL_H + 0.6, 0));
+
+      // AL avatar — billboard sprite beside the house
+      let al = null;
+      try {
+        const tl = new THREE.TextureLoader();
+        tl.load(AL_NOTEPAD, function (tex) {
+          tex.encoding = THREE.sRGBEncoding;
+          al = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+          al.scale.set(2.6, 2.6, 1); al.position.set(-HW - 3, 1.6, HD + 1.5);
+          al.userData = { baseScale: 2.6, pulse: 0 };
+          scene.add(al); st.al = al; st.dirty = true;
+        });
+      } catch (e) { /* AL is decoration; ignore */ }
+
+      // ---- camera stations + layer targets ----
+      const STATIONS = {
+        exterior: { pos: new THREE.Vector3(10, 5, 11), tgt: new THREE.Vector3(0, 1.7, 0) },
+        interior: { pos: new THREE.Vector3(0.4, 15, 1.2), tgt: new THREE.Vector3(0, 0.8, 0) },
+        systems: { pos: new THREE.Vector3(11, 7.5, 10), tgt: new THREE.Vector3(0, 1.4, 0) },
+      };
+
+      const st = {
+        THREE: THREE, renderer: renderer, scene: scene, camera: camera, mount: mount,
+        zones: zones, labels: labels, roofGroup: roofGroup, wallsGroup: wallsGroup, wFront: wFront,
+        layer: "exterior", al: al, dirty: true,
+        camPos: camera.position.clone(), camTgt: STATIONS.exterior.tgt.clone(),
+        tgtPos: STATIONS.exterior.pos.clone(), tgtTgt: STATIONS.exterior.tgt.clone(),
+        roofY: 0, roofYT: 0, frontY: 0, frontYT: 0, raycaster: new THREE.Raycaster(),
+      };
+      camera.position.copy(st.camPos); camera.lookAt(st.camTgt);
+      apiRef.current = st;
+
+      // selection colors
+      function applyChecked(ck) {
+        ck = ck || {};
+        zones.forEach(function (z) {
+          const on = !!ck[z.trade];
+          z.mesh.material.color.setHex(on ? COL_SEL : COL_OFF[z.trade]);
+          z.mesh.material.emissive && z.mesh.material.emissive.setHex(on ? 0x0a5a28 : 0x000000);
+        });
+        st.dirty = true;
+      }
+      st.applyChecked = applyChecked;
+      applyChecked(checkedRef.current);
+
+      // layer transitions: set camera + peel targets, label visibility, clickable set
+      function goLayer(L) {
+        st.layer = L;
+        const s = STATIONS[L] || STATIONS.exterior;
+        st.tgtPos.copy(s.pos); st.tgtTgt.copy(s.tgt);
+        st.roofYT = L === "exterior" ? 0 : 4.5;       // roof lifts when peeled
+        st.frontYT = L === "systems" ? -3.2 : 0;       // front wall drops in Systems
+        roofMat.transparent = true; sidingMat.transparent = true;
+        labels.forEach(function (sp) { sp.visible = sp.userData.layer === L; });
+        st.dirty = true;
+      }
+      st.goLayer = goLayer;
+      goLayer("exterior");
+
+      // ---- interaction: raycast click -> toggle trade (active layer only) ----
+      function onClick(ev) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+        const py = (ev.touches ? ev.touches[0].clientY : ev.clientY) - rect.top;
+        const ndc = new THREE.Vector2((px / rect.width) * 2 - 1, -(py / rect.height) * 2 + 1);
+        st.raycaster.setFromCamera(ndc, camera);
+        const active = zones.filter(function (z) { return z.layer === st.layer; }).map(function (z) { return z.mesh; });
+        const hits = st.raycaster.intersectObjects(active, false);
+        if (hits.length) {
+          const trade = hits[0].object.userData.trade;
+          if (st.al) { st.al.userData.pulse = 1; }
+          toggleRef.current && toggleRef.current(trade);
+        }
+      }
+      renderer.domElement.addEventListener("click", onClick);
+
+      function onResize() {
+        if (!mount.clientWidth) return;
+        const w = mount.clientWidth, h = Math.round(w * 0.62);
+        renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); st.dirty = true;
+      }
+      window.addEventListener("resize", onResize);
+      st.onResize = onResize; st.onClick = onClick;
+
+      // ---- render loop with exponential-damped easing ----
+      const damp = function (cur, tgt, k) { return cur + (tgt - cur) * k; };
+      function tick() {
+        raf = requestAnimationFrame(tick);
+        const k = 0.09;
+        st.camPos.x = damp(st.camPos.x, st.tgtPos.x, k); st.camPos.y = damp(st.camPos.y, st.tgtPos.y, k); st.camPos.z = damp(st.camPos.z, st.tgtPos.z, k);
+        st.camTgt.x = damp(st.camTgt.x, st.tgtTgt.x, k); st.camTgt.y = damp(st.camTgt.y, st.tgtTgt.y, k); st.camTgt.z = damp(st.camTgt.z, st.tgtTgt.z, k);
+        st.roofY = damp(st.roofY, st.roofYT, k); st.frontY = damp(st.frontY, st.frontYT, k);
+        camera.position.copy(st.camPos); camera.lookAt(st.camTgt);
+        roofGroup.position.y = st.roofY;
+        roofMat.opacity = 1 - Math.min(0.85, st.roofY / 5.2);
+        wFront.position.y = (0.72 + WALL_H / 2) + st.frontY;
+        sidingMat.opacity = 1 - Math.min(0.88, Math.abs(st.frontY) / 3.4);
+        if (st.al && st.al.userData.pulse > 0) {
+          st.al.userData.pulse = Math.max(0, st.al.userData.pulse - 0.04);
+          const sc = st.al.userData.baseScale * (1 + 0.12 * st.al.userData.pulse);
+          st.al.scale.set(sc, sc, 1);
+        }
+        renderer.render(scene, camera);
+      }
+      tick();
+      setReady(true);
+    }).catch(function (e) {
+      console.error("House3D init failed:", e && e.message);
+      if (!disposed && onError) onError(e);
+    });
+
+    return function () {
+      disposed = true;
+      const st = apiRef.current;
+      if (raf) cancelAnimationFrame(raf);
+      if (st) {
+        window.removeEventListener("resize", st.onResize);
+        try { st.renderer.domElement.removeEventListener("click", st.onClick); } catch (e) {}
+        try { st.renderer.dispose(); } catch (e) {}
+        try { if (st.renderer.domElement && st.renderer.domElement.parentNode) st.renderer.domElement.parentNode.removeChild(st.renderer.domElement); } catch (e) {}
+      }
+      apiRef.current = null;
+    };
+  }, []);
+
+  // reflect React state -> the imperative scene
+  useEffect(function () { if (apiRef.current && apiRef.current.goLayer) apiRef.current.goLayer(layer); }, [layer]);
+  useEffect(function () { if (apiRef.current && apiRef.current.applyChecked) apiRef.current.applyChecked(checked); }, [checked]);
+
+  const ck = checked || {};
+  const selected = HOUSE3D_ZONES.filter(function (z) { return ck[z.trade]; });
+  const cur = HOUSE_LAYERS.find(function (l) { return l.key === layer; }) || HOUSE_LAYERS[0];
+  return (
+    <div className="card househero" style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}>
+        <img src={AL_NOTEPAD} alt="AL" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", flex: "0 0 auto" }} />
+        <div>
+          <div style={{ fontWeight: 700 }}>Build your project on the house</div>
+          <div className="hint">{cur.hint}{selected.length ? " · " + selected.length + " trade" + (selected.length === 1 ? "" : "s") + " selected" : ""}</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        {HOUSE_LAYERS.map(function (l) {
+          return <button key={l.key} className={"btn " + (layer === l.key ? "primary" : "ghost")} style={{ flex: 1, padding: "6px 4px" }} onClick={function () { setLayer(l.key); }}>{l.label}</button>;
+        })}
+      </div>
+      <div ref={mountRef} style={{ width: "100%", minHeight: 120, position: "relative" }}>
+        {!ready && <p className="hint" style={{ padding: 20, textAlign: "center" }}>Loading the 3D house…</p>}
+      </div>
+      {selected.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {selected.map(function (z) {
+            return <span key={z.trade} style={{ fontSize: 12, background: "#e7f6ec", color: "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "2px 9px" }}>{z.label} <span style={{ cursor: "pointer", fontWeight: 700 }} onClick={function () { onToggle(z.trade); }}>×</span></span>;
+          })}
+        </div>
+      )}
+      <p className="hint" style={{ marginTop: 8 }}>Tap a layer, then tap parts of the house to add those trades — selections sync with the checklist below{role === "homeowner" ? ", and you'll get a price range." : ", with full per-trade numbers."}</p>
+    </div>
+  );
+}
+
+// Wrapper: try the real-time 3D house; fall back to the SVG House2D if WebGL /
+// three.js can't load, or if the user opts for the simpler view.
+function InteractiveHouse(props) {
+  const [mode, setMode] = useState("3d");
+  if (mode === "3d") {
+    return (
+      <div>
+        <House3D checked={props.checked} onToggle={props.onToggle} role={props.role} onError={function () { setMode("2d"); }} />
+        <button className="btn ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={function () { setMode("2d"); }}>Switch to simple view</button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <House2D checked={props.checked} onToggle={props.onToggle} role={props.role} />
+      <button className="btn ghost" style={{ marginTop: 6, fontSize: 12 }} onClick={function () { setMode("3d"); }}>Switch to 3D house</button>
     </div>
   );
 }
