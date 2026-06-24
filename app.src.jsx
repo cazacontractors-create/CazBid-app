@@ -563,7 +563,7 @@ function computeLaborFromRateBook(items, rateBook, estDims, scope, desc) {
   if (dl.indexOf("complex") >= 0) mult = Math.min(1.5, mult + 0.1);
   if (mult > 1.5) mult = 1.5;
 
-  let hours = 0; let matched = false;
+  let hours = 0; let matched = false; let sqHours = 0; // sqHours = the per-square bulk (install + tear-off)
   // 1) PRIMARY INSTALL (per square) — pick the rate matching the system
   let instRate = null;
   if (/standing seam|lok|snap.?lock|mechanical lock/.test(ctx)) instRate = findRate(["standing seam"]);
@@ -573,12 +573,12 @@ function computeLaborFromRateBook(items, rateBook, estDims, scope, desc) {
   else if (/tpo/.test(ctx)) instRate = findRate(["tpo"]);
   else if (/epdm/.test(ctx)) instRate = findRate(["epdm"]);
   else if (/metal panel|exposed fastener|ag panel|steel panel/.test(ctx)) instRate = findRate(["steel panel", "ag panel"]);
-  if (instRate && squares > 0) { hours += squares * num(instRate.rate) * mult; matched = true; }
+  if (instRate && squares > 0) { const h = squares * num(instRate.rate) * mult; hours += h; sqHours += h; matched = true; }
 
   // 2) TEAR-OFF (per square, not multiplied by pitch difficulty)
   if (/tear|re-?roof|remove|layer/.test(ctx)) {
     const tr = findRate(["tear-off asphalt", "tear-off — shingles", "tear-off shingles", "tear-off"]);
-    if (tr && squares > 0) { hours += squares * num(tr.rate); matched = true; }
+    if (tr && squares > 0) { const h = squares * num(tr.rate); hours += h; sqHours += h; matched = true; }
   }
   // 3) PERIMETER / RIDGE / FLASHING metal by LF (not pitch-multiplied)
   const lfTasks = [
@@ -593,6 +593,11 @@ function computeLaborFromRateBook(items, rateBook, estDims, scope, desc) {
   });
 
   if (!matched || hours <= 0) return null;
+  // A sized (per-square) job where ONLY perimeter/flashing matched is INCOMPLETE —
+  // the big install + tear-off hours were dropped (the 36-MH-on-102-sq bug). Return
+  // null so the caller falls back to the AI total + size-scaled floor instead of
+  // trusting a partial that would underbid the labor.
+  if (squares > 0 && sqHours <= 0) return null;
   return { hours: Math.round(hours), mult: mult };
 }
 
@@ -1259,6 +1264,8 @@ function App() {
   const [whPbOpen, setWhPbOpen] = useState(false);
   const [whDims, setWhDims] = useState("");        // extracted measurements for the house flow
   const [whReportBusy, setWhReportBusy] = useState(false);
+  const [whPhotos, setWhPhotos] = useState([]);    // jobsite photos (Photo button)
+  const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -2100,6 +2107,11 @@ function App() {
     } catch (e) { flash("Report parse failed: " + errMsg(e) + ". You can still type dimensions below."); }
     setWhReportBusy(false);
   };
+  const onWhPhoto = async (file) => {
+    if (!file) return;
+    try { const u = await imageToJpeg(file, 1600); setWhPhotos((p) => [...p, u].slice(0, 6)); }
+    catch (e) { flash("Couldn't add that photo."); }
+  };
   // AL's next question = first unfilled REQUIRED input across the selected
   // deterministic trades (one at a time; skips anything already answered).
   const whNextQuestion = () => {
@@ -2229,24 +2241,44 @@ function App() {
       // Deterministic engine: trust its labor (computed from the trade's laborBasis) — do NOT override.
       let laborSrc = d.deterministic ? "engine" : (String(d.laborSource || "").toLowerCase() === "ratebook" ? "ratebook" : "estimate");
       if (!d.deterministic) {
-        // DETERMINISTIC labor: compute from the rate book in code so it never depends on the AI doing the lookup.
+        // Labor in code so it never depends on the AI doing the lookup. The rate
+        // book is trusted ONLY when it captured the per-square bulk; a partial
+        // match returns null (see computeLaborFromRateBook) so it can't drop hours.
         const calc = computeLaborFromRateBook(items, rateBook, estDims, estScope, estDesc);
         if (calc && calc.hours > 0) { laborHours = calc.hours; laborSrc = "ratebook"; }
-        // size-scaled safety floor: only if we still have no real number
+        // squares on the job (drives the size-scaled realistic floor)
         let sqGuess = 0;
         items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
         if (!sqGuess && estDims) { const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
-        const minHrsBySize = sqGuess > 0 ? Math.round(sqGuess * 2) : crewN * daysN * 8;
-        if (!calc && laborHours < minHrsBySize * 0.5) { laborHours = Math.max(laborHours, minHrsBySize); laborSrc = "estimate"; }
+        // Realistic minimum man-hours for a sized job. This RAISES an implausibly
+        // low total (dropped tear-off/install) and never lowers a legit one.
+        if (sqGuess > 0) {
+          let perSq = 2; // generic sized trade (siding, etc.)
+          if (isRoof) {
+            const dl3 = (estDims || "").toLowerCase();
+            const pm = dl3.match(/(\d{1,2})\/12/);
+            const pitch = pm ? parseInt(pm[1], 10) : 0;
+            let rmult = 1.0; if (pitch >= 10) rmult = 1.45; else if (pitch >= 8) rmult = 1.35; else if (pitch >= 6) rmult = 1.2;
+            if (dl3.indexOf("complex") >= 0 || sysStr.indexOf("complex") >= 0) rmult = Math.min(1.5, rmult + 0.1);
+            const tearoff = /tear|re-?roof|remove|layer/.test(sysStr);
+            perSq = 1.8 * rmult + (tearoff ? 1.0 : 0); // pitch-adjusted install + tear-off
+          }
+          const floor = Math.round(sqGuess * perSq);
+          if (laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
+        }
       }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
       if (laborRate <= 0) laborRate = 60;
+      // Man-hours and days-on-site MUST come from the same number — derive days
+      // from the final man-hours + crew so they can never diverge (the 36-MH-but-
+      // 13-days bug). If the AI's own day count is bigger, keep it (it implies more MH it knew about).
+      const daysFinal = Math.max(1, Math.round(laborHours / (Math.max(1, crewN) * 8)));
       setEstResult({
         title: String(d.title || "Estimate"), trade: String(d.trade || "general").toLowerCase(),
         items, primaryOptions, chosenTier: null,
         laborHours: laborHours, laborRate: laborRate, laborSource: laborSrc,
         equipment: Math.round(num(d.equipment) || 0), taxRate: num(d.taxRate) || 0.08,
-        crew: crewN, days: daysN, notes: String(d.notes || ""),
+        crew: crewN, days: daysFinal, notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded, manualKey: __manualKey,
       });
@@ -4494,15 +4526,17 @@ function App() {
             <button className={"btn " + (estMode === "house" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => { setEstMode("house"); loadWholeHouseSpecs(); }}>🏠 House selector</button>
             <button className={"btn " + (estMode === "categories" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => setEstMode("categories")}>📋 Categories</button>
           </div>
-          {/* 1 · MEASUREMENTS & PHOTOS (top) */}
+          {/* 1 · JOB CONTEXT (photos + extracted measurements; uploads live in the buttons below) */}
           <section className="card">
-            <div className="seclabel">1 · Measurements &amp; photos</div>
-            <p className="hint">Upload an EagleView, Polycam, floor plan, or photos — AL reads the measurements and uses them to size the trades you pick.</p>
-            <label className="estf"><span>📐 Report or photo (PDF / image)</span>
-              <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} onChange={(e) => { handleWhReport(e.target.files && e.target.files[0]); e.target.value = ""; }} />
-            </label>
-            {whReportBusy && <p className="hint">Reading the file…</p>}
-            {whDims && <p className="ai-note">📐 {whDims} <button className="btn ghost" style={{ padding: "0 6px", marginLeft: 6 }} onClick={() => setWhDims("")}>✕</button></p>}
+            <div className="seclabel">Job context</div>
+            {whPhotos.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                {whPhotos.map((p, i) => (<div className="thumb" key={i}><img src={p} alt="" /><button onClick={() => setWhPhotos((a) => a.filter((_, idx) => idx !== i))}>×</button></div>))}
+              </div>
+            )}
+            {whReportBusy && <p className="hint">Reading the report…</p>}
+            {whDims && <p className="ai-note" style={{ marginTop: 6 }}>📐 {whDims} <button className="btn ghost" style={{ padding: "0 6px", marginLeft: 6 }} onClick={() => setWhDims("")}>✕</button></p>}
+            {!whPhotos.length && !whDims && !whReportBusy && <p className="hint">Add jobsite photos or a measurement report with the buttons below — AL uses them to size the job.</p>}
           </section>
 
           {/* 2 · AL CONVERSATION ZONE */}
@@ -4536,7 +4570,23 @@ function App() {
             })()}
           </section>
 
-          {/* 3 · HOUSE IMAGE + TOGGLE (primary selector) */}
+          {/* 3 · CONTRACTOR CONTEXT TOOLS (above the house) */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Photo
+              <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; onWhPhoto(f); }} />
+            </label>
+            <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center", opacity: whReportBusy ? 0.6 : 1 }}>📄 Report
+              <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; handleWhReport(f); }} />
+            </label>
+            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setWhMeasuredOpen((o) => !o)}>📐 Measured</button>
+          </div>
+          {whMeasuredOpen && (
+            <section className="card">
+              <p className="hint">Order or upload measurements: <a href="https://www.eagleview.com" target="_blank" rel="noopener noreferrer">EagleView</a> / <a href="https://hover.to" target="_blank" rel="noopener noreferrer">Hover</a> (roof &amp; exterior) · <a href="https://poly.cam" target="_blank" rel="noopener noreferrer">Polycam</a> (interior). Then tap 📄 Report to upload it and AL will read the numbers.</p>
+            </section>
+          )}
+
+          {/* 4 · HOUSE IMAGE + TOGGLE (primary selector) */}
           {whSpecs
             ? <InteractiveHouse scope={houseScope} onSelect={houseSelect} onDeselect={houseDeselect} priceBook={enginePB} role={me.role} />
             : <section className="card"><p className="hint">Loading the house…</p></section>}
