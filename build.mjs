@@ -10,7 +10,7 @@
      4. Writes everything into dist/index.html using index.template.html.
    No in-browser Babel, nothing fetched at runtime.
    ========================================================================== */
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from "fs";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -67,5 +67,13 @@ const html = template
 
 mkdirSync(r("dist"), { recursive: true });
 writeFileSync(r("dist/index.html"), html);
+
+// --- 5. copy static assets (Stage 5 house renders, etc.) into dist ----------
+// publish dir is "dist", so anything served at runtime (e.g. /assets/house-*.jpg)
+// must live under dist/. The image-based house references these by URL.
+if (existsSync(r("assets"))) {
+  cpSync(r("assets"), r("dist/assets"), { recursive: true });
+  console.log("Copied assets/ -> dist/assets/");
+}
 
 console.log(`Built dist/index.html (${(html.length / 1024).toFixed(0)} KB) — React ${reactVer}, ${(compiled.match(/React\.createElement/g) || []).length} elements`);

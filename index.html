@@ -3264,564 +3264,293 @@ function House2D({
   }, "The house is just a friendlier way to pick trades — your selections sync with the checklist below", role === "homeowner" ? ", and you'll get a price range." : ", with full per-trade numbers."));
 }
 
-// ---- Three.js lazy loader (UMD global, fetched only when the 3D house opens) --
-// Pinned to r149: last line that still ships build/three.min.js (window.THREE)
-// AND the examples/js UMD loaders we'll need for the real GLB in a later pass.
-let _threePromise = null;
-function loadThree() {
-  if (typeof window !== "undefined" && window.THREE) return Promise.resolve(window.THREE);
-  if (_threePromise) return _threePromise;
-  _threePromise = new Promise(function (resolve, reject) {
-    const s = document.createElement("script");
-    s.src = "https://unpkg.com/three@0.149.0/build/three.min.js";
-    s.async = true;
-    s.onload = function () {
-      window.THREE ? resolve(window.THREE) : reject(new Error("three loaded but window.THREE missing"));
-    };
-    s.onerror = function () {
-      _threePromise = null;
-      reject(new Error("failed to load three.js"));
-    };
-    document.head.appendChild(s);
-  });
-  return _threePromise;
-}
-
-// Zone -> trade map for the 3D greybox (same deterministic trades as House2D, so
-// taps drive the SAME whChecked state). Each entry: which layer it lives in.
-const HOUSE3D_ZONES = [{
-  trade: "framing",
-  layer: "exterior",
-  label: "Roof & framing"
+// ============================================================================
+// STAGE 5 (image-based) — three pre-rendered photoreal states (Exterior /
+// Interior / Systems) with crossfade, invisible hover/click hotspots, a material
+// sidebar from the contractor's own price book, and persistent scope badges.
+// ISOLATION: this only EMITS a scope selection (trade -> material) and mirrors
+// deterministic trades into whChecked; it never touches the estimating engine.
+// Images are served as static files from /assets (copied into dist by build.mjs).
+// ============================================================================
+const HOUSE_IMG = {
+  exterior: "/assets/house-exterior.jpg",
+  interior: "/assets/house-interior.jpg",
+  systems: "/assets/house-systems.jpg"
+};
+// paddingTop % = image height/width, so the box matches each render's aspect and
+// object-fit:cover never crops (keeps hotspot %-coords aligned to the image).
+const HOUSE_STATES = [{
+  key: "exterior",
+  label: "Outside",
+  aspect: 33.07,
+  hint: "Tap the roof, siding, windows, doors, or garage."
 }, {
-  trade: "siding",
-  layer: "exterior",
-  label: "Siding"
+  key: "interior",
+  label: "Inside",
+  aspect: 66.40,
+  hint: "Roof's off — tap rooms, flooring, drywall, or trim."
 }, {
-  trade: "concrete",
-  layer: "exterior",
-  label: "Foundation"
-}, {
-  trade: "drywall",
-  layer: "interior",
-  label: "Drywall & ceilings"
-}, {
-  trade: "insulation",
-  layer: "interior",
-  label: "Insulation"
-}, {
-  trade: "trim",
-  layer: "interior",
-  label: "Trim & doors"
-}, {
-  trade: "electrical",
-  layer: "systems",
-  label: "Electrical"
-}, {
-  trade: "plumbing",
-  layer: "systems",
-  label: "Plumbing"
-}, {
-  trade: "hvac",
-  layer: "systems",
-  label: "Heating & cooling"
+  key: "systems",
+  label: "Systems",
+  aspect: 56.28,
+  hint: "Walls cut away — tap HVAC, electrical, plumbing, or insulation."
 }];
-
-// STAGE 5 v2 — real-time greybox cutaway in raw Three.js. Pass 1 (camera peel) +
-// Pass 2 (raycast hotspots -> trades). A VISUAL SKIN: a zone click just toggles
-// that trade in the same whChecked map. Greybox geometry now; a separable photo-
-// real GLB swaps in later. Correct render pipeline (ACES + sRGB + sun/soft
-// shadows) is set from the start so it doesn't read flat. Falls back to House2D
-// (via onError) if WebGL / three.js is unavailable.
-function House3D({
-  checked,
-  onToggle,
+// Invisible hotspots, positioned as % of the image box {x,y,w,h}. Rough starting
+// placements over each render — refine on-device. trade = scope key.
+const HOUSE_HOTSPOTS = [
+// EXTERIOR
+{
+  state: "exterior",
+  trade: "roofing",
+  label: "Roofing",
+  x: 24,
+  y: 20,
+  w: 52,
+  h: 22
+}, {
+  state: "exterior",
+  trade: "siding",
+  label: "Siding",
+  x: 20,
+  y: 42,
+  w: 22,
+  h: 24
+}, {
+  state: "exterior",
+  trade: "windows",
+  label: "Windows",
+  x: 33,
+  y: 50,
+  w: 14,
+  h: 14
+}, {
+  state: "exterior",
+  trade: "doors",
+  label: "Doors",
+  x: 45,
+  y: 50,
+  w: 6,
+  h: 22
+}, {
+  state: "exterior",
+  trade: "garage",
+  label: "Garage Doors",
+  x: 62,
+  y: 46,
+  w: 16,
+  h: 22
+}, {
+  state: "exterior",
+  trade: "concrete",
+  label: "Concrete / Foundation",
+  x: 28,
+  y: 72,
+  w: 46,
+  h: 10
+}, {
+  state: "exterior",
+  trade: "deck",
+  label: "Deck & Patio",
+  x: 44,
+  y: 74,
+  w: 14,
+  h: 9
+}, {
+  state: "exterior",
+  trade: "landscaping",
+  label: "Landscaping",
+  x: 4,
+  y: 70,
+  w: 18,
+  h: 24
+},
+// INTERIOR (top-down dollhouse)
+{
+  state: "interior",
+  trade: "kitchen",
+  label: "Kitchen Remodel",
+  x: 10,
+  y: 12,
+  w: 28,
+  h: 26
+}, {
+  state: "interior",
+  trade: "flooring",
+  label: "Flooring",
+  x: 10,
+  y: 50,
+  w: 28,
+  h: 28
+}, {
+  state: "interior",
+  trade: "bathroom",
+  label: "Bathroom Remodel",
+  x: 42,
+  y: 30,
+  w: 16,
+  h: 18
+}, {
+  state: "interior",
+  trade: "drywall",
+  label: "Drywall",
+  x: 40,
+  y: 8,
+  w: 18,
+  h: 18
+}, {
+  state: "interior",
+  trade: "paint",
+  label: "Paint",
+  x: 60,
+  y: 10,
+  w: 22,
+  h: 16
+}, {
+  state: "interior",
+  trade: "trim",
+  label: "Trim & Molding",
+  x: 12,
+  y: 40,
+  w: 24,
+  h: 7
+}, {
+  state: "interior",
+  trade: "lighting",
+  label: "Lighting",
+  x: 30,
+  y: 22,
+  w: 10,
+  h: 8
+}, {
+  state: "interior",
+  trade: "accessories",
+  label: "Accessories",
+  x: 60,
+  y: 30,
+  w: 14,
+  h: 12
+},
+// SYSTEMS (cutaway)
+{
+  state: "systems",
+  trade: "ventilation",
+  label: "Ventilation",
+  x: 36,
+  y: 18,
+  w: 18,
+  h: 12
+}, {
+  state: "systems",
+  trade: "hvac",
+  label: "HVAC",
+  x: 30,
+  y: 30,
+  w: 26,
+  h: 16
+}, {
+  state: "systems",
+  trade: "electrical",
+  label: "Electrical",
+  x: 20,
+  y: 40,
+  w: 14,
+  h: 20
+}, {
+  state: "systems",
+  trade: "insulation",
+  label: "Insulation",
+  x: 14,
+  y: 36,
+  w: 9,
+  h: 26
+}, {
+  state: "systems",
+  trade: "plumbing",
+  label: "Plumbing",
+  x: 26,
+  y: 60,
+  w: 32,
+  h: 14
+}];
+// Map a house trade to a price-book trade key (only the 9 deterministic engine
+// trades have one — others fall back to suggested materials).
+const PB_TRADE_KEY = {
+  siding: "siding",
+  concrete: "concrete",
+  drywall: "drywall",
+  trim: "trim",
+  insulation: "insulation",
+  hvac: "hvac",
+  electrical: "electrical",
+  plumbing: "plumbing"
+};
+// Starter material lists (brand + product), most-common first, NO 3-tab shingles.
+const MATERIAL_SUGGESTIONS = {
+  roofing: ["GAF Timberline HDZ (architectural)", "Owens Corning Duration", "CertainTeed Landmark", "Standing-seam metal", "Firestone TPO (flat)"],
+  siding: ["James Hardie lap (fiber-cement)", "CertainTeed vinyl lap", "LP SmartSide", "Cedar lap", "Board & batten"],
+  windows: ["Andersen 400 Series", "Pella 250 Series", "Marvin Elevate", "Vinyl double-hung"],
+  doors: ["Therma-Tru fiberglass", "Masonite steel", "Solid-wood entry"],
+  garage: ["Clopay insulated steel", "Wayne Dalton", "Carriage-style"],
+  concrete: ["4\" slab", "Poured foundation", "Stamped concrete", "Brick veneer"],
+  deck: ["Trex composite", "PT pine", "Cedar", "Paver patio"],
+  landscaping: ["Sod", "Mulch beds", "Shrub package", "Hardscape"],
+  drywall: ["1/2\" standard", "5/8\" Type X", "Moisture-resistant"],
+  flooring: ["Luxury vinyl plank", "Engineered hardwood", "Porcelain tile", "Carpet"],
+  kitchen: ["Stock cabinets", "Semi-custom cabinets", "Quartz counters", "Granite counters"],
+  bathroom: ["Tile shower", "Tub/shower combo", "Quartz vanity top"],
+  trim: ["Painted MDF", "Primed pine", "Hardwood", "Crown package"],
+  paint: ["Sherwin-Williams ProClassic", "Benjamin Moore Regal", "Builder flat"],
+  lighting: ["Recessed LED", "Pendant package", "Ceiling fans"],
+  accessories: ["Built-in shelving", "Closet systems", "Mantel"],
+  hvac: ["Carrier furnace + AC", "Trane heat pump", "Mini-split"],
+  electrical: ["200A panel", "Devices & fixtures", "EV charger circuit"],
+  plumbing: ["PEX supply", "Fixture package", "Water heater"],
+  ventilation: ["Bath exhaust fans", "Range hood", "HRV / ERV"],
+  insulation: ["R-13 batt", "R-21 wall", "R-49 blown attic", "Spray foam"]
+};
+const HOUSE_CSS = "@keyframes alh_spring{0%{transform:translate(-50%,-50%) scale(.5);opacity:0}60%{transform:translate(-50%,-50%) scale(1.08)}100%{transform:translate(-50%,-50%) scale(1);opacity:1}}" + "@keyframes alh_pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.7)}70%{box-shadow:0 0 0 9px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}";
+function ImageHouse({
+  scope,
+  onSelect,
+  onDeselect,
+  priceBook,
   role,
-  onError
+  onImgError
 }) {
-  const mountRef = useRef(null);
-  const apiRef = useRef(null);
-  const [layer, setLayer] = useState("exterior");
-  const [ready, setReady] = useState(false);
-  const checkedRef = useRef(checked);
-  const toggleRef = useRef(onToggle);
-  checkedRef.current = checked;
-  toggleRef.current = onToggle;
-  useEffect(function () {
-    let disposed = false;
-    let raf = 0;
-    loadThree().then(function (THREE) {
-      if (disposed || !mountRef.current) return;
-      const mount = mountRef.current;
-      const W = mount.clientWidth || 360,
-        H = Math.round((mount.clientWidth || 360) * 0.62);
-      const renderer = new THREE.WebGLRenderer({
-        antialias: true,
-        alpha: false
-      });
-      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-      renderer.setSize(W, H);
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      renderer.outputEncoding = THREE.sRGBEncoding;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.05;
-      mount.appendChild(renderer.domElement);
-      renderer.domElement.style.display = "block";
-      renderer.domElement.style.width = "100%";
-      renderer.domElement.style.borderRadius = "10px";
-      renderer.domElement.style.cursor = "pointer";
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xcddcea);
-      const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 200);
-      camera.position.set(10, 5, 11);
-
-      // lights: sun + soft shadow, hemisphere fill, low ambient
-      const sun = new THREE.DirectionalLight(0xfff4e6, 2.4);
-      sun.position.set(9, 15, 7);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
-      sun.shadow.camera.near = 1;
-      sun.shadow.camera.far = 60;
-      sun.shadow.camera.left = -14;
-      sun.shadow.camera.right = 14;
-      sun.shadow.camera.top = 14;
-      sun.shadow.camera.bottom = -14;
-      sun.shadow.bias = -0.0004;
-      scene.add(sun);
-      scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x6b5a45, 0.7));
-      scene.add(new THREE.AmbientLight(0xffffff, 0.18));
-
-      // ground
-      const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({
-        color: 0x9bb18a,
-        roughness: 1
-      }));
-      ground.rotation.x = -Math.PI / 2;
-      ground.receiveShadow = true;
-      scene.add(ground);
-
-      // ---- colors ----
-      const COL_OFF = {
-        framing: 0xb08968,
-        siding: 0xc9d3df,
-        concrete: 0x9aa3ad,
-        drywall: 0xe6e2da,
-        insulation: 0xe2a6bd,
-        trim: 0xcdb89a,
-        electrical: 0xe6b34d,
-        plumbing: 0x5aa0d6,
-        hvac: 0xbcc4cf
-      };
-      const COL_SEL = 0x14a04a;
-      const zones = []; // {trade, layer, mesh, baseColor, label}
-      const labels = []; // sprites
-
-      function mat(trade) {
-        return new THREE.MeshStandardMaterial({
-          color: COL_OFF[trade],
-          roughness: 0.85,
-          metalness: trade === "hvac" ? 0.2 : 0.0
-        });
-      }
-      function addZone(mesh, z) {
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.userData = {
-          trade: z.trade,
-          layer: z.layer
-        };
-        zones.push({
-          trade: z.trade,
-          layer: z.layer,
-          mesh: mesh
-        });
-      }
-      function zdef(trade) {
-        return HOUSE3D_ZONES.find(function (z) {
-          return z.trade === trade;
-        });
-      }
-
-      // label sprite
-      function makeLabel(text) {
-        const c = document.createElement("canvas");
-        c.width = 256;
-        c.height = 64;
-        const g = c.getContext("2d");
-        g.fillStyle = "rgba(17,24,39,0.82)";
-        g.strokeStyle = "rgba(255,255,255,0.9)";
-        const rw = 248,
-          rh = 40,
-          rx = 4,
-          ry = 12,
-          rr = 10;
-        g.beginPath();
-        g.moveTo(rx + rr, ry);
-        g.arcTo(rx + rw, ry, rx + rw, ry + rh, rr);
-        g.arcTo(rx + rw, ry + rh, rx, ry + rh, rr);
-        g.arcTo(rx, ry + rh, rx, ry, rr);
-        g.arcTo(rx, ry, rx + rw, ry, rr);
-        g.closePath();
-        g.fill();
-        g.font = "bold 22px Inter, sans-serif";
-        g.fillStyle = "#fff";
-        g.textAlign = "center";
-        g.textBaseline = "middle";
-        g.fillText(text, 128, 33);
-        const tex = new THREE.CanvasTexture(c);
-        tex.encoding = THREE.sRGBEncoding;
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: tex,
-          depthTest: false,
-          transparent: true
-        }));
-        sp.scale.set(3.2, 0.8, 1);
-        return sp;
-      }
-      function addLabel(trade, pos) {
-        const z = zdef(trade);
-        const sp = makeLabel(z.label);
-        sp.position.copy(pos);
-        sp.userData = {
-          layer: z.layer
-        };
-        scene.add(sp);
-        labels.push(sp);
-        return sp;
-      }
-
-      // ===== GREYBOX HOUSE =====
-      const HW = 4,
-        HD = 3,
-        WALL_H = 3,
-        WALL_T = 0.18; // half-width/depth, wall height/thickness
-
-      // foundation (concrete) — exterior
-      const found = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 + 0.5, 0.6, HD * 2 + 0.5), mat("concrete"));
-      found.position.set(0, 0.3, 0);
-      addZone(found, zdef("concrete"));
-      scene.add(found);
-      addLabel("concrete", new THREE.Vector3(0, 0.7, HD + 0.6));
-
-      // interior floor (drywall proxy / finishes) — interior, sits on foundation
-      const floor = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.1, 0.12, HD * 2 - 0.1), mat("drywall"));
-      floor.position.set(0, 0.66, 0);
-      addZone(floor, zdef("drywall"));
-      scene.add(floor);
-      addLabel("drywall", new THREE.Vector3(0, 1.1, 0));
-
-      // trim — baseboard ring (thin box frame, here a flat slab just inside walls) interior
-      const trim = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.3, 0.18, HD * 2 - 0.3), mat("trim"));
-      trim.position.set(0, 0.78, 0);
-      addZone(trim, zdef("trim"));
-      scene.add(trim);
-      addLabel("trim", new THREE.Vector3(HW - 1.2, 1.0, HD - 0.9));
-
-      // exterior walls (siding) — a group so the FRONT wall can drop for Systems
-      const wallsGroup = new THREE.Group();
-      scene.add(wallsGroup);
-      const sidingMat = mat("siding");
-      function wallBox(w, d, x, z) {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_H, d), sidingMat);
-        m.position.set(x, 0.72 + WALL_H / 2, z);
-        m.castShadow = true;
-        m.receiveShadow = true;
-        m.userData = {
-          trade: "siding",
-          layer: "exterior"
-        };
-        return m;
-      }
-      const wBack = wallBox(HW * 2, WALL_T, 0, -HD);
-      wallsGroup.add(wBack);
-      zones.push({
-        trade: "siding",
-        layer: "exterior",
-        mesh: wBack
-      });
-      const wLeft = wallBox(WALL_T, HD * 2, -HW, 0);
-      wallsGroup.add(wLeft);
-      zones.push({
-        trade: "siding",
-        layer: "exterior",
-        mesh: wLeft
-      });
-      const wRight = wallBox(WALL_T, HD * 2, HW, 0);
-      wallsGroup.add(wRight);
-      zones.push({
-        trade: "siding",
-        layer: "exterior",
-        mesh: wRight
-      });
-      const wFront = wallBox(HW * 2, WALL_T, 0, HD);
-      wallsGroup.add(wFront);
-      zones.push({
-        trade: "siding",
-        layer: "exterior",
-        mesh: wFront
-      });
-      addLabel("siding", new THREE.Vector3(-HW - 0.7, 2.2, 0));
-
-      // MEP (systems) — boxes inside, revealed when the front wall drops
-      const elec = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.3), mat("electrical"));
-      elec.position.set(-HW + 0.5, 1.6, -HD + 0.6);
-      addZone(elec, zdef("electrical"));
-      scene.add(elec);
-      addLabel("electrical", new THREE.Vector3(-HW + 0.6, 2.4, -HD + 0.6));
-      const plumb = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.2, 12), mat("plumbing"));
-      plumb.position.set(HW - 0.6, 1.7, -HD + 0.6);
-      addZone(plumb, zdef("plumbing"));
-      scene.add(plumb);
-      addLabel("plumbing", new THREE.Vector3(HW - 0.6, 2.6, -HD + 0.6));
-      const hvac = new THREE.Mesh(new THREE.BoxGeometry(HW, 0.45, 0.5), mat("hvac"));
-      hvac.position.set(0, 2.5, -HD + 0.7);
-      addZone(hvac, zdef("hvac"));
-      scene.add(hvac);
-      addLabel("hvac", new THREE.Vector3(0, 3.0, -HD + 0.7));
-
-      // roof (framing) — gable prism via extruded triangle, in a group so it peels
-      const roofGroup = new THREE.Group();
-      scene.add(roofGroup);
-      const tri = new THREE.Shape();
-      tri.moveTo(-HW - 0.3, 0);
-      tri.lineTo(HW + 0.3, 0);
-      tri.lineTo(0, 2.4);
-      tri.lineTo(-HW - 0.3, 0);
-      const roofGeo = new THREE.ExtrudeGeometry(tri, {
-        depth: HD * 2 + 0.6,
-        bevelEnabled: false
-      });
-      roofGeo.translate(0, 0, -(HD + 0.3));
-      const roofMat = mat("framing");
-      const roof = new THREE.Mesh(roofGeo, roofMat);
-      roof.position.set(0, 0.72 + WALL_H, 0);
-      roof.castShadow = true;
-      roof.receiveShadow = true;
-      roof.userData = {
-        trade: "framing",
-        layer: "exterior"
-      };
-      roofGroup.add(roof);
-      zones.push({
-        trade: "framing",
-        layer: "exterior",
-        mesh: roof
-      });
-      addLabel("framing", new THREE.Vector3(0, 0.72 + WALL_H + 2.9, 0));
-
-      // insulation (interior) — batt slab tucked under the roof, revealed when roof lifts
-      const insul = new THREE.Mesh(new THREE.BoxGeometry(HW * 2 - 0.4, 0.25, HD * 2 - 0.4), mat("insulation"));
-      insul.position.set(0, 0.72 + WALL_H + 0.2, 0);
-      addZone(insul, zdef("insulation"));
-      scene.add(insul);
-      addLabel("insulation", new THREE.Vector3(0, 0.72 + WALL_H + 0.6, 0));
-
-      // AL avatar — billboard sprite beside the house
-      let al = null;
-      try {
-        const tl = new THREE.TextureLoader();
-        tl.load(AL_NOTEPAD, function (tex) {
-          tex.encoding = THREE.sRGBEncoding;
-          al = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: tex,
-            transparent: true
-          }));
-          al.scale.set(2.6, 2.6, 1);
-          al.position.set(-HW - 3, 1.6, HD + 1.5);
-          al.userData = {
-            baseScale: 2.6,
-            pulse: 0
-          };
-          scene.add(al);
-          st.al = al;
-          st.dirty = true;
-        });
-      } catch (e) {/* AL is decoration; ignore */}
-
-      // ---- camera stations + layer targets ----
-      const STATIONS = {
-        exterior: {
-          pos: new THREE.Vector3(10, 5, 11),
-          tgt: new THREE.Vector3(0, 1.7, 0)
-        },
-        interior: {
-          pos: new THREE.Vector3(0.4, 15, 1.2),
-          tgt: new THREE.Vector3(0, 0.8, 0)
-        },
-        systems: {
-          pos: new THREE.Vector3(11, 7.5, 10),
-          tgt: new THREE.Vector3(0, 1.4, 0)
-        }
-      };
-      const st = {
-        THREE: THREE,
-        renderer: renderer,
-        scene: scene,
-        camera: camera,
-        mount: mount,
-        zones: zones,
-        labels: labels,
-        roofGroup: roofGroup,
-        wallsGroup: wallsGroup,
-        wFront: wFront,
-        layer: "exterior",
-        al: al,
-        dirty: true,
-        camPos: camera.position.clone(),
-        camTgt: STATIONS.exterior.tgt.clone(),
-        tgtPos: STATIONS.exterior.pos.clone(),
-        tgtTgt: STATIONS.exterior.tgt.clone(),
-        roofY: 0,
-        roofYT: 0,
-        frontY: 0,
-        frontYT: 0,
-        raycaster: new THREE.Raycaster()
-      };
-      camera.position.copy(st.camPos);
-      camera.lookAt(st.camTgt);
-      apiRef.current = st;
-
-      // selection colors
-      function applyChecked(ck) {
-        ck = ck || {};
-        zones.forEach(function (z) {
-          const on = !!ck[z.trade];
-          z.mesh.material.color.setHex(on ? COL_SEL : COL_OFF[z.trade]);
-          z.mesh.material.emissive && z.mesh.material.emissive.setHex(on ? 0x0a5a28 : 0x000000);
-        });
-        st.dirty = true;
-      }
-      st.applyChecked = applyChecked;
-      applyChecked(checkedRef.current);
-
-      // layer transitions: set camera + peel targets, label visibility, clickable set
-      function goLayer(L) {
-        st.layer = L;
-        const s = STATIONS[L] || STATIONS.exterior;
-        st.tgtPos.copy(s.pos);
-        st.tgtTgt.copy(s.tgt);
-        st.roofYT = L === "exterior" ? 0 : 4.5; // roof lifts when peeled
-        st.frontYT = L === "systems" ? -3.2 : 0; // front wall drops in Systems
-        roofMat.transparent = true;
-        sidingMat.transparent = true;
-        labels.forEach(function (sp) {
-          sp.visible = sp.userData.layer === L;
-        });
-        st.dirty = true;
-      }
-      st.goLayer = goLayer;
-      goLayer("exterior");
-
-      // ---- interaction: raycast click -> toggle trade (active layer only) ----
-      function onClick(ev) {
-        const rect = renderer.domElement.getBoundingClientRect();
-        const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
-        const py = (ev.touches ? ev.touches[0].clientY : ev.clientY) - rect.top;
-        const ndc = new THREE.Vector2(px / rect.width * 2 - 1, -(py / rect.height) * 2 + 1);
-        st.raycaster.setFromCamera(ndc, camera);
-        const active = zones.filter(function (z) {
-          return z.layer === st.layer;
-        }).map(function (z) {
-          return z.mesh;
-        });
-        const hits = st.raycaster.intersectObjects(active, false);
-        if (hits.length) {
-          const trade = hits[0].object.userData.trade;
-          if (st.al) {
-            st.al.userData.pulse = 1;
-          }
-          toggleRef.current && toggleRef.current(trade);
-        }
-      }
-      renderer.domElement.addEventListener("click", onClick);
-      function onResize() {
-        if (!mount.clientWidth) return;
-        const w = mount.clientWidth,
-          h = Math.round(w * 0.62);
-        renderer.setSize(w, h);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-        st.dirty = true;
-      }
-      window.addEventListener("resize", onResize);
-      st.onResize = onResize;
-      st.onClick = onClick;
-
-      // ---- render loop with exponential-damped easing ----
-      const damp = function (cur, tgt, k) {
-        return cur + (tgt - cur) * k;
-      };
-      function tick() {
-        raf = requestAnimationFrame(tick);
-        const k = 0.09;
-        st.camPos.x = damp(st.camPos.x, st.tgtPos.x, k);
-        st.camPos.y = damp(st.camPos.y, st.tgtPos.y, k);
-        st.camPos.z = damp(st.camPos.z, st.tgtPos.z, k);
-        st.camTgt.x = damp(st.camTgt.x, st.tgtTgt.x, k);
-        st.camTgt.y = damp(st.camTgt.y, st.tgtTgt.y, k);
-        st.camTgt.z = damp(st.camTgt.z, st.tgtTgt.z, k);
-        st.roofY = damp(st.roofY, st.roofYT, k);
-        st.frontY = damp(st.frontY, st.frontYT, k);
-        camera.position.copy(st.camPos);
-        camera.lookAt(st.camTgt);
-        roofGroup.position.y = st.roofY;
-        roofMat.opacity = 1 - Math.min(0.85, st.roofY / 5.2);
-        wFront.position.y = 0.72 + WALL_H / 2 + st.frontY;
-        sidingMat.opacity = 1 - Math.min(0.88, Math.abs(st.frontY) / 3.4);
-        if (st.al && st.al.userData.pulse > 0) {
-          st.al.userData.pulse = Math.max(0, st.al.userData.pulse - 0.04);
-          const sc = st.al.userData.baseScale * (1 + 0.12 * st.al.userData.pulse);
-          st.al.scale.set(sc, sc, 1);
-        }
-        renderer.render(scene, camera);
-      }
-      tick();
-      setReady(true);
-    }).catch(function (e) {
-      console.error("House3D init failed:", e && e.message);
-      if (!disposed && onError) onError(e);
-    });
-    return function () {
-      disposed = true;
-      const st = apiRef.current;
-      if (raf) cancelAnimationFrame(raf);
-      if (st) {
-        window.removeEventListener("resize", st.onResize);
-        try {
-          st.renderer.domElement.removeEventListener("click", st.onClick);
-        } catch (e) {}
-        try {
-          st.renderer.dispose();
-        } catch (e) {}
-        try {
-          if (st.renderer.domElement && st.renderer.domElement.parentNode) st.renderer.domElement.parentNode.removeChild(st.renderer.domElement);
-        } catch (e) {}
-      }
-      apiRef.current = null;
+  const [state, setState] = useState("exterior");
+  const [hover, setHover] = useState(null); // hovered hotspot trade
+  const [sidebar, setSidebar] = useState(null); // open trade key
+  const cur = HOUSE_STATES.find(s => s.key === state) || HOUSE_STATES[0];
+  const spots = HOUSE_HOTSPOTS.filter(h => h.state === state);
+  const sc = scope || {};
+  const selected = HOUSE_HOTSPOTS.filter(h => sc[h.trade]);
+  const hoverLabel = hover ? (HOUSE_HOTSPOTS.find(h => h.trade === hover) || {}).label : "";
+  const sidebarMaterials = t => {
+    const pbKey = PB_TRADE_KEY[t];
+    const own = pbKey ? (priceBook || []).filter(e => e && String(e.trade) === pbKey && String(e.material || "").trim() && !/3-?tab/i.test(e.material)).map(e => String(e.material).trim()) : [];
+    const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
+    const sugg = (MATERIAL_SUGGESTIONS[t] || []).filter(m => !ownUniq.includes(m) && !/3-?tab/i.test(m));
+    return {
+      own: ownUniq,
+      sugg: sugg
     };
-  }, []);
-
-  // reflect React state -> the imperative scene
-  useEffect(function () {
-    if (apiRef.current && apiRef.current.goLayer) apiRef.current.goLayer(layer);
-  }, [layer]);
-  useEffect(function () {
-    if (apiRef.current && apiRef.current.applyChecked) apiRef.current.applyChecked(checked);
-  }, [checked]);
-  const ck = checked || {};
-  const selected = HOUSE3D_ZONES.filter(function (z) {
-    return ck[z.trade];
-  });
-  const cur = HOUSE_LAYERS.find(function (l) {
-    return l.key === layer;
-  }) || HOUSE_LAYERS[0];
+  };
+  const pick = (t, material) => {
+    onSelect(t, material);
+    setSidebar(null);
+  };
+  const sbTrade = sidebar;
+  const sbDef = sbTrade ? HOUSE_HOTSPOTS.find(h => h.trade === sbTrade) || {
+    label: sbTrade
+  } : null;
+  const sbMats = sbTrade ? sidebarMaterials(sbTrade) : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "card househero",
     style: {
-      marginTop: 10
+      marginTop: 10,
+      overflow: "hidden"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("style", null, HOUSE_CSS), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -3844,97 +3573,259 @@ function House3D({
     }
   }, "Build your project on the house"), /*#__PURE__*/React.createElement("div", {
     className: "hint"
-  }, cur.hint, selected.length ? " · " + selected.length + " trade" + (selected.length === 1 ? "" : "s") + " selected" : ""))), /*#__PURE__*/React.createElement("div", {
+  }, hoverLabel ? "👉 " + hoverLabel : cur.hint, selected.length ? " · " + selected.length + " selected" : ""))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
-      marginBottom: 6
+      marginBottom: 8
     }
-  }, HOUSE_LAYERS.map(function (l) {
-    return /*#__PURE__*/React.createElement("button", {
-      key: l.key,
-      className: "btn " + (layer === l.key ? "primary" : "ghost"),
-      style: {
-        flex: 1,
-        padding: "6px 4px"
-      },
-      onClick: function () {
-        setLayer(l.key);
-      }
-    }, l.label);
-  })), /*#__PURE__*/React.createElement("div", {
-    ref: mountRef,
+  }, HOUSE_STATES.map(s => /*#__PURE__*/React.createElement("button", {
+    key: s.key,
+    className: "btn " + (state === s.key ? "primary" : "ghost"),
     style: {
+      flex: 1,
+      padding: "6px 4px"
+    },
+    onClick: () => {
+      setState(s.key);
+      setSidebar(null);
+      setHover(null);
+    }
+  }, s.label))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
       width: "100%",
-      minHeight: 120,
-      position: "relative"
+      height: 0,
+      paddingTop: cur.aspect + "%",
+      transition: "padding-top .45s ease",
+      borderRadius: 10,
+      overflow: "hidden",
+      background: "#dfe6ee"
     }
-  }, !ready && /*#__PURE__*/React.createElement("p", {
-    className: "hint",
+  }, HOUSE_STATES.map(s => /*#__PURE__*/React.createElement("img", {
+    key: s.key,
+    src: HOUSE_IMG[s.key],
+    alt: s.label + " view",
+    onError: s.key === "exterior" ? onImgError : undefined,
     style: {
-      padding: 20,
-      textAlign: "center"
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+      opacity: state === s.key ? 1 : 0,
+      transform: state === s.key ? "scale(1)" : "scale(1.05)",
+      transition: "opacity .45s ease, transform .6s ease",
+      pointerEvents: "none"
     }
-  }, "Loading the 3D house…")), selected.length > 0 && /*#__PURE__*/React.createElement("div", {
+  })), spots.map(h => {
+    const on = !!sc[h.trade];
+    return /*#__PURE__*/React.createElement("div", {
+      key: h.trade,
+      onMouseEnter: () => setHover(h.trade),
+      onMouseLeave: () => setHover(p => p === h.trade ? null : p),
+      onClick: () => setSidebar(h.trade),
+      style: {
+        position: "absolute",
+        left: h.x + "%",
+        top: h.y + "%",
+        width: h.w + "%",
+        height: h.h + "%",
+        cursor: "pointer",
+        borderRadius: 8,
+        background: on ? "rgba(20,160,74,.28)" : hover === h.trade ? "rgba(255,255,255,.18)" : "transparent",
+        border: on ? "2px solid #14a04a" : hover === h.trade ? "2px solid rgba(255,255,255,.85)" : "2px solid transparent",
+        transition: "background .15s, border-color .15s"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%,-50%)",
+        width: 12,
+        height: 12,
+        borderRadius: "50%",
+        background: on ? "#14a04a" : "rgba(255,255,255,.92)",
+        border: "2px solid " + (on ? "#0a7d36" : "rgba(0,0,0,.28)"),
+        animation: on ? "none" : "alh_pulse 2.4s infinite",
+        pointerEvents: "none"
+      }
+    }, on ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        position: "absolute",
+        left: 1,
+        top: -3,
+        color: "#fff",
+        fontSize: 9,
+        fontWeight: 900
+      }
+    }, "✓") : null), hover === h.trade && /*#__PURE__*/React.createElement("span", {
+      style: {
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%,-50%)",
+        background: "rgba(17,24,39,.92)",
+        color: "#fff",
+        fontSize: 12,
+        fontWeight: 700,
+        padding: "4px 9px",
+        borderRadius: 8,
+        whiteSpace: "nowrap",
+        animation: "alh_spring .22s ease",
+        pointerEvents: "none",
+        zIndex: 3
+      }
+    }, h.label, on ? " ✓" : ""));
+  }), sbTrade && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    onClick: () => setSidebar(null),
+    style: {
+      position: "absolute",
+      inset: 0,
+      background: "rgba(0,0,0,.35)",
+      zIndex: 4
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      maxHeight: "82%",
+      overflowY: "auto",
+      background: "#fff",
+      borderTopLeftRadius: 14,
+      borderTopRightRadius: 14,
+      padding: 14,
+      zIndex: 5,
+      boxShadow: "0 -8px 24px rgba(0,0,0,.18)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("b", null, sbDef.label, " — pick a material"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 8px"
+    },
+    onClick: () => setSidebar(null)
+  }, "✕")), sbMats.own.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      marginBottom: 4
+    }
+  }, "📗 From your price book"), sbMats.own.map(m => /*#__PURE__*/React.createElement("button", {
+    key: m,
+    className: "btn ghost full",
+    style: {
+      justifyContent: "flex-start",
+      marginBottom: 4,
+      fontWeight: sc[sbTrade] === m ? 700 : 400,
+      borderColor: sc[sbTrade] === m ? "#14a04a" : undefined
+    },
+    onClick: () => pick(sbTrade, m)
+  }, sc[sbTrade] === m ? "✓ " : "", m))), /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      marginBottom: 4
+    }
+  }, sbMats.own.length ? "Suggested" : "Materials", " ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, PB_TRADE_KEY[sbTrade] ? "· add yours in My price book to personalize" : "")), sbMats.sugg.map(m => /*#__PURE__*/React.createElement("button", {
+    key: m,
+    className: "btn ghost full",
+    style: {
+      justifyContent: "flex-start",
+      marginBottom: 4,
+      fontWeight: sc[sbTrade] === m ? 700 : 400,
+      borderColor: sc[sbTrade] === m ? "#14a04a" : undefined
+    },
+    onClick: () => pick(sbTrade, m)
+  }, sc[sbTrade] === m ? "✓ " : "", m)), sc[sbTrade] && /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    style: {
+      marginTop: 6,
+      color: "#b42318"
+    },
+    onClick: () => {
+      onDeselect(sbTrade);
+      setSidebar(null);
+    }
+  }, "Remove ", sbDef.label, " from scope")))), selected.length > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
       gap: 6,
-      marginTop: 8
+      marginTop: 10
     }
-  }, selected.map(function (z) {
-    return /*#__PURE__*/React.createElement("span", {
-      key: z.trade,
-      style: {
-        fontSize: 12,
-        background: "#e7f6ec",
-        color: "#0a7d36",
-        border: "1px solid #b6e0c4",
-        borderRadius: 12,
-        padding: "2px 9px"
-      }
-    }, z.label, " ", /*#__PURE__*/React.createElement("span", {
-      style: {
-        cursor: "pointer",
-        fontWeight: 700
-      },
-      onClick: function () {
-        onToggle(z.trade);
-      }
-    }, "×"));
-  })), /*#__PURE__*/React.createElement("p", {
+  }, selected.map(h => /*#__PURE__*/React.createElement("span", {
+    key: h.trade,
+    onClick: () => setSidebar(h.trade),
+    title: "Click to change material",
+    style: {
+      cursor: "pointer",
+      fontSize: 12,
+      background: "#e7f6ec",
+      color: "#0a7d36",
+      border: "1px solid #b6e0c4",
+      borderRadius: 12,
+      padding: "3px 10px"
+    }
+  }, /*#__PURE__*/React.createElement("b", null, h.label), sc[h.trade] && sc[h.trade] !== true ? ": " + sc[h.trade] : "", " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    },
+    onClick: e => {
+      e.stopPropagation();
+      onDeselect(h.trade);
+    }
+  }, "×")))) : /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 10
+    }
+  }, "Tap a part of the house to choose its material — your scope builds up here."), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
     }
-  }, "Tap a layer, then tap parts of the house to add those trades — selections sync with the checklist below", role === "homeowner" ? ", and you'll get a price range." : ", with full per-trade numbers."));
+  }, "Selections sync with the checklist below", role === "homeowner" ? "; you'll see a price range." : "; full per-trade numbers on Build."));
 }
 
-// Wrapper: try the real-time 3D house; fall back to the SVG House2D if WebGL /
-// three.js can't load, or if the user opts for the simpler view.
+// Wrapper: image house by default; falls back to the SVG House2D if the renders
+// fail to load (offline / missing asset), with a manual toggle either way.
 function InteractiveHouse(props) {
-  const [mode, setMode] = useState("3d");
-  if (mode === "3d") {
-    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(House3D, {
-      checked: props.checked,
-      onToggle: props.onToggle,
+  const [mode, setMode] = useState("image");
+  const ck = props.checked || {};
+  if (mode === "image") {
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(ImageHouse, {
+      scope: props.scope,
+      onSelect: props.onSelect,
+      onDeselect: props.onDeselect,
+      priceBook: props.priceBook,
       role: props.role,
-      onError: function () {
-        setMode("2d");
-      }
+      onImgError: () => setMode("2d")
     }), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
         marginTop: 6,
         fontSize: 12
       },
-      onClick: function () {
-        setMode("2d");
-      }
+      onClick: () => setMode("2d")
     }, "Switch to simple view"));
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(House2D, {
-    checked: props.checked,
+    checked: ck,
     onToggle: props.onToggle,
     role: props.role
   }), /*#__PURE__*/React.createElement("button", {
@@ -3943,10 +3834,8 @@ function InteractiveHouse(props) {
       marginTop: 6,
       fontSize: 12
     },
-    onClick: function () {
-      setMode("3d");
-    }
-  }, "Switch to 3D house"));
+    onClick: () => setMode("image")
+  }, "Switch to house view"));
 }
 
 /* ============================================================ */
@@ -4068,6 +3957,7 @@ function App() {
   const [whInputs, setWhInputs] = useState({}); // { trade: { field: value } }
   const [whResult, setWhResult] = useState(null); // combined estimate from /estimate-multi
   const [whBusy, setWhBusy] = useState(false);
+  const [houseScope, setHouseScope] = useState({}); // Stage 5 image-house: { trade: materialName } across all 21 house trades
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
   const [whPbOpen, setWhPbOpen] = useState(false);
   // ---- CSV importer (Stage 2b/2c) ----
@@ -4140,6 +4030,34 @@ function App() {
       [name]: val
     }
   }));
+  // Stage 5 image-house -> scope. Records trade->material for ALL house trades and
+  // mirrors the 8 deterministic ones into whChecked so the existing whole-house
+  // build includes them. Never touches the estimating engine itself.
+  const houseSelect = (trade, material) => {
+    setHouseScope(p => ({
+      ...p,
+      [trade]: material || true
+    }));
+    const k = PB_TRADE_KEY[trade];
+    if (k) setWhChecked(p => ({
+      ...p,
+      [k]: true
+    }));
+  };
+  const houseDeselect = trade => {
+    setHouseScope(p => {
+      const n = {
+        ...p
+      };
+      delete n[trade];
+      return n;
+    });
+    const k = PB_TRADE_KEY[trade];
+    if (k) setWhChecked(p => ({
+      ...p,
+      [k]: false
+    }));
+  };
   // ---- engine price book (manual entry) ----
   const saveEnginePB = next => {
     setEnginePB(next);
@@ -9546,6 +9464,10 @@ function App() {
   }, "PRO")), /*#__PURE__*/React.createElement("p", {
     className: "hint"
   }, "All trades are on by default — uncheck any you're not providing on this job. Enter each checked trade's dimensions, then build one combined estimate. Every quantity, labor figure, and total is computed deterministically by Caza's engine (same numbers every time for the same inputs)."), whSpecs && /*#__PURE__*/React.createElement(InteractiveHouse, {
+    scope: houseScope,
+    onSelect: houseSelect,
+    onDeselect: houseDeselect,
+    priceBook: enginePB,
     checked: whChecked,
     onToggle: whToggle,
     role: me.role
