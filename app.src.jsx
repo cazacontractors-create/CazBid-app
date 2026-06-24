@@ -1257,6 +1257,8 @@ function App() {
   const [houseScope, setHouseScope] = useState({}); // Stage 5 image-house: { trade: materialName } across all 21 house trades
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
   const [whPbOpen, setWhPbOpen] = useState(false);
+  const [whDims, setWhDims] = useState("");        // extracted measurements for the house flow
+  const [whReportBusy, setWhReportBusy] = useState(false);
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -1292,7 +1294,7 @@ function App() {
       const list = d.trades || [];
       const checked = {}, inputs = {};
       list.forEach((t) => {
-        checked[t.trade] = true; // pre-check all trades
+        checked[t.trade] = false; // default EMPTY — the house drives selection (clicking a hotspot adds the trade)
         const iv = {};
         t.inputs.forEach((inp) => { iv[inp.name] = inp.default; });
         iv.complexityFactor = t.complexity.default;
@@ -1453,7 +1455,7 @@ function App() {
   };
   const buildWholeHouse = async () => {
     const req = (whSpecs || []).filter((t) => whChecked[t.trade]).map((t) => ({ trade: t.trade, inputs: whInputs[t.trade] || {} }));
-    if (!req.length) { flash("Check at least one trade to estimate."); return; }
+    if (!req.length) { flash("Add a trade the engine can size — siding, concrete, drywall, trim, insulation, electrical, plumbing, or HVAC. (Roofing, windows, etc. price from your description for now.)"); return; }
     setWhBusy(true); setWhResult(null);
     try {
       const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: req, priceBook: enginePriceBookPayload() }) });
@@ -2075,6 +2077,42 @@ function App() {
       flash("Report read — measurements attached to your estimate.");
     } catch (e) { flash("Report parse failed: " + errMsg(e) + ". Try the PDF or type the numbers in the scope."); }
     setEstBusy("");
+  };
+  // ---- house flow: measurement upload (same EV_PROMPT extraction) ----
+  const handleWhReport = async (file) => {
+    if (!file) return;
+    setWhReportBusy(true);
+    try {
+      const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+      let block;
+      if (isPdf) {
+        if (file.size > 28 * 1024 * 1024) throw new Error("PDF over 28MB");
+        block = { type: "document", source: { type: "base64", media_type: "application/pdf", data: await fileToB64(file) } };
+      } else {
+        const b64 = (await imageToJpeg(file, 2000)).split(",")[1];
+        block = { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } };
+      }
+      const text = await callClaude([{ role: "user", content: [block, { type: "text", text: EV_PROMPT }] }]);
+      const d = parseJSON(text);
+      if (!d.summary || !String(d.summary).trim()) throw new Error("No measurements found in that file");
+      setWhDims(String(d.summary).slice(0, 400));
+      flash("Report read — AL will use these measurements.");
+    } catch (e) { flash("Report parse failed: " + errMsg(e) + ". You can still type dimensions below."); }
+    setWhReportBusy(false);
+  };
+  // AL's next question = first unfilled REQUIRED input across the selected
+  // deterministic trades (one at a time; skips anything already answered).
+  const whNextQuestion = () => {
+    for (const t of (whSpecs || [])) {
+      if (!whChecked[t.trade]) continue;
+      for (const inp of t.inputs) {
+        if (!inp.required) continue;
+        const v = whInputs[t.trade] ? whInputs[t.trade][inp.name] : undefined;
+        const empty = inp.type === "enum" ? !v : !(num(v) > 0);
+        if (empty) return { trade: t.trade, tradeLabel: t.label, inp: inp };
+      }
+    }
+    return null;
   };
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" +
@@ -4456,146 +4494,209 @@ function App() {
             <button className={"btn " + (estMode === "house" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => { setEstMode("house"); loadWholeHouseSpecs(); }}>🏠 House selector</button>
             <button className={"btn " + (estMode === "categories" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => setEstMode("categories")}>📋 Categories</button>
           </div>
+          {/* 1 · MEASUREMENTS & PHOTOS (top) */}
           <section className="card">
-            <div className="h1">Whole House / Addition <span className="propill">PRO</span></div>
-            <p className="hint">All trades are on by default — uncheck any you're not providing on this job. Enter each checked trade's dimensions, then build one combined estimate. Every quantity, labor figure, and total is computed deterministically by Caza's engine (same numbers every time for the same inputs).</p>
-            {whSpecs && <InteractiveHouse scope={houseScope} onSelect={houseSelect} onDeselect={houseDeselect} priceBook={enginePB} checked={whChecked} onToggle={whToggle} role={me.role} />}
-            {whSpecs && (
-              <div className="card" style={{ marginTop: 10 }}>
-                <label className="estf" style={{ alignItems: "center", cursor: "pointer" }} onClick={() => setWhPbOpen((o) => !o)}>
-                  <span className="seclabel">{whPbOpen ? "▾" : "▸"} My price book <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}</span></span>
-                  <span className="hint" style={{ marginLeft: 8 }}>your material costs — matched per trade, override seed pricing</span>
-                </label>
-                {whPbOpen && (
-                  <div>
-                    {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
-                    {enginePB.map((e) => (
-                      <div className="estfields" key={e.id} style={{ alignItems: "end" }}>
-                        <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
-                        <label className="estf"><span>Trade</span>
-                          <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
-                            {whSpecs.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+            <div className="seclabel">1 · Measurements &amp; photos</div>
+            <p className="hint">Upload an EagleView, Polycam, floor plan, or photos — AL reads the measurements and uses them to size the trades you pick.</p>
+            <label className="estf"><span>📐 Report or photo (PDF / image)</span>
+              <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} onChange={(e) => { handleWhReport(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+            </label>
+            {whReportBusy && <p className="hint">Reading the file…</p>}
+            {whDims && <p className="ai-note">📐 {whDims} <button className="btn ghost" style={{ padding: "0 6px", marginLeft: 6 }} onClick={() => setWhDims("")}>✕</button></p>}
+          </section>
+
+          {/* 2 · AL CONVERSATION ZONE */}
+          <section className="card">
+            <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div></div>
+            <div className="convbubble ai" style={{ marginTop: 6 }}>
+              {(() => {
+                const sel = Object.keys(houseScope);
+                if (!sel.length) return "Tap parts of the house below to add them to your job — roof, siding, kitchen, HVAC, whatever you're bidding. I'll help size each one.";
+                const q = whNextQuestion();
+                if (q) return "Got " + sel.length + " trade" + (sel.length > 1 ? "s" : "") + " so far." + (whDims ? " I pulled what I could from your upload." : "") + " What's the " + String(q.inp.label).toLowerCase() + " for " + q.tradeLabel + "?";
+                return "Looks like I've got what I need for your " + sel.length + " selected trade" + (sel.length > 1 ? "s" : "") + ". Scroll down and hit Build Estimate.";
+              })()}
+            </div>
+            {(() => {
+              if (!Object.keys(houseScope).length) return null;
+              const q = whNextQuestion();
+              if (!q) return null;
+              return (
+                <div className="estfields" style={{ marginTop: 8 }}>
+                  <label className="estf">
+                    <span>{q.inp.label}{q.inp.unit ? " (" + q.inp.unit + ")" : ""} — {q.tradeLabel}</span>
+                    {q.inp.type === "enum"
+                      ? <select value={(whInputs[q.trade] && whInputs[q.trade][q.inp.name] != null) ? whInputs[q.trade][q.inp.name] : q.inp.default} onChange={(e) => whSet(q.trade, q.inp.name, e.target.value)}>
+                          {(q.inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
+                        </select>
+                      : <input type="number" value={(whInputs[q.trade] && num(whInputs[q.trade][q.inp.name]) > 0) ? whInputs[q.trade][q.inp.name] : ""} onChange={(e) => whSet(q.trade, q.inp.name, num(e.target.value))} placeholder={"Answer for " + q.tradeLabel} />}
+                  </label>
+                </div>
+              );
+            })()}
+          </section>
+
+          {/* 3 · HOUSE IMAGE + TOGGLE (primary selector) */}
+          {whSpecs
+            ? <InteractiveHouse scope={houseScope} onSelect={houseSelect} onDeselect={houseDeselect} priceBook={enginePB} role={me.role} />
+            : <section className="card"><p className="hint">Loading the house…</p></section>}
+
+          {/* 4 · SELECTED TRADES + DIMENSION INPUTS (only what was clicked) */}
+          {Object.keys(houseScope).length > 0 && (
+            <section className="card">
+              <div className="seclabel">Your scope <span className="hint">{Object.keys(houseScope).length} trade{Object.keys(houseScope).length === 1 ? "" : "s"} — tap the house to add or remove</span></div>
+              {Object.keys(houseScope).map((ht) => {
+                const pbk = PB_TRADE_KEY[ht];
+                const spec = pbk ? (whSpecs || []).find((s) => s.trade === pbk) : null;
+                const htLabel = (HOUSE_HOTSPOTS.find((h) => h.trade === ht) || {}).label || ht;
+                const own = pbk ? (enginePB || []).filter((e) => e && String(e.trade) === pbk && String(e.material || "").trim()).map((e) => String(e.material).trim()) : [];
+                const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
+                const mats = ownUniq.concat((MATERIAL_SUGGESTIONS[ht] || []).filter((m) => !ownUniq.includes(m)));
+                const curMat = houseScope[ht];
+                return (
+                  <div className="card" style={{ marginTop: 10 }} key={ht}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span className="seclabel">✓ {htLabel}</span>
+                      <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => houseDeselect(ht)}>remove</button>
+                    </div>
+                    <label className="estf" style={{ marginTop: 6 }}><span>Materials</span>
+                      <select value={(curMat && curMat !== true) ? curMat : ""} onChange={(e) => houseSelect(ht, e.target.value)}>
+                        <option value="">— choose a material —</option>
+                        {curMat && curMat !== true && !mats.includes(curMat) && <option value={curMat}>{curMat}</option>}
+                        {mats.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </label>
+                    {spec ? (
+                      <div className="estfields" style={{ marginTop: 6 }}>
+                        {spec.inputs.map((inp) => (
+                          <label className="estf" key={inp.name}>
+                            <span>{inp.label}{inp.unit ? " (" + inp.unit + ")" : ""}{inp.required ? " *" : ""}</span>
+                            {inp.type === "enum"
+                              ? <select value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : inp.default} onChange={(e) => whSet(pbk, inp.name, e.target.value)}>
+                                  {(inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
+                                </select>
+                              : <input type="number" value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : ""} onChange={(e) => whSet(pbk, inp.name, num(e.target.value))} />}
+                          </label>
+                        ))}
+                        <label className="estf">
+                          <span>Complexity ({spec.complexity.min}–{spec.complexity.max})</span>
+                          <input type="number" step="0.05" value={(whInputs[pbk] && whInputs[pbk].complexityFactor != null) ? whInputs[pbk].complexityFactor : spec.complexity.default} onChange={(e) => whSet(pbk, "complexityFactor", num(e.target.value))} />
+                        </label>
+                      </div>
+                    ) : (
+                      <p className="hint" style={{ marginTop: 6 }}>No extra dimensions needed — AL prices this from your description, photos, and uploaded measurements.</p>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
+          {/* 5 · BUILD ESTIMATE (bottom) */}
+          <button className="btn primary full" disabled={whBusy || !Object.keys(houseScope).length} style={{ marginTop: 4 }} onClick={buildWholeHouse}>
+            {whBusy ? "Building combined estimate…" : (Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Tap the house to add trades")}
+          </button>
+
+          {whResult && (
+            <section className="costbox" style={{ marginTop: 14 }}>
+              <div className="h1">Combined estimate — {whResult.combined.tradeCount} trade{whResult.combined.tradeCount === 1 ? "" : "s"}</div>
+              {whResult.errors && whResult.errors.length > 0 && <p className="hint">Skipped (no engine spec): {whResult.errors.map((e) => e.trade).join(", ")}</p>}
+              {whResult.combined.byTrade.map((b) => (
+                <div className="costrow" key={b.trade}><span>{b.title}</span><b>{$0(b.grandTotal)}</b></div>
+              ))}
+              <div className="costrow"><span>Materials — all trades</span><b>{$0(whResult.combined.materialTotal)}</b></div>
+              <div className="costrow"><span>Labor — all trades · {whResult.combined.laborHours} hrs</span><b>{$0(whResult.combined.laborCost)}</b></div>
+              <div className="costrow total"><span>Combined total</span><b>{$0(whResult.combined.grandTotal)}</b></div>
+              {whResult.combined.priceSummary && (whResult.combined.priceSummary.pricebook + whResult.combined.priceSummary.retail) > 0 && (
+                <p className="hint">💲 {whResult.combined.priceSummary.pricebook} material line{whResult.combined.priceSummary.pricebook === 1 ? "" : "s"} priced from your book{whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : ""} · {whResult.combined.priceSummary.seed} on seed pricing.</p>
+              )}
+              <p className="hint">⚠️ Placeholder pricing — material unit costs and crew rates are seed values pending your real ABC Supply pricing and crew-history calibration. Treat as a rough order of magnitude until tuned.</p>
+            </section>
+          )}
+
+          {/* PRICING DETAILS / PRICE BOOK — hidden from the main flow (bottom toggle) */}
+          {whSpecs && (
+            <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book"} <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}</span></button>
+          )}
+          {whSpecs && whPbOpen && (
+            <div className="card" style={{ marginTop: 10 }}>
+              <p className="hint">Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range.</p>
+              {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
+              {enginePB.map((e) => (
+                <div className="estfields" key={e.id} style={{ alignItems: "end" }}>
+                  <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
+                  <label className="estf"><span>Trade</span>
+                    <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
+                      {whSpecs.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
+                  <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
+                  <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
+                  <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+                </div>
+              ))}
+              <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
+
+              <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
+                <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
+                {pbImportOpen && !csvReview && (
+                  <div style={{ marginTop: 8 }}>
+                    <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
+                    <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
+                    {csvBusy && <p className="hint">Reading the price sheet…</p>}
+                    <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
+                    <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
+                    <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
+                    <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
+                    <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
+                    <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
+                    {csvParsed && csvParsed.headers.length > 0 && (
+                      <div>
+                        <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
+                        <div className="estfields">
+                          {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
+                            <label className="estf" key={k}><span>{lbl}</span>
+                              <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
+                                <option value={-1}>—</option>
+                                {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                        <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
+                          {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {pbImportOpen && csvReview && (
+                  <div style={{ marginTop: 8 }}>
+                    <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
+                    {csvReview.map((r, i) => (
+                      <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
+                        <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
+                        <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
+                          <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
+                            {(whSpecs || []).map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                            <option value="other">other (skip)</option>
                           </select>
                         </label>
-                        <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
-                        <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
-                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
-                        <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+                        <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
+                        <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
+                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
                       </div>
                     ))}
-                    <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
-
-                    <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
-                      <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
-                      {pbImportOpen && !csvReview && (
-                        <div style={{ marginTop: 8 }}>
-                          <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
-                          <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
-                          {csvBusy && <p className="hint">Reading the price sheet…</p>}
-                          <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
-                          <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
-                          <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
-                          <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
-                          <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
-                          <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
-                          {csvParsed && csvParsed.headers.length > 0 && (
-                            <div>
-                              <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
-                              <div className="estfields">
-                                {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
-                                  <label className="estf" key={k}><span>{lbl}</span>
-                                    <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
-                                      <option value={-1}>—</option>
-                                      {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
-                                    </select>
-                                  </label>
-                                ))}
-                              </div>
-                              <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
-                                {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {pbImportOpen && csvReview && (
-                        <div style={{ marginTop: 8 }}>
-                          <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
-                          {csvReview.map((r, i) => (
-                            <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
-                              <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
-                              <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
-                                <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
-                                  {(whSpecs || []).map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
-                                  <option value="other">other (skip)</option>
-                                </select>
-                              </label>
-                              <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
-                              <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
-                              <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
-                            </div>
-                          ))}
-                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
-                            <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
-                          </div>
-                        </div>
-                      )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
+                      <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
                     </div>
                   </div>
                 )}
               </div>
-            )}
-            {!whSpecs && <p className="hint">Loading trades…</p>}
-            {whSpecs && whSpecs.map((t) => (
-              <div className="card" style={{ marginTop: 10 }} key={t.trade}>
-                <label className="estf" style={{ alignItems: "center", cursor: "pointer" }}>
-                  <input type="checkbox" checked={!!whChecked[t.trade]} onChange={() => whToggle(t.trade)} />
-                  <span className="seclabel" style={{ marginLeft: 8 }}>{t.label}</span>
-                  <span className="hint" style={{ marginLeft: 8 }}>{t.basis}</span>
-                </label>
-                {whChecked[t.trade] && (
-                  <div className="estfields">
-                    {t.inputs.map((inp) => (
-                      <label className="estf" key={inp.name}>
-                        <span>{inp.label}{inp.unit ? " (" + inp.unit + ")" : ""}{inp.required ? " *" : ""}</span>
-                        {inp.type === "enum"
-                          ? <select value={(whInputs[t.trade] && whInputs[t.trade][inp.name] != null) ? whInputs[t.trade][inp.name] : inp.default} onChange={(e) => whSet(t.trade, inp.name, e.target.value)}>
-                              {(inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
-                            </select>
-                          : <input type="number" value={(whInputs[t.trade] && whInputs[t.trade][inp.name] != null) ? whInputs[t.trade][inp.name] : ""} onChange={(e) => whSet(t.trade, inp.name, num(e.target.value))} />}
-                      </label>
-                    ))}
-                    <label className="estf">
-                      <span>Complexity ({t.complexity.min}–{t.complexity.max})</span>
-                      <input type="number" step="0.05" value={(whInputs[t.trade] && whInputs[t.trade].complexityFactor != null) ? whInputs[t.trade].complexityFactor : t.complexity.default} onChange={(e) => whSet(t.trade, "complexityFactor", num(e.target.value))} />
-                    </label>
-                  </div>
-                )}
-              </div>
-            ))}
-            {whSpecs && (
-              <button className="btn primary full" disabled={whBusy} style={{ marginTop: 12 }} onClick={buildWholeHouse}>
-                {whBusy ? "Building combined estimate…" : "✦ Build combined estimate"}
-              </button>
-            )}
-            {whResult && (
-              <section className="costbox" style={{ marginTop: 14 }}>
-                <div className="h1">Combined estimate — {whResult.combined.tradeCount} trade{whResult.combined.tradeCount === 1 ? "" : "s"}</div>
-                {whResult.errors && whResult.errors.length > 0 && <p className="hint">Skipped (no engine spec): {whResult.errors.map((e) => e.trade).join(", ")}</p>}
-                {whResult.combined.byTrade.map((b) => (
-                  <div className="costrow" key={b.trade}><span>{b.title}</span><b>{$0(b.grandTotal)}</b></div>
-                ))}
-                <div className="costrow"><span>Materials — all trades</span><b>{$0(whResult.combined.materialTotal)}</b></div>
-                <div className="costrow"><span>Labor — all trades · {whResult.combined.laborHours} hrs</span><b>{$0(whResult.combined.laborCost)}</b></div>
-                <div className="costrow total"><span>Combined total</span><b>{$0(whResult.combined.grandTotal)}</b></div>
-                {whResult.combined.priceSummary && (whResult.combined.priceSummary.pricebook + whResult.combined.priceSummary.retail) > 0 && (
-                  <p className="hint">💲 {whResult.combined.priceSummary.pricebook} material line{whResult.combined.priceSummary.pricebook === 1 ? "" : "s"} priced from your book{whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : ""} · {whResult.combined.priceSummary.seed} on seed pricing.</p>
-                )}
-                <p className="hint">⚠️ Placeholder pricing — material unit costs and crew rates are seed values pending your real ABC Supply pricing and crew-history calibration. Treat as a rough order of magnitude until tuned.</p>
-              </section>
-            )}
-          </section>
+            </div>
+          )}
         </main>
       )}
 
