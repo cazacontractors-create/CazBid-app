@@ -522,12 +522,18 @@ function priceFromBook(name, books) {
   }
   return (best && bestScore >= 0.34) ? Number(best.cost) : null;
 }
-// Price a deterministic roof takeoff from the cost book; unpriced lines are FLAGGED
-// (visible), never silently $0 and never hardcoded.
-function priceRoofTakeoff(lines, books) {
+// Price a deterministic roof takeoff: cost book first, then (for lines the book
+// lacks) the LLM's own per-unit estimate for that line — NOT hardcoded. Only lines
+// neither source can price are FLAGGED (visible, never silently $0).
+function priceRoofTakeoff(lines, books, llmItems) {
+  const llmBook = Array.isArray(llmItems) ? llmItems.map((it) => {
+    const u = Number(it.unitPrice) > 0 ? Number(it.unitPrice) : (Number(it.qty) > 0 ? Number(it.cost) / Number(it.qty) : Number(it.cost));
+    return { name: it.name, cost: u };
+  }).filter((x) => x.cost > 0) : [];
   return (lines || []).map((l) => {
-    const up = priceFromBook(l.name, books);
-    return { name: l.name, qty: l.qty, unit: l.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * l.qty) : 0, unpriced: up == null };
+    let up = priceFromBook(l.name, books); let src = up != null ? "book" : null;
+    if (up == null) { up = priceFromBook(l.name, llmBook); if (up != null) src = "ai"; }
+    return { name: l.name, qty: l.qty, unit: l.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * l.qty) : 0, unpriced: up == null, priceSrc: src };
   });
 }
 // ===== deterministic ROOF material takeoff from measurements (code does the math) =====
@@ -1344,6 +1350,7 @@ function App() {
   const [measOpen, setMeasOpen] = useState("");
   const [estScope, setEstScope] = useState(null); // selected subcategory label (string)
   const [estMode, setEstMode] = useState("categories"); // Estimate tab view: "categories" | "house" (whole-house image selector)
+  const [estRunPending, setEstRunPending] = useState(false); // house → delegate to the Categories estimator (FIX 2A)
   const [estDimVals, setEstDimVals] = useState({}); // {key: value}
   const [estGreeted, setEstGreeted] = useState(false);
   const [estTyping, setEstTyping] = useState(false);
@@ -1651,7 +1658,7 @@ function App() {
       if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
           const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
-          items = priceRoofTakeoff(q, books);
+          items = priceRoofTakeoff(q, books, items);
         } else {
           const matchers = [
             { key: "panel", kw: ["panel", "lok", "standing seam", "seam "] }, { key: "clip", kw: ["clip"] },
@@ -1690,6 +1697,23 @@ function App() {
   const buildWholeHouse = async () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) { flash("Tap the house to add at least one trade."); return; }
+    // FIX 2A — a single trade runs the EXACT Categories estimator (full takeoff +
+    // good/better/best + margin), so the house and Categories produce identical
+    // results for the same job. (Multi-trade still uses the per-trade roll-up.)
+    if (sel.length === 1) {
+      const t = sel[0];
+      const label = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t;
+      const mat = (houseScope[t] && houseScope[t] !== true) ? String(houseScope[t]) : "";
+      aiActiveTrade.current = null;
+      setEstScope(label + (mat ? " — " + mat : ""));
+      setEstDesc(label + (mat ? " (" + mat + ")" : ""));
+      if (whDims) setEstDims(whDims);
+      if (whPhotos.length) setEstPhotos(whPhotos.slice(0, 4));
+      setEstResult(null);
+      setEstMode("categories");
+      setEstRunPending(true); // a render-fresh effect runs runEstimate() with the new inputs
+      return;
+    }
     // every trade now runs the full real-priced takeoff, so it needs some sizing
     const anyFields = sel.some((t) => { const k = PB_TRADE_KEY[t]; const f = k && whInputs[k]; return f && Object.keys(f).some((x) => x !== "complexityFactor" && num(f[x]) > 0); });
     if (!whDims && !whPhotos.length && !anyFields) { flash("Add measurements or photos (📄 Report / 📷 Photo), or type a dimension below, so I can size the job."); return; }
@@ -2460,7 +2484,7 @@ function App() {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
             // price it from the cost book (the LLM under-itemizes these → the $295 bug).
             const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
-            items = priceRoofTakeoff(q, books).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice, cost: it.cost, unpriced: it.unpriced, priceTier: null, matchType: null }));
+            items = priceRoofTakeoff(q, books, items).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice, cost: it.cost, unpriced: it.unpriced, priceTier: null, matchType: null }));
           } else {
           const matchers = [
             { key: "panel", kw: ["panel", "lok", "standing seam", "seam "] },
@@ -2537,6 +2561,11 @@ function App() {
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
   };
+  // FIX 2A — when the house delegated to the Categories estimator, run it once the
+  // new scope/dims/photos have committed (fresh closure → reads the updated state).
+  useEffect(() => {
+    if (estRunPending && estScope) { setEstRunPending(false); runEstimate(); }
+  }, [estRunPending]);
   // editable materials list helpers
   const estItemSet = (i, field, val) => {
     setEstResult((r) => {
@@ -2556,7 +2585,8 @@ function App() {
   const estItemAdd = () => setEstResult((r) => r ? { ...r, items: [...r.items, { name: "New item", qty: 1, unit: "", unitPrice: 0, cost: 0 }] } : r);
   const estPickTier = (opt) => setEstResult((r) => {
     if (!r || !r.items.length) return r;
-    const items = r.items.map((it, idx) => idx === 0 ? { ...it, name: opt.name, cost: opt.cost } : it);
+    // FIX 2C: reconcile the editable unit price with the tier total (was left stale → $0.47 ≠ total)
+    const items = r.items.map((it, idx) => idx === 0 ? { ...it, name: opt.name, cost: Math.round(opt.cost), unitPrice: (num(it.qty) > 0 ? Math.round((opt.cost / num(it.qty)) * 100) / 100 : opt.cost), unpriced: false } : it);
     return { ...r, items, chosenTier: opt.tier };
   });
   const estItemDel = (i) => setEstResult((r) => r ? { ...r, items: r.items.filter((_, idx) => idx !== i) } : r);
