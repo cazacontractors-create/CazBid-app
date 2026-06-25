@@ -1694,6 +1694,9 @@ const CATEGORIES = [{
     label: "Drywall, plaster, insulation",
     hint: "drywall, insulation"
   }, {
+    label: "Suspended / drop ceiling",
+    hint: "acoustic ceiling, grid, tiles"
+  }, {
     label: "Painting, wallpaper, trim",
     hint: "paint, trim"
   }, {
@@ -1739,8 +1742,8 @@ const CATEGORIES = [{
 }, {
   cat: "Demolition & Remediation",
   subs: [{
-    label: "Demolition, haul-away",
-    hint: "demo, haul-away"
+    label: "Demolition, tear-out, haul-away",
+    hint: "demo, plaster/drywall/lath removal, haul-away"
   }, {
     label: "Mold remediation, asbestos removal",
     hint: "mold, asbestos"
@@ -1787,7 +1790,9 @@ const TRADE_MODULES = {
   siding: "TRADE: SIDING. Identify the siding type (vinyl, fiber cement/Hardie, wood/cedar lap, engineered wood, board & batten, steel/AG panel) and include only its components:\n" + "Field siding by square (incl. waste); starter strip; J-channel, outside/inside corner posts, undersill/finish trim (vinyl); for fiber cement: trim boards, joint flashing, blind-nail + face screws; for wood: building paper, corner boards, galvanized/SS nails; housewrap; window/door flashing tape + head flashing; soffit + fascia if in scope; caulk/sealant; fasteners appropriate to the product. Do NOT include roofing shingles, membrane, or roof flashing. Labor scales with stories, openings, and cut-up walls.\n",
   decks: "TRADE: DECKS. Include: footings/piers (count from span), posts, beams, ledger board + flashing + lag/structural screws, joists + hangers, rim/fascia, decking (PT, cedar, or composite) by sqft, hidden clips or deck screws, stair stringers/treads, railing posts/rails/balusters by LF, post caps. Add concrete for footings. Do NOT include roofing or siding parts. Labor scales with height off grade, stairs, and railing footage.\n",
   framing: "TRADE: FRAMING / STRUCTURAL. Include the right members for the scope: pressure-treated sill plates, studs/plates (walls), rafters or trusses + ridge/hangers (roof framing), joists + rim + hangers (floors), beams/LVL/headers, sheathing (wall/roof/subfloor) by sheet, structural connectors (Simpson), framing nails/screws, anchor bolts. Do NOT include finish materials, roofing, or siding. Labor by board-foot or per-member productivity.\n",
-  exterior: "TRADE: EXTERIOR METAL (gutters / soffit / fascia / trim). Include: gutter by LF (size/profile), inside/outside corners, end caps, downspouts + elbows + straps (count), hangers/spikes-ferrules, gutter guard if specified; soffit panels + channel by LF/sqft; fascia/trim coil wrap by LF; flashing; fasteners + sealant. Labor scales with stories and linear footage.\n"
+  exterior: "TRADE: EXTERIOR METAL (gutters / soffit / fascia / trim). Include: gutter by LF (size/profile), inside/outside corners, end caps, downspouts + elbows + straps (count), hangers/spikes-ferrules, gutter guard if specified; soffit panels + channel by LF/sqft; fascia/trim coil wrap by LF; flashing; fasteners + sealant. Labor scales with stories and linear footage.\n",
+  demolition: "TRADE: DEMOLITION / TEAR-OUT (plaster, lath, drywall removal, gut-outs). The COST here is mostly LABOR + DISPOSAL, NOT materials. Labor: plaster+lath removal ~0.05 MH/SF; drywall-only removal ~0.025 MH/SF; raise for ceilings, height, and tight access. DISPOSAL is the real expense — size a dumpster by debris weight (plaster+lath is heavy, ~6 lb/SF) and put dumpster rental + per-ton dump/haul fees in the EQUIPMENT field (not items[]). MATERIALS are minimal: dust-control plastic sheeting, painter's tape, contractor bags, floor protection, respirators — only a few small real-cost lines (never $0). Do NOT add any INSTALL materials (no new drywall, insulation, or ceiling unless separately scoped). For pre-1980 plaster, note possible asbestos/lead testing in the notes.\n",
+  ceiling: "TRADE: SUSPENDED / DROP (ACOUSTIC) CEILING. For a room of area A (SF) and perimeter P (LF): TILES = A / tile_coverage x 1.10 waste (2x4 tile -> divide by 8 SF; 2x2 tile -> divide by 4 SF). MAIN runners (12ft tees): main LF ~ A/4 (one main per 4ft of width); pieces = (A/4)/12, round up. CROSS tees (4ft): ~ A/8, round up; for a 2x2 grid ALSO add 2ft cross tees ~ A/4. WALL ANGLE (perimeter): P LF; pieces = P/12, round up. HANGER WIRE: ~ A/16 drops (4ft OC on 4ft-spaced mains), round up; add eye-lag/anchor fasteners for the hangers. Labor ~0.02 MH/SF for a clean rectangular room, more if cut up. Do NOT include drywall or joint compound (that is a hard/gypsum ceiling — a different scope).\n"
 };
 function tradeModuleFor(scope, desc) {
   const s = ((scope || "") + " " + (desc || "")).toLowerCase();
@@ -1796,6 +1801,8 @@ function tradeModuleFor(scope, desc) {
   if (/(deck|railing|porch)/.test(s)) return TRADE_MODULES.decks;
   if (/(fram|truss|rafter|joist|stud|beam|lvl|sheathing|structural)/.test(s)) return TRADE_MODULES.framing;
   if (/(gutter|soffit|fascia|downspout|trim coil)/.test(s)) return TRADE_MODULES.exterior;
+  if (/(drop ceiling|suspended ceiling|acoustic ceiling|ceiling tile|ceiling grid|t-?bar ceiling|grid ceiling)/.test(s)) return TRADE_MODULES.ceiling;
+  if (/(demolition|demo\b|tear.?out|plaster removal|\blath\b|haul.?away|gut.?out|\bgut\b|remove (drywall|plaster|ceiling|lath))/.test(s)) return TRADE_MODULES.demolition;
   // Tier 2: any other trade -> generic expert prompt that adapts to the named trade
   return "TRADE: " + (scope || desc || "the specified trade") + ". Act as an expert estimator in THIS specific trade. List every material/component this trade actually uses for the described scope, with realistic quantities from the dimensions. Use correct trade units and terminology. Do NOT include components from unrelated trades (no roofing parts on a plumbing job, etc.). If you are unsure of exact local specifics, give a sound professional estimate and note assumptions in the notes field.\n";
 }
