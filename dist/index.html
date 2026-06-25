@@ -3416,7 +3416,7 @@ function App() {
   const [whSpecs, setWhSpecs] = useState(null); // trade input schemas from /trade-specs
   const [whChecked, setWhChecked] = useState({}); // { trade: bool }
   const [whInputs, setWhInputs] = useState({}); // { trade: { field: value } }
-  const [whResult, setWhResult] = useState(null); // combined estimate from /estimate-multi
+  const [whResult, setWhResult] = useState(null); // combined estimate (real-priced LLM takeoff per trade)
   const [whBusy, setWhBusy] = useState(false);
   const [houseScope, setHouseScope] = useState({}); // Stage 5 image-house: { trade: materialName } across all 21 house trades
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
@@ -3838,12 +3838,22 @@ function App() {
   // estimate via the SAME server path the categories estimator uses, then a
   // grand-total roll-up. Reuses the shared roofing-labor logic so labor can't
   // underbid (BUG-1 fix applies here too). Uses whDims + whPhotos + the material.
+  // ONE per-trade real-priced takeoff — the SAME full LLM takeoff the Categories
+  // estimator uses (web-searched prices + the contractor's own price lists + rate
+  // book + system-purity + roof-quantity formulas). The house runs this for EVERY
+  // selected trade so a bid is identical from either view — NO seed/placeholder
+  // path for the house (BUG 6 / the merge). Feeds it whDims + whPhotos + any
+  // section-4 dimension fields the user typed for that trade.
   const estimateHouseTradeLLM = async (houseTrade, material) => {
     const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
     const label = (HOUSE_HOTSPOTS.find(h => h.trade === houseTrade) || {}).label || houseTrade;
     const mat = material && material !== true ? String(material) : "";
     const mkey = manualTradeKey(label + " " + mat, "");
-    const prompt = "You are a senior estimator for an established, insured contractor near " + region + ". Build a DETAILED itemized estimate for ONE scope.\n" + "WORK: " + label + (mat ? " — material: " + mat : "") + "\n" + (whDims ? "MEASUREMENTS: " + whDims + "\n" : "") + (whPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + TRADE_BASE_RULES + tradeModuleFor(label, mat) + "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 one combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" + "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "Respond with ONLY raw JSON: {\"title\":str,\"trade\":str,\"items\":[{\"name\":str,\"qty\":num,\"unit\":str,\"cost\":num}],\"laborHours\":num,\"laborRate\":num,\"laborSource\":\"ratebook\"|\"estimate\",\"equipment\":num,\"taxRate\":num,\"crew\":num,\"days\":num}";
+    // section-4 typed dimensions for a deterministic trade (so they aren't lost)
+    const pbk = PB_TRADE_KEY[houseTrade];
+    const fields = pbk && whInputs[pbk] ? whInputs[pbk] : null;
+    const fieldText = fields ? Object.keys(fields).filter(k => k !== "complexityFactor" && (typeof fields[k] === "string" && fields[k] || num(fields[k]) > 0)).map(k => k + ": " + fields[k]).join(", ") : "";
+    const prompt = "You are a senior estimator for an established, insured contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand a customer for ONE scope.\n" + "WORK: " + label + (mat ? " — material/system: " + mat : "") + "\n" + (whDims ? "MEASUREMENTS (use these exact numbers): " + whDims + "\n" : "") + (fieldText ? "ENTERED DIMENSIONS: " + fieldText + "\n" : "") + (whPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL contractor material unit costs, burdened labor $/hr (small-market ~$45-70/hr, not metro/union), local sales tax, and disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE itemized materials takeoff (8-15+ lines, not two), PRIMARY material first.\n" + TRADE_BASE_RULES + tradeModuleFor(label, mat) + "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 ONE combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" + (matCosts.length ? "CONTRACTOR'S OWN MATERIAL PRICES (use THESE exact unit costs when a line matches; match loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (their unit costs; use when a line matches):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "FINAL SELF-CHECK: (1) SYSTEM PURITY — delete any line from a DIFFERENT roofing/siding system than this job's (" + (mat || label) + "); an asphalt-shingle job has NO metal-panel / standing-seam / clip / seam-tape lines. (2) sanity-check every qty against the measurements. (3) items[] is MATERIALS ONLY (no labor / equipment / dumpster lines).\n" + "Respond with ONLY raw JSON: {\"title\":str,\"trade\":str,\"items\":[{\"name\":str,\"qty\":num,\"unit\":str,\"cost\":num}],\"laborHours\":num,\"laborRate\":num,\"laborSource\":\"ratebook\"|\"estimate\",\"equipment\":num,\"taxRate\":num,\"crew\":num,\"days\":num}";
     const content = [...whPhotos.slice(0, 3).map(ph => ({
       type: "image",
       source: {
@@ -3865,15 +3875,70 @@ function App() {
       priceBook: enginePriceBookPayload()
     });
     const d = parseJSON(text);
-    const items = Array.isArray(d.items) ? d.items.map(it => ({
+    let items = Array.isArray(d.items) ? d.items.map(it => ({
       name: String(it.name || "Item"),
       qty: num(it.qty),
       unit: String(it.unit || ""),
       cost: Math.round(num(it.cost))
     })) : [];
-    const matTotal = items.reduce((s, it) => s + num(it.cost), 0);
     const sysStr = (label + " " + mat).toLowerCase();
     const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane/.test(sysStr);
+    // deterministic roof quantities (drip edge, valley, ice&water…) — same override Categories applies
+    if (isRoof && whDims) {
+      const q = computeRoofQuantities(whDims, sysStr, 0);
+      if (q && q.length) {
+        const matchers = [{
+          key: "panel",
+          kw: ["panel", "lok", "standing seam", "seam "]
+        }, {
+          key: "clip",
+          kw: ["clip"]
+        }, {
+          key: "field",
+          kw: ["shingle", "slate", "field", "membrane", "tpo", "epdm"]
+        }, {
+          key: "iw",
+          kw: ["ice", "i&w", "ice & water", "ice and water"]
+        }, {
+          key: "drip",
+          kw: ["drip"]
+        }, {
+          key: "starter",
+          kw: ["starter"]
+        }, {
+          key: "ridge",
+          kw: ["ridge cap", "hip cap", "hip/ridge", "ridge/hip"]
+        }, {
+          key: "valley",
+          kw: ["valley"]
+        }, {
+          key: "step",
+          kw: ["step flash"]
+        }, {
+          key: "pen",
+          kw: ["pipe boot", "penetration", "pipe flash"]
+        }];
+        q.forEach(cq => {
+          const mm = matchers.find(x => x.key === cq.key);
+          if (!mm) return;
+          const idx = items.findIndex(it => {
+            const n = (it.name || "").toLowerCase();
+            return mm.kw.some(k => n.indexOf(k) >= 0);
+          });
+          if (idx >= 0) {
+            const old = items[idx];
+            let up = old.qty > 0 ? old.cost / old.qty : old.cost;
+            if ((old.unit || "").toLowerCase() !== (cq.unit || "").toLowerCase() && cq.qty > 0) up = old.cost / cq.qty;
+            items[idx] = Object.assign({}, old, {
+              qty: cq.qty,
+              unit: cq.unit,
+              cost: Math.round(up * cq.qty)
+            });
+          }
+        });
+      }
+    }
+    const matTotal = items.reduce((s, it) => s + num(it.cost), 0);
     let laborHours = Math.round(num(d.laborHours) || 0);
     const laborRate = Math.round(num(d.laborRate) || 0) || 60;
     const calc = computeLaborFromRateBook(items, rateBook, whDims, label, mat);
@@ -3898,101 +3963,61 @@ function App() {
       materialTotal: Math.round(matTotal),
       laborCost: laborCost,
       laborHours: laborHours,
-      grandTotal: grandTotal,
-      llm: true
+      grandTotal: grandTotal
     };
   };
   const buildWholeHouse = async () => {
-    const detReq = (whSpecs || []).filter(t => whChecked[t.trade]).map(t => ({
-      trade: t.trade,
-      inputs: whInputs[t.trade] || {}
-    }));
-    const nonDet = Object.keys(houseScope).filter(t => !PB_TRADE_KEY[t]); // roofing, windows, kitchen, …
-    if (!detReq.length && !nonDet.length) {
+    const sel = Object.keys(houseScope);
+    if (!sel.length) {
       flash("Tap the house to add at least one trade.");
       return;
     }
-    // Non-deterministic trades need a sizing source (measurements or photos).
-    if (nonDet.length && !whDims && !whPhotos.length) {
-      const labels = nonDet.map(t => (HOUSE_HOTSPOTS.find(h => h.trade === t) || {}).label || t);
-      flash("Add measurements or photos (📄 Report / 📷 Photo) so I can size " + labels.join(", ") + ".");
+    // every trade now runs the full real-priced takeoff, so it needs some sizing
+    const anyFields = sel.some(t => {
+      const k = PB_TRADE_KEY[t];
+      const f = k && whInputs[k];
+      return f && Object.keys(f).some(x => x !== "complexityFactor" && num(f[x]) > 0);
+    });
+    if (!whDims && !whPhotos.length && !anyFields) {
+      flash("Add measurements or photos (📄 Report / 📷 Photo), or type a dimension below, so I can size the job.");
       return;
     }
     setWhBusy(true);
     setWhResult(null);
     try {
-      let byTrade = [],
-        matTotal = 0,
-        laborCost = 0,
-        laborHours = 0,
-        grandTotal = 0;
-      const priceSummary = {
-        pricebook: 0,
-        retail: 0,
-        seed: 0
-      };
-      let errors = [];
-      // 1) deterministic trades — the engine (unchanged)
-      if (detReq.length) {
-        const res = await fetch("/.netlify/functions/estimate-multi", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            trades: detReq,
-            priceBook: enginePriceBookPayload()
-          })
-        });
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
-        const c = d.combined;
-        byTrade = byTrade.concat(c.byTrade || []);
-        matTotal += c.materialTotal || 0;
-        laborCost += c.laborCost || 0;
-        laborHours += c.laborHours || 0;
-        grandTotal += c.grandTotal || 0;
-        if (c.priceSummary) {
-          priceSummary.pricebook += c.priceSummary.pricebook || 0;
-          priceSummary.retail += c.priceSummary.retail || 0;
-          priceSummary.seed += c.priceSummary.seed || 0;
-        }
-        errors = errors.concat(d.errors || []);
-      }
-      // 2) non-deterministic trades — the LLM estimator, one at a time
-      for (const t of nonDet) {
+      // ONE engine, real pricing, for ALL selected trades (run in parallel)
+      const results = await Promise.all(sel.map(async t => {
         try {
-          const r = await estimateHouseTradeLLM(t, houseScope[t]);
-          byTrade.push({
-            trade: t,
-            title: r.title,
-            materialTotal: r.materialTotal,
-            laborCost: r.laborCost,
-            grandTotal: r.grandTotal,
-            llm: true
-          });
-          matTotal += r.materialTotal;
-          laborCost += r.laborCost;
-          laborHours += r.laborHours;
-          grandTotal += r.grandTotal;
+          return await estimateHouseTradeLLM(t, houseScope[t]);
         } catch (e) {
-          errors.push({
+          return {
             trade: t,
             error: errMsg(e)
-          });
+          };
         }
-      }
-      if (!byTrade.length) throw new Error(errors.length ? errors[0].error || "no trades estimated" : "no trades estimated");
+      }));
+      const ok = results.filter(r => !r.error);
+      const errors = results.filter(r => r.error).map(r => ({
+        trade: r.trade,
+        error: r.error
+      }));
+      if (!ok.length) throw new Error(errors.length ? errors[0].error : "no trades estimated");
+      const byTrade = ok.map(r => ({
+        trade: r.trade,
+        title: r.title,
+        materialTotal: r.materialTotal,
+        laborCost: r.laborCost,
+        grandTotal: r.grandTotal
+      }));
+      const sum = f => ok.reduce((s, r) => s + (r[f] || 0), 0);
       setWhResult({
-        deterministic: true,
-        engine: "deterministic-multi",
+        engine: "house-takeoff",
         combined: {
           byTrade: byTrade,
-          materialTotal: Math.round(matTotal),
-          laborCost: Math.round(laborCost),
-          laborHours: Math.round(laborHours),
-          grandTotal: Math.round(grandTotal),
-          priceSummary: priceSummary,
+          materialTotal: Math.round(sum("materialTotal")),
+          laborCost: Math.round(sum("laborCost")),
+          laborHours: Math.round(sum("laborHours")),
+          grandTotal: Math.round(sum("grandTotal")),
           tradeCount: byTrade.length
         },
         errors: errors
@@ -9449,7 +9474,7 @@ function App() {
     className: "hint"
   }, "💲 ", whResult.combined.priceSummary.pricebook, " material line", whResult.combined.priceSummary.pricebook === 1 ? "" : "s", " priced from your book", whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : "", " · ", whResult.combined.priceSummary.seed, " on seed pricing."), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "⚠️ Placeholder pricing — material unit costs and crew rates are seed values pending your real ABC Supply pricing and crew-history calibration. Treat as a rough order of magnitude until tuned.")), whSpecs && /*#__PURE__*/React.createElement("button", {
+  }, "Real-priced takeoff — the SAME full takeoff as the Categories view: current local material pricing + your price book, labor from your production rates. Verify quantities against the measurements before sending.")), whSpecs && /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 10
