@@ -1111,114 +1111,114 @@ const MATERIAL_SUGGESTIONS = {
   ventilation: ["Bath exhaust fans", "Range hood", "HRV / ERV"],
   insulation: ["Air sealing (caulk & foam)", "Air sealing + blower-door test", "R-13 wall batt", "R-15 wall batt", "R-19 batt", "R-21 wall batt", "R-30 batt", "R-38 batt", "R-49 blown attic", "R-60 blown attic", "Closed-cell spray foam", "Open-cell spray foam", "Rigid foam board"],
 };
-const HOUSE_CSS =
-  "@keyframes alh_spring{0%{transform:translate(-50%,-50%) scale(.5);opacity:0}60%{transform:translate(-50%,-50%) scale(1.08)}100%{transform:translate(-50%,-50%) scale(1);opacity:1}}" +
-  "@keyframes alh_pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.7)}70%{box-shadow:0 0 0 9px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}";
+// Material SYSTEM/TYPE per multi-system trade (the system-purity gate — picked up
+// front so the takeoff can't mix systems). "Mixed" combines systems and is sized
+// per sub-portion. Trades not listed are single-system (no type picker).
+const HOUSE_TYPES = {
+  roofing: ["Shingle", "Standing-seam metal", "Flat (TPO/EPDM)", "Tile", "Mixed"],
+  siding: ["Vinyl", "Fiber cement", "Steel/Metal", "Wood", "Mixed"],
+  flooring: ["Hardwood", "Carpet", "Tile", "LVP / laminate", "Mixed"],
+  windows: ["Vinyl", "Wood-clad", "Aluminum", "Mixed"],
+  doors: ["Fiberglass", "Steel", "Solid wood", "Mixed"],
+  concrete: ["Slab", "Footings / foundation", "Stamped / decorative", "Mixed"],
+  hvac: ["Furnace + AC", "Heat pump", "Mini-split", "Mixed"],
+  insulation: ["Batt", "Blown-in", "Spray foam", "Rigid board", "Mixed"],
+};
+const CAT_LABEL = { exterior: "Exterior", interior: "Interior", systems: "Systems" };
 
-function ImageHouse({ scope, onSelect, onDeselect, priceBook, role, onImgError }) {
-  const [state, setState] = useState("exterior");
-  const [hover, setHover] = useState(null);   // hovered hotspot trade
-  const [sidebar, setSidebar] = useState(null); // open trade key
+function ImageHouse({ scope, onSelect, onDeselect, role }) {
+  const [state, setState] = useState("exterior"); // category: exterior | interior | systems
+  const [typeFor, setTypeFor] = useState(null);   // trade whose system-type picker is open
+  const [customTrade, setCustomTrade] = useState("");
+  const [customType, setCustomType] = useState("");
   const cur = HOUSE_STATES.find((s) => s.key === state) || HOUSE_STATES[0];
-  const spots = HOUSE_HOTSPOTS.filter((h) => h.state === state);
+  const tradesHere = HOUSE_HOTSPOTS.filter((h) => h.state === state);
   const sc = scope || {};
-  const selected = HOUSE_HOTSPOTS.filter((h) => sc[h.trade]);
-  const hoverLabel = hover ? (HOUSE_HOTSPOTS.find((h) => h.trade === hover) || {}).label : "";
+  const selectedKeys = Object.keys(sc);
+  const labelFor = (t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t;
 
-  const sidebarMaterials = (t) => {
-    const pbKey = PB_TRADE_KEY[t];
-    const own = pbKey ? (priceBook || []).filter((e) => e && String(e.trade) === pbKey && String(e.material || "").trim() && !/3-?tab/i.test(e.material)).map((e) => String(e.material).trim()) : [];
-    const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
-    const sugg = (MATERIAL_SUGGESTIONS[t] || []).filter((m) => !ownUniq.includes(m) && !/3-?tab/i.test(m));
-    return { own: ownUniq, sugg: sugg };
+  const tapTrade = (t) => {
+    if (sc[t]) { onDeselect(t); return; }
+    if (HOUSE_TYPES[t]) { setCustomType(""); setTypeFor(t); }
+    else onSelect(t);
   };
-  const pick = (t, material) => { onSelect(t, material); setSidebar(null); };
-
-  const sbTrade = sidebar;
-  const sbDef = sbTrade ? (HOUSE_HOTSPOTS.find((h) => h.trade === sbTrade) || { label: sbTrade }) : null;
-  const sbMats = sbTrade ? sidebarMaterials(sbTrade) : null;
 
   return (
     <div className="card househero" style={{ marginTop: 10, overflow: "hidden", marginLeft: -16, marginRight: -16, padding: 10 }}>
-      <style>{HOUSE_CSS}</style>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
         <img src={AL_NOTEPAD} alt="AL" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", flex: "0 0 auto" }} />
         <div>
-          <div style={{ fontWeight: 700 }}>Build your project on the house</div>
-          <div className="hint">{hoverLabel ? "👉 " + hoverLabel : cur.hint}{selected.length ? " · " + selected.length + " selected" : ""}</div>
+          <div style={{ fontWeight: 700 }}>What are we working on?</div>
+          <div className="hint">Pick a category, then tap the trades{selectedKeys.length ? " · " + selectedKeys.length + " selected" : ""}.</div>
         </div>
       </div>
 
-      {/* state toggle */}
+      {/* 1. category */}
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         {HOUSE_STATES.map((s) => (
-          <button key={s.key} className={"btn " + (state === s.key ? "primary" : "ghost")} style={{ flex: 1, padding: "6px 4px" }} onClick={() => { setState(s.key); setSidebar(null); setHover(null); }}>{s.label}</button>
+          <button key={s.key} className={"btn " + (state === s.key ? "primary" : "ghost")} style={{ flex: 1, padding: "8px 4px" }} onClick={() => { setState(s.key); setTypeFor(null); }}>{CAT_LABEL[s.key]}</button>
         ))}
       </div>
 
-      {/* image stack (crossfade) + hotspots */}
+      {/* 2. passive house visual (crossfade per category — no clickable zones) */}
       <div style={{ position: "relative", width: "100%", height: 0, paddingTop: cur.aspect + "%", transition: "padding-top .45s ease", borderRadius: 10, overflow: "hidden", background: "#dfe6ee" }}>
         {HOUSE_STATES.map((s) => (
-          <img key={s.key} src={HOUSE_IMG[s.key]} alt={s.label + " view"}
-            onError={s.key === "exterior" ? onImgError : undefined}
+          <img key={s.key} src={HOUSE_IMG[s.key]} alt={CAT_LABEL[s.key] + " view"}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", opacity: state === s.key ? 1 : 0, transform: state === s.key ? "scale(1)" : "scale(1.05)", transition: "opacity .45s ease, transform .6s ease", pointerEvents: "none" }} />
         ))}
-        {spots.map((h) => {
-          const on = !!sc[h.trade];
-          const hot = hover === h.trade;
-          return (
-            <div key={h.trade}
-              onMouseEnter={() => setHover(h.trade)} onMouseLeave={() => setHover((p) => p === h.trade ? null : p)}
-              onClick={() => setSidebar(h.trade)}
-              style={{ position: "absolute", left: h.x + "%", top: h.y + "%", width: h.w + "%", height: h.h + "%", cursor: "pointer", borderRadius: 8, background: on ? "rgba(20,160,74,.28)" : (hot ? "rgba(255,255,255,.18)" : "transparent"), border: on ? "2px solid #14a04a" : (hot ? "2px solid rgba(255,255,255,.85)" : "2px dashed rgba(255,255,255,.4)"), transition: "background .15s, border-color .15s" }}>
-              {/* always-visible compact label — works on touch (no hover needed, BUG 7) */}
-              <span style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)" + (hot ? " scale(1.1)" : ""), background: on ? "rgba(10,125,54,.96)" : "rgba(17,24,39,.82)", color: "#fff", fontSize: 10, fontWeight: 700, lineHeight: 1.1, padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap", pointerEvents: "none", zIndex: hot ? 4 : 3, boxShadow: "0 1px 3px rgba(0,0,0,.4)", transition: "transform .15s" }}>{on ? "✓ " : ""}{h.label}</span>
-            </div>
-          );
-        })}
-
-        {/* material sidebar (bottom sheet over the image) */}
-        {sbTrade && (
-          <>
-            <div onClick={() => setSidebar(null)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 4 }} />
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, maxHeight: "82%", overflowY: "auto", background: "#fff", borderTopLeftRadius: 14, borderTopRightRadius: 14, padding: 14, zIndex: 5, boxShadow: "0 -8px 24px rgba(0,0,0,.18)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <b>{sbDef.label} — pick a material</b>
-                <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setSidebar(null)}>✕</button>
-              </div>
-              {sbMats.own.length > 0 && (
-                <div style={{ marginBottom: 8 }}>
-                  <div className="seclabel" style={{ marginBottom: 4 }}>📗 From your price book</div>
-                  {sbMats.own.map((m) => (
-                    <button key={m} className="btn ghost full" style={{ justifyContent: "flex-start", marginBottom: 4, fontWeight: sc[sbTrade] === m ? 700 : 400, borderColor: sc[sbTrade] === m ? "#14a04a" : undefined }} onClick={() => pick(sbTrade, m)}>{sc[sbTrade] === m ? "✓ " : ""}{m}</button>
-                  ))}
-                </div>
-              )}
-              <div className="seclabel" style={{ marginBottom: 4 }}>{sbMats.own.length ? "Suggested" : "Materials"} <span className="hint">{PB_TRADE_KEY[sbTrade] ? "· add yours in My price book to personalize" : ""}</span></div>
-              {sbMats.sugg.map((m) => (
-                <button key={m} className="btn ghost full" style={{ justifyContent: "flex-start", marginBottom: 4, fontWeight: sc[sbTrade] === m ? 700 : 400, borderColor: sc[sbTrade] === m ? "#14a04a" : undefined }} onClick={() => pick(sbTrade, m)}>{sc[sbTrade] === m ? "✓ " : ""}{m}</button>
-              ))}
-              {sc[sbTrade] && (
-                <button className="btn ghost full" style={{ marginTop: 6, color: "#b42318" }} onClick={() => { onDeselect(sbTrade); setSidebar(null); }}>Remove {sbDef.label} from scope</button>
-              )}
-            </div>
-          </>
-        )}
       </div>
 
-      {/* scope badges */}
-      {selected.length > 0 ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-          {selected.map((h) => (
-            <span key={h.trade} onClick={() => setSidebar(h.trade)} title="Click to change material" style={{ cursor: "pointer", fontSize: 12, background: "#e7f6ec", color: "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "3px 10px" }}>
-              <b>{h.label}</b>{sc[h.trade] && sc[h.trade] !== true ? ": " + sc[h.trade] : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); onDeselect(h.trade); }}>×</span>
+      {/* 3. multi-select trades for this category */}
+      <div className="seclabel" style={{ marginTop: 10, marginBottom: 4 }}>For {CAT_LABEL[state]}, what are you doing? <span className="hint">tap all that apply</span></div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {tradesHere.map((h) => {
+          const on = !!sc[h.trade];
+          return (
+            <button key={h.trade} className={"btn " + (on ? "primary" : "ghost")} style={{ padding: "6px 10px", fontSize: 13 }} onClick={() => tapTrade(h.trade)}>
+              {on ? "✓ " : ""}{h.label}{on && sc[h.trade] !== true ? " · " + sc[h.trade] : ""}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <input value={customTrade} onChange={(e) => setCustomTrade(e.target.value)} placeholder="Something else? type a trade…" style={{ flex: 1 }} />
+        <button className="btn ghost" disabled={!customTrade.trim()} onClick={() => { onSelect(customTrade.trim()); setCustomTrade(""); }}>+ Add</button>
+      </div>
+
+      {/* 4. material TYPE / SYSTEM picker (per typed trade; Mixed = combine systems) */}
+      {typeFor && (
+        <>
+          <div onClick={() => setTypeFor(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 60 }} />
+          <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, maxHeight: "80%", overflowY: "auto", background: "#fff", borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16, zIndex: 61, boxShadow: "0 -8px 24px rgba(0,0,0,.2)", maxWidth: 560, margin: "0 auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <b>{labelFor(typeFor)} — which type / system?</b>
+              <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setTypeFor(null)}>✕</button>
+            </div>
+            {HOUSE_TYPES[typeFor].map((ty) => (
+              <button key={ty} className="btn ghost full" style={{ justifyContent: "flex-start", marginBottom: 4, fontWeight: sc[typeFor] === ty ? 700 : 400, borderColor: sc[typeFor] === ty ? "#14a04a" : undefined }} onClick={() => { onSelect(typeFor, ty); setTypeFor(null); }}>{sc[typeFor] === ty ? "✓ " : ""}{ty}</button>
+            ))}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <input value={customType} onChange={(e) => setCustomType(e.target.value)} placeholder="or type another system…" style={{ flex: 1 }} />
+              <button className="btn ghost" disabled={!customType.trim()} onClick={() => { onSelect(typeFor, customType.trim()); setTypeFor(null); }}>Use</button>
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>“Mixed” combines systems (e.g. sloped shingle + flat) — AL sizes each part separately so the bid stays accurate.</p>
+          </div>
+        </>
+      )}
+
+      {/* scope checklist (Slack-style) */}
+      {selectedKeys.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+          {selectedKeys.map((t) => (
+            <span key={t} onClick={() => { if (HOUSE_TYPES[t]) { setCustomType(""); setTypeFor(t); } }} title={HOUSE_TYPES[t] ? "Tap to change type" : ""} style={{ cursor: HOUSE_TYPES[t] ? "pointer" : "default", fontSize: 12, background: "#e7f6ec", color: "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "3px 10px" }}>
+              <b>{labelFor(t)}</b>{sc[t] && sc[t] !== true ? ": " + sc[t] : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); onDeselect(t); }}>×</span>
             </span>
           ))}
         </div>
       ) : (
-        <p className="hint" style={{ marginTop: 10 }}>Tap a part of the house to choose its material — your scope builds up here.</p>
+        <p className="hint" style={{ marginTop: 12 }}>Pick the trades you're bidding — they build up here, then AL walks each one.</p>
       )}
-      <p className="hint" style={{ marginTop: 8 }}>Selections sync with the checklist below{role === "homeowner" ? "; you'll see a price range." : "; full per-trade numbers on Build."}</p>
+      <p className="hint" style={{ marginTop: 8 }}>{role === "homeowner" ? "You'll get a price range." : "AL asks the details one trade at a time, then builds the estimate."}</p>
     </div>
   );
 }
