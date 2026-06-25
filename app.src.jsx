@@ -601,6 +601,25 @@ function computeLaborFromRateBook(items, rateBook, estDims, scope, desc) {
   return { hours: Math.round(hours), mult: mult };
 }
 
+// Realistic minimum man-hours for a sized job — RAISES an implausibly low labor
+// total (dropped tear-off/install), never lowers a legit one. Shared by the
+// categories estimator and the house non-deterministic path so roofing labor
+// can't underbid in either (the BUG-1 fix, kept DRY).
+function realisticLaborFloor(sqGuess, dims, sysStr, isRoof) {
+  if (!(sqGuess > 0)) return 0;
+  let perSq = 2; // generic sized trade (siding, etc.)
+  if (isRoof) {
+    const dl = (dims || "").toLowerCase();
+    const pm = dl.match(/(\d{1,2})\/12/);
+    const pitch = pm ? parseInt(pm[1], 10) : 0;
+    let rmult = 1.0; if (pitch >= 10) rmult = 1.45; else if (pitch >= 8) rmult = 1.35; else if (pitch >= 6) rmult = 1.2;
+    if (dl.indexOf("complex") >= 0 || (sysStr || "").indexOf("complex") >= 0) rmult = Math.min(1.5, rmult + 0.1);
+    const tearoff = /tear|re-?roof|remove|layer/.test(sysStr || "");
+    perSq = 1.8 * rmult + (tearoff ? 1.0 : 0); // pitch-adjusted install + tear-off
+  }
+  return Math.round(sqGuess * perSq);
+}
+
 const rid = () => Math.random().toString(36).slice(2, 9);
 const $0 = (n) => "$" + (Math.round(n) || 0).toLocaleString();
 const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
@@ -1460,15 +1479,85 @@ function App() {
     csvResetImport(); setPbImportOpen(false);
     flash("Committed " + added + " new + " + updated + " updated to your price book.");
   };
+  // One non-deterministic house trade (roofing, windows, kitchen, …) → an LLM
+  // estimate via the SAME server path the categories estimator uses, then a
+  // grand-total roll-up. Reuses the shared roofing-labor logic so labor can't
+  // underbid (BUG-1 fix applies here too). Uses whDims + whPhotos + the material.
+  const estimateHouseTradeLLM = async (houseTrade, material) => {
+    const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
+    const label = (HOUSE_HOTSPOTS.find((h) => h.trade === houseTrade) || {}).label || houseTrade;
+    const mat = (material && material !== true) ? String(material) : "";
+    const mkey = manualTradeKey(label + " " + mat, "");
+    const prompt =
+      "You are a senior estimator for an established, insured contractor near " + region + ". Build a DETAILED itemized estimate for ONE scope.\n" +
+      "WORK: " + label + (mat ? " — material: " + mat : "") + "\n" +
+      (whDims ? "MEASUREMENTS: " + whDims + "\n" : "") +
+      (whPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") +
+      EV_FORMULAS + TRADE_BASE_RULES + tradeModuleFor(label, mat) +
+      "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 one combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" +
+      "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
+      "Respond with ONLY raw JSON: {\"title\":str,\"trade\":str,\"items\":[{\"name\":str,\"qty\":num,\"unit\":str,\"cost\":num}],\"laborHours\":num,\"laborRate\":num,\"laborSource\":\"ratebook\"|\"estimate\",\"equipment\":num,\"taxRate\":num,\"crew\":num,\"days\":num}";
+    const content = [
+      ...whPhotos.slice(0, 3).map((ph) => ({ type: "image", source: { type: "base64", media_type: ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg", data: ph.split(",")[1] } })),
+      { type: "text", text: prompt },
+    ];
+    const text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: mkey, priceBook: enginePriceBookPayload() });
+    const d = parseJSON(text);
+    const items = Array.isArray(d.items) ? d.items.map((it) => ({ name: String(it.name || "Item"), qty: num(it.qty), unit: String(it.unit || ""), cost: Math.round(num(it.cost)) })) : [];
+    const matTotal = items.reduce((s, it) => s + num(it.cost), 0);
+    const sysStr = (label + " " + mat).toLowerCase();
+    const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane/.test(sysStr);
+    let laborHours = Math.round(num(d.laborHours) || 0);
+    const laborRate = Math.round(num(d.laborRate) || 0) || 60;
+    const calc = computeLaborFromRateBook(items, rateBook, whDims, label, mat);
+    if (calc && calc.hours > 0) laborHours = calc.hours;
+    let sqGuess = 0;
+    items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty)); });
+    if (!sqGuess && whDims) { const m = String(whDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(String(m[1]).replace(/,/g, "")) || 0) / 100; }
+    const floor = realisticLaborFloor(sqGuess, whDims, sysStr, isRoof);
+    if (floor > 0 && laborHours < floor) laborHours = floor;
+    if (laborHours <= 0) laborHours = Math.max(8, (num(d.crew) || 2) * (num(d.days) || 1) * 8);
+    const laborCost = Math.round(laborHours * laborRate);
+    const grandTotal = Math.round(matTotal + laborCost + (num(d.equipment) || 0));
+    return { trade: houseTrade, title: String(d.title || label), materialTotal: Math.round(matTotal), laborCost: laborCost, laborHours: laborHours, grandTotal: grandTotal, llm: true };
+  };
+
   const buildWholeHouse = async () => {
-    const req = (whSpecs || []).filter((t) => whChecked[t.trade]).map((t) => ({ trade: t.trade, inputs: whInputs[t.trade] || {} }));
-    if (!req.length) { flash("Add a trade the engine can size — siding, concrete, drywall, trim, insulation, electrical, plumbing, or HVAC. (Roofing, windows, etc. price from your description for now.)"); return; }
+    const detReq = (whSpecs || []).filter((t) => whChecked[t.trade]).map((t) => ({ trade: t.trade, inputs: whInputs[t.trade] || {} }));
+    const nonDet = Object.keys(houseScope).filter((t) => !PB_TRADE_KEY[t]); // roofing, windows, kitchen, …
+    if (!detReq.length && !nonDet.length) { flash("Tap the house to add at least one trade."); return; }
+    // Non-deterministic trades need a sizing source (measurements or photos).
+    if (nonDet.length && !whDims && !whPhotos.length) {
+      const labels = nonDet.map((t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t);
+      flash("Add measurements or photos (📄 Report / 📷 Photo) so I can size " + labels.join(", ") + ".");
+      return;
+    }
     setWhBusy(true); setWhResult(null);
     try {
-      const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: req, priceBook: enginePriceBookPayload() }) });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
-      setWhResult(d);
+      let byTrade = [], matTotal = 0, laborCost = 0, laborHours = 0, grandTotal = 0;
+      const priceSummary = { pricebook: 0, retail: 0, seed: 0 };
+      let errors = [];
+      // 1) deterministic trades — the engine (unchanged)
+      if (detReq.length) {
+        const res = await fetch("/.netlify/functions/estimate-multi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trades: detReq, priceBook: enginePriceBookPayload() }) });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+        const c = d.combined;
+        byTrade = byTrade.concat(c.byTrade || []);
+        matTotal += c.materialTotal || 0; laborCost += c.laborCost || 0; laborHours += c.laborHours || 0; grandTotal += c.grandTotal || 0;
+        if (c.priceSummary) { priceSummary.pricebook += c.priceSummary.pricebook || 0; priceSummary.retail += c.priceSummary.retail || 0; priceSummary.seed += c.priceSummary.seed || 0; }
+        errors = errors.concat(d.errors || []);
+      }
+      // 2) non-deterministic trades — the LLM estimator, one at a time
+      for (const t of nonDet) {
+        try {
+          const r = await estimateHouseTradeLLM(t, houseScope[t]);
+          byTrade.push({ trade: t, title: r.title, materialTotal: r.materialTotal, laborCost: r.laborCost, grandTotal: r.grandTotal, llm: true });
+          matTotal += r.materialTotal; laborCost += r.laborCost; laborHours += r.laborHours; grandTotal += r.grandTotal;
+        } catch (e) { errors.push({ trade: t, error: errMsg(e) }); }
+      }
+      if (!byTrade.length) throw new Error(errors.length ? (errors[0].error || "no trades estimated") : "no trades estimated");
+      setWhResult({ deterministic: true, engine: "deterministic-multi", combined: { byTrade: byTrade, materialTotal: Math.round(matTotal), laborCost: Math.round(laborCost), laborHours: Math.round(laborHours), grandTotal: Math.round(grandTotal), priceSummary: priceSummary, tradeCount: byTrade.length }, errors: errors });
     } catch (e) { flash("Combined estimate failed: " + errMsg(e)); }
     setWhBusy(false);
   };
@@ -2250,22 +2339,9 @@ function App() {
         let sqGuess = 0;
         items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
         if (!sqGuess && estDims) { const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
-        // Realistic minimum man-hours for a sized job. This RAISES an implausibly
-        // low total (dropped tear-off/install) and never lowers a legit one.
-        if (sqGuess > 0) {
-          let perSq = 2; // generic sized trade (siding, etc.)
-          if (isRoof) {
-            const dl3 = (estDims || "").toLowerCase();
-            const pm = dl3.match(/(\d{1,2})\/12/);
-            const pitch = pm ? parseInt(pm[1], 10) : 0;
-            let rmult = 1.0; if (pitch >= 10) rmult = 1.45; else if (pitch >= 8) rmult = 1.35; else if (pitch >= 6) rmult = 1.2;
-            if (dl3.indexOf("complex") >= 0 || sysStr.indexOf("complex") >= 0) rmult = Math.min(1.5, rmult + 0.1);
-            const tearoff = /tear|re-?roof|remove|layer/.test(sysStr);
-            perSq = 1.8 * rmult + (tearoff ? 1.0 : 0); // pitch-adjusted install + tear-off
-          }
-          const floor = Math.round(sqGuess * perSq);
-          if (laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
-        }
+        // Realistic minimum man-hours for a sized job (shared helper; BUG-1 fix).
+        const floor = realisticLaborFloor(sqGuess, estDims, sysStr, isRoof);
+        if (floor > 0 && laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
       }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
       if (laborRate <= 0) laborRate = 60;
@@ -4548,6 +4624,12 @@ function App() {
                 if (!sel.length) return "Tap parts of the house below to add them to your job — roof, siding, kitchen, HVAC, whatever you're bidding. I'll help size each one.";
                 const q = whNextQuestion();
                 if (q) return "Got " + sel.length + " trade" + (sel.length > 1 ? "s" : "") + " so far." + (whDims ? " I pulled what I could from your upload." : "") + " What's the " + String(q.inp.label).toLowerCase() + " for " + q.tradeLabel + "?";
+                // non-deterministic trades (roofing, windows, kitchen…) need a sizing source before I can bid them
+                const nonDet = sel.filter((t) => !PB_TRADE_KEY[t]);
+                if (nonDet.length && !whDims && !whPhotos.length) {
+                  const labels = nonDet.map((t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t);
+                  return "To size " + labels.join(", ") + " I need measurements or photos — tap 📄 Report to add an EagleView or Polycam, or 📷 Photo. Then I can build it.";
+                }
                 return "Looks like I've got what I need for your " + sel.length + " selected trade" + (sel.length > 1 ? "s" : "") + ". Scroll down and hit Build Estimate.";
               })()}
             </div>
