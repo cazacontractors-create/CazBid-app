@@ -65,6 +65,7 @@ const MATCOST_KEY = "cazbid-matcosts-v1";
 const PRICEBOOK_KEY = "cazbid-pricebook-v1";
 const RATEBOOK_KEY = "cazbid-ratebook-v1";
 const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
+const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -1291,6 +1292,12 @@ function App() {
   const [notifs, setNotifs] = useState([]);
   const [answers, setAnswers] = useState({});
   const [priorQA, setPriorQA] = useState([]); // accumulated {q,a} from earlier question rounds
+  // ---- AI trade builder (Feature A) ----
+  const [aiTrades, setAiTrades] = useState([]);      // saved AI-built trade defs
+  const [aiTradeDesc, setAiTradeDesc] = useState(""); // builder input
+  const [aiTradeBusy, setAiTradeBusy] = useState(false);
+  const [aiTradeDraft, setAiTradeDraft] = useState(null); // generated def under review
+  const aiActiveTrade = useRef(null);                // def to inject into the next estimate
   // ---- contractor Pro estimator ----
   const [estDesc, setEstDesc] = useState("");
   const [estPhotos, setEstPhotos] = useState([]);
@@ -1670,6 +1677,8 @@ function App() {
       if (rbz && Array.isArray(rbz) && rbz.length) setRateBook(rbz);
       const epb = await pGet(ENGINE_PB_KEY);
       if (epb && Array.isArray(epb)) setEnginePB(epb);
+      const ait = await pGet(AI_TRADES_KEY);
+      if (ait && Array.isArray(ait)) setAiTrades(ait);
       loaded.current = true;
     })();
   }, []);
@@ -2227,6 +2236,43 @@ function App() {
     "- Drip edge (10ft pieces): (Total eave+rake LF x 1.15) / 10, round up.\n" +
     "- W-valley 14in (10ft pieces): Valleys LF / 50, round up.\n" +
     "- Step flashing (bundles/pieces): StepFlash LF / 25, round up.\n";
+  // ---- AI trade builder (Feature A) helpers ----
+  const aiTradeModule = (t) => {
+    if (!t) return "";
+    let s = "AI-BUILT TRADE DEFINITION for \"" + t.trade + "\" — use this as the takeoff blueprint (the contractor will verify):\n";
+    if (t.summary) s += "Scope: " + t.summary + "\n";
+    if (t.materials && t.materials.length) s += "Material lines (item | unit | est $/unit | qty basis):\n" + t.materials.map((m) => "- " + m.item + " | " + m.unit + " | $" + m.unitCost + " | " + (m.qtyBasis || "")).join("\n") + "\n";
+    if (t.labor && t.labor.basis) s += "Labor: " + t.labor.ratePerUnit + " MH per " + t.labor.unit + " (" + t.labor.basis + ")\n";
+    if (t.equipment) s += "Equipment (put $ in the equipment field, not items): " + t.equipment + "\n";
+    s += "Build the itemized takeoff from these lines using the job's measurements; keep the given unit costs unless the contractor's price book matches better.\n";
+    return s;
+  };
+  const buildAiTrade = async () => {
+    const desc = aiTradeDesc.trim();
+    if (!desc) { flash("Describe the trade first."); return; }
+    setAiTradeBusy(true); setAiTradeDraft(null);
+    try {
+      const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
+      const pb = [].concat((matCosts || []).map((m) => ({ name: m.name, unit: m.unit, cost: m.cost })), (priceBook || []).map((m) => ({ name: m.name, unit: m.unit, cost: m.price })));
+      const res = await fetch("/.netlify/functions/build-trade", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: desc, description: desc, region: region, priceBook: pb }) });
+      const d = await res.json();
+      if (!res.ok || !d.trade) throw new Error(d.error || "couldn't build the trade");
+      setAiTradeDraft(d.trade);
+    } catch (e) { flash("AI trade build failed: " + errMsg(e)); }
+    setAiTradeBusy(false);
+  };
+  const saveAiTrade = (t) => {
+    const next = [t].concat(aiTrades.filter((x) => x.trade.toLowerCase() !== t.trade.toLowerCase())).slice(0, 40);
+    setAiTrades(next); pSet(AI_TRADES_KEY, next);
+    flash("Saved “" + t.trade + "” — flagged AI until a real job calibrates it.");
+  };
+  const delAiTrade = (name) => { const next = aiTrades.filter((x) => x.trade !== name); setAiTrades(next); pSet(AI_TRADES_KEY, next); };
+  const useAiTrade = (t) => {
+    aiActiveTrade.current = t;
+    setEstScope(t.trade); setEstDesc(t.summary || t.trade); setAiTradeDraft(null);
+    flash("Loaded “" + t.trade + "” — add measurements if any, then Build estimate.");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const runEstimate = async () => {
     if (!estScope && !estOpenDesc.trim() && !estDesc.trim() && !estPhotos.length && !estDims) { flash("Pick a work type or describe the job first."); return; }
     setEstBusy("run");
@@ -2248,6 +2294,7 @@ function App() {
         "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" +
         TRADE_BASE_RULES +
         tradeModuleFor(estScope, estDesc) +
+        ((aiActiveTrade.current && aiActiveTrade.current.trade === estScope) ? aiTradeModule(aiActiveTrade.current) : "") +
         "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" +
         "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" +
         "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" +
@@ -2361,6 +2408,7 @@ function App() {
         crew: crewN, days: daysFinal, notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded, manualKey: __manualKey,
+        aiBuilt: !!(aiActiveTrade.current && aiActiveTrade.current.trade === estScope),
       });
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
@@ -4388,9 +4436,51 @@ function App() {
                     <div className="oratext">or tell me about the job</div>
                     <textarea className="desc" rows={2} value={estOpenDesc} onChange={(e) => setEstOpenDesc(e.target.value)}
                       placeholder="e.g. 22sq architectural reroof, one layer tear-off, 6/12 ranch, replace 3 sheets decking" />
-                    <button className="btn primary full" disabled={estBusy === "run" || !estOpenDesc.trim()} onClick={() => { setEstDesc(estOpenDesc); runEstimate(); }}>
+                    <button className="btn primary full" disabled={estBusy === "run" || !estOpenDesc.trim()} onClick={() => { setEstDesc(estOpenDesc); aiActiveTrade.current = null; runEstimate(); }}>
                       {estBusy === "run" ? "Building takeoff…" : "✦ Build from description"}
                     </button>
+
+                    {/* AI TRADE BUILDER (Feature A) — for trades not in the list */}
+                    <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 12 }}>
+                      <div className="seclabel">🤖 Custom / unlisted trade <span className="hint">AI builds a reusable trade — verify before bidding</span></div>
+                      <textarea className="desc" rows={2} value={aiTradeDesc} onChange={(e) => setAiTradeDesc(e.target.value)} placeholder="e.g. epoxy garage floor coating, radon mitigation, stucco patch" />
+                      <button className="btn ghost full" disabled={aiTradeBusy || !aiTradeDesc.trim()} onClick={buildAiTrade}>{aiTradeBusy ? "Building trade…" : "🤖 Build this trade with AI"}</button>
+                      {aiTradeDraft && (
+                        <div className="card" style={{ marginTop: 10, background: "#FFFBF4", border: "1px solid #F2C98A" }}>
+                          <div style={{ fontWeight: 700 }}>{aiTradeDraft.trade} <span className="hint">· {Math.round((aiTradeDraft.confidence || 0) * 100)}% confidence</span></div>
+                          {aiTradeDraft.summary && <p className="hint">{aiTradeDraft.summary}</p>}
+                          {aiTradeDraft.inputs && aiTradeDraft.inputs.length > 0 && <p className="hint"><b>Needs:</b> {aiTradeDraft.inputs.map((i) => i.name + (i.unit ? " (" + i.unit + ")" : "")).join(", ")}</p>}
+                          {aiTradeDraft.materials && aiTradeDraft.materials.length > 0 && (
+                            <div style={{ marginTop: 6 }}>
+                              <div className="seclabel">Materials</div>
+                              {aiTradeDraft.materials.map((m, i) => (<div key={i} className="costrow"><span>{m.item} <span className="hint">{m.source === "pricebook" ? "📗 book" : "~est"}</span></span><b>{$0(m.unitCost)}/{m.unit}</b></div>))}
+                            </div>
+                          )}
+                          {aiTradeDraft.labor && aiTradeDraft.labor.basis && <p className="hint" style={{ marginTop: 6 }}><b>Labor:</b> {aiTradeDraft.labor.ratePerUnit} MH/{aiTradeDraft.labor.unit} — {aiTradeDraft.labor.basis}</p>}
+                          {aiTradeDraft.equipment && <p className="hint"><b>Equipment:</b> {aiTradeDraft.equipment}</p>}
+                          {aiTradeDraft.caveats && aiTradeDraft.caveats.length > 0 && (
+                            <div style={{ marginTop: 6 }}><div className="seclabel" style={{ color: "#8A5A12" }}>⚠️ Verify</div>{aiTradeDraft.caveats.map((c, i) => (<div key={i} className="hint">• {c}</div>))}</div>
+                          )}
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button className="btn primary grow1" onClick={() => useAiTrade(aiTradeDraft)}>Use for estimate</button>
+                            <button className="btn ghost" onClick={() => saveAiTrade(aiTradeDraft)}>Save</button>
+                            <button className="btn ghost" onClick={() => setAiTradeDraft(null)}>✕</button>
+                          </div>
+                        </div>
+                      )}
+                      {aiTrades.length > 0 && (
+                        <div style={{ marginTop: 10 }}>
+                          <div className="seclabel">My AI trades <span className="hint">tap to estimate · flagged until calibrated</span></div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                            {aiTrades.map((t) => (
+                              <span key={t.trade} style={{ fontSize: 12, background: "#FFF4E6", color: "#8A5A12", border: "1px solid #F2C98A", borderRadius: 12, padding: "3px 10px", cursor: "pointer" }} onClick={() => useAiTrade(t)}>
+                                🤖 {t.trade}{t.calibratedJobs > 0 ? " ✓" : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); delAiTrade(t.trade); }}>×</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   )
                 ) : (
@@ -4484,6 +4574,9 @@ function App() {
                 return (
                   <section className="card">
                     <div className="h1">{estResult.title}</div>
+                    {estResult.aiBuilt && (
+                      <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>🤖 AI-built trade — VERIFY before bidding. Material prices are AI estimates until a real job calibrates them.</div>
+                    )}
                     {estResult.manualLoaded
                       ? <div className="manualbadge on">📘 Caza {estResult.manualKey} manual loaded</div>
                       : (estResult.manualKey

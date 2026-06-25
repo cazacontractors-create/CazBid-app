@@ -581,6 +581,7 @@ const MATCOST_KEY = "cazbid-matcosts-v1";
 const PRICEBOOK_KEY = "cazbid-pricebook-v1";
 const RATEBOOK_KEY = "cazbid-ratebook-v1";
 const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
+const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const SEED_PRICES = [{
   id: "pb_acm_aluminum_roll_valley_flashing",
   cat: "Sloped roof",
@@ -3419,6 +3420,12 @@ function App() {
   const [notifs, setNotifs] = useState([]);
   const [answers, setAnswers] = useState({});
   const [priorQA, setPriorQA] = useState([]); // accumulated {q,a} from earlier question rounds
+  // ---- AI trade builder (Feature A) ----
+  const [aiTrades, setAiTrades] = useState([]); // saved AI-built trade defs
+  const [aiTradeDesc, setAiTradeDesc] = useState(""); // builder input
+  const [aiTradeBusy, setAiTradeBusy] = useState(false);
+  const [aiTradeDraft, setAiTradeDraft] = useState(null); // generated def under review
+  const aiActiveTrade = useRef(null); // def to inject into the next estimate
   // ---- contractor Pro estimator ----
   const [estDesc, setEstDesc] = useState("");
   const [estPhotos, setEstPhotos] = useState([]);
@@ -4159,6 +4166,8 @@ function App() {
       if (rbz && Array.isArray(rbz) && rbz.length) setRateBook(rbz);
       const epb = await pGet(ENGINE_PB_KEY);
       if (epb && Array.isArray(epb)) setEnginePB(epb);
+      const ait = await pGet(AI_TRADES_KEY);
+      if (ait && Array.isArray(ait)) setAiTrades(ait);
       loaded.current = true;
     })();
   }, []);
@@ -5035,6 +5044,78 @@ function App() {
   };
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" + "- Field shingles (squares): (Area sqft x 1.12) / 100, round up to whole square.\n" + "- Starter (bundles): (Eaves LF x 1.10) / 100, round up to bundle.\n" + "- Hip/Ridge caps (bundles): ((Ridges LF + Hips LF) x 1.10) / 30, round up to bundle.\n" + "- Ice & water (rolls): ((Eaves x 2) + Valleys + Flashing + StepFlash) / 66, round up.\n" + "- Drip edge (10ft pieces): (Total eave+rake LF x 1.15) / 10, round up.\n" + "- W-valley 14in (10ft pieces): Valleys LF / 50, round up.\n" + "- Step flashing (bundles/pieces): StepFlash LF / 25, round up.\n";
+  // ---- AI trade builder (Feature A) helpers ----
+  const aiTradeModule = t => {
+    if (!t) return "";
+    let s = "AI-BUILT TRADE DEFINITION for \"" + t.trade + "\" — use this as the takeoff blueprint (the contractor will verify):\n";
+    if (t.summary) s += "Scope: " + t.summary + "\n";
+    if (t.materials && t.materials.length) s += "Material lines (item | unit | est $/unit | qty basis):\n" + t.materials.map(m => "- " + m.item + " | " + m.unit + " | $" + m.unitCost + " | " + (m.qtyBasis || "")).join("\n") + "\n";
+    if (t.labor && t.labor.basis) s += "Labor: " + t.labor.ratePerUnit + " MH per " + t.labor.unit + " (" + t.labor.basis + ")\n";
+    if (t.equipment) s += "Equipment (put $ in the equipment field, not items): " + t.equipment + "\n";
+    s += "Build the itemized takeoff from these lines using the job's measurements; keep the given unit costs unless the contractor's price book matches better.\n";
+    return s;
+  };
+  const buildAiTrade = async () => {
+    const desc = aiTradeDesc.trim();
+    if (!desc) {
+      flash("Describe the trade first.");
+      return;
+    }
+    setAiTradeBusy(true);
+    setAiTradeDraft(null);
+    try {
+      const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
+      const pb = [].concat((matCosts || []).map(m => ({
+        name: m.name,
+        unit: m.unit,
+        cost: m.cost
+      })), (priceBook || []).map(m => ({
+        name: m.name,
+        unit: m.unit,
+        cost: m.price
+      })));
+      const res = await fetch("/.netlify/functions/build-trade", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          scope: desc,
+          description: desc,
+          region: region,
+          priceBook: pb
+        })
+      });
+      const d = await res.json();
+      if (!res.ok || !d.trade) throw new Error(d.error || "couldn't build the trade");
+      setAiTradeDraft(d.trade);
+    } catch (e) {
+      flash("AI trade build failed: " + errMsg(e));
+    }
+    setAiTradeBusy(false);
+  };
+  const saveAiTrade = t => {
+    const next = [t].concat(aiTrades.filter(x => x.trade.toLowerCase() !== t.trade.toLowerCase())).slice(0, 40);
+    setAiTrades(next);
+    pSet(AI_TRADES_KEY, next);
+    flash("Saved “" + t.trade + "” — flagged AI until a real job calibrates it.");
+  };
+  const delAiTrade = name => {
+    const next = aiTrades.filter(x => x.trade !== name);
+    setAiTrades(next);
+    pSet(AI_TRADES_KEY, next);
+  };
+  const useAiTrade = t => {
+    aiActiveTrade.current = t;
+    setEstScope(t.trade);
+    setEstDesc(t.summary || t.trade);
+    setAiTradeDraft(null);
+    flash("Loaded “" + t.trade + "” — add measurements if any, then Build estimate.");
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth"
+    });
+  };
   const runEstimate = async () => {
     if (!estScope && !estOpenDesc.trim() && !estDesc.trim() && !estPhotos.length && !estDims) {
       flash("Pick a work type or describe the job first.");
@@ -5047,7 +5128,7 @@ function App() {
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
       const __manualKey = manualTradeKey(estScope, estDesc);
-      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (estDesc.trim() || "(see photos)") + "\n" + (estDims ? estDims + "\n" : "") + (estScope ? "WORK TYPE: " + estScope + "\n" : "") + (dimsText() ? "DIMENSIONS (use these exact numbers in the takeoff): " + dimsText() + "\n" : "") + (estPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(estScope, estDesc) + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (estDesc.trim() || "(see photos)") + "\n" + (estDims ? estDims + "\n" : "") + (estScope ? "WORK TYPE: " + estScope + "\n" : "") + (dimsText() ? "DIMENSIONS (use these exact numbers in the takeoff): " + dimsText() + "\n" : "") + (estPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(estScope, estDesc) + (aiActiveTrade.current && aiActiveTrade.current.trade === estScope ? aiTradeModule(aiActiveTrade.current) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [...estPhotos.slice(0, 3).map(ph => {
         const mt = ph.startsWith("data:") ? ph.substring(5, ph.indexOf(";")) || "image/jpeg" : "image/jpeg";
         return {
@@ -5237,7 +5318,8 @@ function App() {
         notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map(c => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded,
-        manualKey: __manualKey
+        manualKey: __manualKey,
+        aiBuilt: !!(aiActiveTrade.current && aiActiveTrade.current.trade === estScope)
       });
     } catch (e) {
       flash("Estimate failed: " + errMsg(e));
@@ -8602,9 +8684,127 @@ function App() {
     disabled: estBusy === "run" || !estOpenDesc.trim(),
     onClick: () => {
       setEstDesc(estOpenDesc);
+      aiActiveTrade.current = null;
       runEstimate();
     }
-  }, estBusy === "run" ? "Building takeoff…" : "✦ Build from description")) : /*#__PURE__*/React.createElement("div", {
+  }, estBusy === "run" ? "Building takeoff…" : "✦ Build from description"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #eee",
+      paddingTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "🤖 Custom / unlisted trade ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "AI builds a reusable trade — verify before bidding")), /*#__PURE__*/React.createElement("textarea", {
+    className: "desc",
+    rows: 2,
+    value: aiTradeDesc,
+    onChange: e => setAiTradeDesc(e.target.value),
+    placeholder: "e.g. epoxy garage floor coating, radon mitigation, stucco patch"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    disabled: aiTradeBusy || !aiTradeDesc.trim(),
+    onClick: buildAiTrade
+  }, aiTradeBusy ? "Building trade…" : "🤖 Build this trade with AI"), aiTradeDraft && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10,
+      background: "#FFFBF4",
+      border: "1px solid #F2C98A"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700
+    }
+  }, aiTradeDraft.trade, " ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "· ", Math.round((aiTradeDraft.confidence || 0) * 100), "% confidence")), aiTradeDraft.summary && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, aiTradeDraft.summary), aiTradeDraft.inputs && aiTradeDraft.inputs.length > 0 && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, /*#__PURE__*/React.createElement("b", null, "Needs:"), " ", aiTradeDraft.inputs.map(i => i.name + (i.unit ? " (" + i.unit + ")" : "")).join(", ")), aiTradeDraft.materials && aiTradeDraft.materials.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "Materials"), aiTradeDraft.materials.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "costrow"
+  }, /*#__PURE__*/React.createElement("span", null, m.item, " ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, m.source === "pricebook" ? "📗 book" : "~est")), /*#__PURE__*/React.createElement("b", null, $0(m.unitCost), "/", m.unit)))), aiTradeDraft.labor && aiTradeDraft.labor.basis && /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "Labor:"), " ", aiTradeDraft.labor.ratePerUnit, " MH/", aiTradeDraft.labor.unit, " — ", aiTradeDraft.labor.basis), aiTradeDraft.equipment && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, /*#__PURE__*/React.createElement("b", null, "Equipment:"), " ", aiTradeDraft.equipment), aiTradeDraft.caveats && aiTradeDraft.caveats.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      color: "#8A5A12"
+    }
+  }, "⚠️ Verify"), aiTradeDraft.caveats.map((c, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "hint"
+  }, "• ", c))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn primary grow1",
+    onClick: () => useAiTrade(aiTradeDraft)
+  }, "Use for estimate"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => saveAiTrade(aiTradeDraft)
+  }, "Save"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setAiTradeDraft(null)
+  }, "✕"))), aiTrades.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "My AI trades ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "tap to estimate · flagged until calibrated")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      marginTop: 4
+    }
+  }, aiTrades.map(t => /*#__PURE__*/React.createElement("span", {
+    key: t.trade,
+    style: {
+      fontSize: 12,
+      background: "#FFF4E6",
+      color: "#8A5A12",
+      border: "1px solid #F2C98A",
+      borderRadius: 12,
+      padding: "3px 10px",
+      cursor: "pointer"
+    },
+    onClick: () => useAiTrade(t)
+  }, "🤖 ", t.trade, t.calibratedJobs > 0 ? " ✓" : "", " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700
+    },
+    onClick: e => {
+      e.stopPropagation();
+      delAiTrade(t.trade);
+    }
+  }, "×"))))))) : /*#__PURE__*/React.createElement("div", {
     className: "popin"
   }, /*#__PURE__*/React.createElement("button", {
     className: "scopepick",
@@ -8814,7 +9014,18 @@ function App() {
       className: "card"
     }, /*#__PURE__*/React.createElement("div", {
       className: "h1"
-    }, estResult.title), estResult.manualLoaded ? /*#__PURE__*/React.createElement("div", {
+    }, estResult.title), estResult.aiBuilt && /*#__PURE__*/React.createElement("div", {
+      style: {
+        margin: "4px 0 8px",
+        padding: "8px 11px",
+        background: "#FFF4E6",
+        border: "1px solid #F2C98A",
+        borderRadius: 10,
+        fontSize: 12.5,
+        color: "#8A5A12",
+        fontWeight: 600
+      }
+    }, "🤖 AI-built trade — VERIFY before bidding. Material prices are AI estimates until a real job calibrates them."), estResult.manualLoaded ? /*#__PURE__*/React.createElement("div", {
       className: "manualbadge on"
     }, "📘 Caza ", estResult.manualKey, " manual loaded") : estResult.manualKey ? /*#__PURE__*/React.createElement("div", {
       className: "manualbadge off"
