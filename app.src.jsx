@@ -1306,6 +1306,9 @@ function App() {
   const [whReportBusy, setWhReportBusy] = useState(false);
   const [whPhotos, setWhPhotos] = useState([]);    // jobsite photos (Photo button)
   const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
+  const [alMsgs, setAlMsgs] = useState([]);        // house AL chat thread [{role:"ai"|"me", text}]
+  const [alInput, setAlInput] = useState("");
+  const [alBusy, setAlBusy] = useState(false);
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -2253,6 +2256,57 @@ function App() {
       }
     }
     return null;
+  };
+  // ---- BUG 9: two-way AL chat (house side). Real text thread, context-aware,
+  // asks only gaps, answers questions, and writes captured measurements back into
+  // the job (whDims / whInputs) so they feed the bid on Build. ----
+  const alContext = () => {
+    const sel = Object.keys(houseScope);
+    const trades = sel.length
+      ? sel.map((t) => { const lbl = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t; const m = houseScope[t]; return "- " + lbl + (m && m !== true ? " (material: " + m + ")" : " (no material chosen yet)"); }).join("\n")
+      : "(none yet — tell them to tap the house, or capture what they describe)";
+    let known = whDims ? ("Measurements on file: " + whDims + "\n") : "";
+    const entered = sel.map((t) => { const k = PB_TRADE_KEY[t]; const f = k && whInputs[k]; if (!f) return null; const vals = Object.keys(f).filter((x) => x !== "complexityFactor" && num(f[x]) > 0).map((x) => x + "=" + f[x]); return vals.length ? (((HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t) + ": " + vals.join(", ")) : null; }).filter(Boolean).join("\n");
+    if (entered) known += "Dimensions entered:\n" + entered + "\n";
+    if (whPhotos.length) known += whPhotos.length + " jobsite photo(s) attached.\n";
+    // deterministic trades still missing a required field
+    const gaps = (whSpecs || []).filter((s) => whChecked[s.trade]).map((s) => { const miss = s.inputs.filter((inp) => inp.required && !(whInputs[s.trade] && num(whInputs[s.trade][inp.name]) > 0)).map((inp) => inp.label); return miss.length ? (s.label + ": " + miss.join(", ")) : null; }).filter(Boolean).join("\n");
+    return "SELECTED TRADES:\n" + trades + "\n" + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
+  };
+  const AL_HOUSE_SYS = (ctx) =>
+    "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " +
+    "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " +
+    "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " +
+    "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to tap the house or describe the job. " +
+    "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
+  const alOpener = () => {
+    const sel = Object.keys(houseScope);
+    if (!sel.length) return "Hey, I'm AL. Tap parts of the house below to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
+    const labels = sel.map((t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t);
+    const nonDet = sel.filter((t) => !PB_TRADE_KEY[t]);
+    if (nonDet.length && !whDims && !whPhotos.length) return "Got " + labels.join(", ") + ". To size that I'll need measurements or photos — tap 📄 Report or 📷 Photo, or just tell me the numbers right here.";
+    return "Got " + labels.join(", ") + (whDims ? " plus your measurements" : "") + ". Ask me anything, or tell me the details and I'll get it ready to build.";
+  };
+  const alSend = async (textArg) => {
+    const text = (textArg != null ? textArg : alInput).trim();
+    if (!text || alBusy) return;
+    const msgs = [...alMsgs, { role: "me", text: text }];
+    setAlMsgs(msgs); setAlInput(""); setAlBusy(true);
+    try {
+      const history = msgs.map((m) => (m.role === "ai" ? "AL" : "CONTRACTOR") + ": " + m.text).join("\n");
+      const userText = AL_HOUSE_SYS(alContext()) + "\n\nCONVERSATION SO FAR:\n" + history + "\n\nReply now as AL — output ONLY the JSON object, nothing before or after.";
+      const reply = await callClaude([{ role: "user", content: [{ type: "text", text: userText }] }]);
+      let d; try { d = parseJSON(reply); } catch (e) { d = { message: (reply || "").replace(/```json|```/g, "").trim().slice(0, 400) }; }
+      setAlMsgs([...msgs, { role: "ai", text: String(d.message || "Got it.") }]);
+      if (d.dims && String(d.dims).trim()) setWhDims((prev) => (prev ? (prev + "; " + String(d.dims).trim()) : String(d.dims).trim()).slice(0, 600));
+      if (d.inputs && typeof d.inputs === "object") {
+        Object.keys(d.inputs).forEach((k) => { const f = d.inputs[k]; if (f && typeof f === "object") Object.keys(f).forEach((field) => { const v = f[field]; if (v != null && v !== "") whSet(k, field, typeof v === "number" ? v : num(v)); }); });
+      }
+    } catch (e) {
+      setAlMsgs([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
+    }
+    setAlBusy(false);
   };
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" +
@@ -4655,41 +4709,26 @@ function App() {
             {!whPhotos.length && !whDims && !whReportBusy && <p className="hint">Add jobsite photos or a measurement report with the buttons below — AL uses them to size the job.</p>}
           </section>
 
-          {/* 2 · AL CONVERSATION ZONE */}
+          {/* 2 · AL CONVERSATION ZONE — real two-way chat (BUG 9) */}
           <section className="card">
-            <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div></div>
-            <div className="convbubble ai" style={{ marginTop: 6 }}>
-              {(() => {
-                const sel = Object.keys(houseScope);
-                if (!sel.length) return "Tap parts of the house below to add them to your job — roof, siding, kitchen, HVAC, whatever you're bidding. I'll help size each one.";
-                const q = whNextQuestion();
-                if (q) return "Got " + sel.length + " trade" + (sel.length > 1 ? "s" : "") + " so far." + (whDims ? " I pulled what I could from your upload." : "") + " What's the " + String(q.inp.label).toLowerCase() + " for " + q.tradeLabel + "?";
-                // non-deterministic trades (roofing, windows, kitchen…) need a sizing source before I can bid them
-                const nonDet = sel.filter((t) => !PB_TRADE_KEY[t]);
-                if (nonDet.length && !whDims && !whPhotos.length) {
-                  const labels = nonDet.map((t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t);
-                  return "To size " + labels.join(", ") + " I need measurements or photos — tap 📄 Report to add an EagleView or Polycam, or 📷 Photo. Then I can build it.";
-                }
-                return "Looks like I've got what I need for your " + sel.length + " selected trade" + (sel.length > 1 ? "s" : "") + ". Scroll down and hit Build Estimate.";
-              })()}
+            <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div><span className="hint" style={{ marginLeft: "auto" }}>ask or tell him about the job</span></div>
+            <div className="convmsgs" style={{ maxHeight: 240, overflowY: "auto", marginTop: 6 }}>
+              {alMsgs.length === 0 && (
+                <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{alOpener()}</div></div>
+              )}
+              {alMsgs.map((m, i) => (
+                m.role === "ai"
+                  ? <div className="convrow ai" key={i}><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{m.text}</div></div>
+                  : <div className="convbubble me" key={i}>{m.text}</div>
+              ))}
+              {alBusy && (
+                <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai typing"><span></span><span></span><span></span></div></div>
+              )}
             </div>
-            {(() => {
-              if (!Object.keys(houseScope).length) return null;
-              const q = whNextQuestion();
-              if (!q) return null;
-              return (
-                <div className="estfields" style={{ marginTop: 8 }}>
-                  <label className="estf">
-                    <span>{q.inp.label}{q.inp.unit ? " (" + q.inp.unit + ")" : ""} — {q.tradeLabel}</span>
-                    {q.inp.type === "enum"
-                      ? <select value={(whInputs[q.trade] && whInputs[q.trade][q.inp.name] != null) ? whInputs[q.trade][q.inp.name] : q.inp.default} onChange={(e) => whSet(q.trade, q.inp.name, e.target.value)}>
-                          {(q.inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
-                        </select>
-                      : <input type="number" value={(whInputs[q.trade] && num(whInputs[q.trade][q.inp.name]) > 0) ? whInputs[q.trade][q.inp.name] : ""} onChange={(e) => whSet(q.trade, q.inp.name, num(e.target.value))} placeholder={"Answer for " + q.tradeLabel} />}
-                  </label>
-                </div>
-              );
-            })()}
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder="e.g. “west slope is 8/12” or “what do you still need?”" style={{ flex: 1 }} />
+              <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
+            </div>
           </section>
 
           {/* 3 · CONTRACTOR CONTEXT TOOLS (above the house) */}
