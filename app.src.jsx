@@ -1122,9 +1122,9 @@ const HOUSE_IMG = {
 // paddingTop % = image height/width, so the box matches each render's aspect and
 // object-fit:cover never crops (keeps hotspot %-coords aligned to the image).
 const HOUSE_STATES = [
-  { key: "exterior", label: "Outside", aspect: 33.06, hint: "Tap the roof, siding, windows, doors, or garage." },
-  { key: "interior", label: "Inside", aspect: 66.40, hint: "Roof's off — tap rooms, flooring, drywall, or trim." },
-  { key: "systems", label: "Systems", aspect: 56.28, hint: "Walls cut away — tap HVAC, electrical, plumbing, or insulation." },
+  { key: "exterior", label: "Outside", aspect: 33.06, hint: "Roof, siding, windows, doors, garage." },
+  { key: "interior", label: "Inside", aspect: 66.40, hint: "Roof's off — rooms, flooring, drywall, trim." },
+  { key: "systems", label: "Systems", aspect: 56.28, hint: "Walls cut away — HVAC, electrical, plumbing, insulation." },
 ];
 // Invisible hotspots, positioned as % of the image box {x,y,w,h}. Rough starting
 // placements over each render — refine on-device. trade = scope key.
@@ -1298,6 +1298,48 @@ function InteractiveHouse(props) {
   return <ImageHouse scope={props.scope} onSelect={props.onSelect} onDeselect={props.onDeselect} priceBook={props.priceBook} role={props.role} />;
 }
 
+const TRADE_LABEL = (t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t;
+// Pure VISUAL house — reacts to the conversation, never tapped. Crossfades between
+// the three render states per category and brightens the active/selected trade
+// area(s), dimming the rest. No clickable hotspots, no hover labels.
+function HouseVisual({ view, selected, activeTrade }) {
+  const cur = HOUSE_STATES.find((s) => s.key === view) || HOUSE_STATES[0];
+  const sel = selected || {};
+  const here = HOUSE_HOTSPOTS.filter((h) => h.state === view && sel[h.trade]);
+  const anyHL = here.length > 0;
+  const activeHere = activeTrade && HOUSE_HOTSPOTS.find((h) => h.state === view && h.trade === activeTrade);
+  return (
+    <div className="card househero" style={{ marginTop: 10, overflow: "hidden", padding: 10 }}>
+      {/* category tabs — read-only status, the chat drives them */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        {HOUSE_STATES.map((s) => (
+          <div key={s.key} style={{ flex: 1, textAlign: "center", padding: "5px 2px", fontSize: 12, fontWeight: view === s.key ? 700 : 500, color: view === s.key ? "#0a7d36" : "#9aa3ad", borderBottom: view === s.key ? "2px solid #0a7d36" : "2px solid #eef0f2", transition: "color .3s" }}>{CAT_LABEL[s.key]}</div>
+        ))}
+      </div>
+      <div style={{ position: "relative", width: "100%", height: 0, paddingTop: cur.aspect + "%", transition: "padding-top .45s ease", borderRadius: 10, overflow: "hidden", background: "#dfe6ee" }}>
+        {HOUSE_STATES.map((s) => (
+          <img key={s.key} src={HOUSE_IMG[s.key]} alt={CAT_LABEL[s.key] + " view"}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover", opacity: view === s.key ? 1 : 0, transform: view === s.key ? "scale(1)" : "scale(1.05)", transition: "opacity .45s ease, transform .6s ease", pointerEvents: "none" }} />
+        ))}
+        {/* dim the whole render when something is highlighted */}
+        <div style={{ position: "absolute", inset: 0, background: "rgba(8,12,20,.42)", opacity: anyHL ? 1 : 0, transition: "opacity .35s ease", pointerEvents: "none" }} />
+        {/* bright box(es) for selected trades in this view; the active one glows + lightens */}
+        {here.map((h) => {
+          const isActive = activeTrade === h.trade;
+          return (
+            <div key={h.trade} style={{ position: "absolute", left: h.x + "%", top: h.y + "%", width: h.w + "%", height: h.h + "%", borderRadius: 8, border: "2px solid " + (isActive ? "#36e07a" : "rgba(124,255,176,.75)"), background: isActive ? "rgba(255,255,255,.16)" : "rgba(124,255,176,.04)", boxShadow: isActive ? "0 0 16px rgba(54,224,122,.85)" : "0 0 8px rgba(124,255,176,.45)", pointerEvents: "none", transition: "all .35s ease" }}>
+              <span style={{ position: "absolute", top: -9, left: 6, fontSize: 10, fontWeight: 700, color: "#fff", background: isActive ? "#1B7A3D" : "#2a3340", padding: "1px 6px", borderRadius: 6, whiteSpace: "nowrap" }}>{h.label}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="hint" style={{ marginTop: 8, textAlign: "center" }}>
+        {activeHere ? "Sizing " + TRADE_LABEL(activeTrade) + " — AL's on it." : anyHL ? here.length + " selected in " + CAT_LABEL[view] : "AL highlights each area as you go — pick trades with the buttons."}
+      </p>
+    </div>
+  );
+}
+
 /* ============================================================ */
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
@@ -1402,6 +1444,12 @@ function App() {
   const [whResult, setWhResult] = useState(null); // combined estimate (real-priced LLM takeoff per trade)
   const [whBusy, setWhBusy] = useState(false);
   const [houseScope, setHouseScope] = useState({}); // Stage 5 image-house: { trade: materialName } across all 21 house trades
+  const [housePanelW, setHousePanelW] = useState({}); // per-trade panel width (standing-seam roofing) — drives panel LF
+  const [selStep, setSelStep] = useState("category"); // guided chat selection step: "category" | "trades" | "type" | "ready"
+  const [customTrade, setCustomTrade] = useState(""); // "type a trade" box in the chat
+  const [customType, setCustomType] = useState("");   // "type a system" box in the chat
+  const [houseView, setHouseView] = useState("exterior"); // visual house category state (driven by the chat, not tapped)
+  const [activeTrade, setActiveTrade] = useState(null); // trade AL is currently working → brightened on the house
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
   const [whPbOpen, setWhPbOpen] = useState(false);
   const [whDims, setWhDims] = useState("");        // extracted measurements for the house flow
@@ -1733,7 +1781,7 @@ function App() {
     } catch (e) { flash("Combined estimate failed: " + errMsg(e)); }
     setWhBusy(false);
   };
-  const goTab = (k) => { setTab(k); setViewing(null); setChatJob(null); if (k === "estimator" && estMode === "house") loadWholeHouseSpecs(); window.scrollTo(0, 0); };
+  const goTab = (k) => { setTab(k); setViewing(null); setChatJob(null); if (k === "estimator") loadWholeHouseSpecs(); window.scrollTo(0, 0); };
   const shareApp = async () => {
     const url = (typeof window !== "undefined" && window.location && window.location.href) || "";
     const data = { title: "CazBid", text: "Check out CazBid — snap a photo of a home project, get an instant price, and pick a local contractor. (Open in Safari for the best experience.)", url };
@@ -2301,7 +2349,7 @@ function App() {
     const sel = Object.keys(houseScope);
     const trades = sel.length
       ? sel.map((t) => { const lbl = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t; const m = houseScope[t]; return "- " + lbl + (m && m !== true ? " (material: " + m + ")" : " (no material chosen yet)"); }).join("\n")
-      : "(none yet — tell them to tap the house, or capture what they describe)";
+      : "(none yet — tell them to pick a trade with the buttons up top, or capture what they describe)";
     let known = whDims ? ("Measurements on file: " + whDims + "\n") : "";
     const entered = sel.map((t) => { const k = PB_TRADE_KEY[t]; const f = k && whInputs[k]; if (!f) return null; const vals = Object.keys(f).filter((x) => x !== "complexityFactor" && num(f[x]) > 0).map((x) => x + "=" + f[x]); return vals.length ? (((HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t) + ": " + vals.join(", ")) : null; }).filter(Boolean).join("\n");
     if (entered) known += "Dimensions entered:\n" + entered + "\n";
@@ -2314,12 +2362,12 @@ function App() {
     "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " +
     "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " +
     "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " +
-    "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to tap the house or describe the job. " +
+    "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
     "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
   const alOpener = () => {
     const sel = Object.keys(houseScope);
-    if (!sel.length) return "Hey, I'm AL. Tap parts of the house below to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
+    if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
     const labels = sel.map((t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t);
     const nonDet = sel.filter((t) => !PB_TRADE_KEY[t]);
     if (nonDet.length && !whDims && !whPhotos.length) return "Got " + labels.join(", ") + ". To size that I'll need measurements or photos — tap 📄 Report or 📷 Photo, or just tell me the numbers right here.";
@@ -2409,28 +2457,29 @@ function App() {
     setLogOpen(false); setLogMH("");
     flash(key + " calibrated from " + entry.n + " job" + (entry.n === 1 ? "" : "s") + " — labor ×" + entry.factor + (entry.n < 3 ? " (firms up over a few jobs)" : "") + ".");
   };
-  const runEstimate = async () => {
-    if (!estScope && !estOpenDesc.trim() && !estDesc.trim() && !estPhotos.length && !estDims) { flash("Pick a work type or describe the job first."); return; }
-    setEstBusy("run");
-    setEstResult(null);
-    try {
+  // Build ONE trade's full result object (material takeoff + good/better/best +
+  // Opus pre-flight + labor + calibration). Pure-ish: takes the scope/desc/dims/
+  // photos as params and RETURNS the trade object (no setState) so the unified
+  // flow can build one OR many trades into a single combined estimate.
+  const buildOneTrade = async ({ scope, desc, dims, photos, panelW, aiTrade }) => {
+    {
+      scope = scope || ""; desc = desc || ""; dims = dims || ""; photos = photos || []; panelW = panelW || 0; aiTrade = aiTrade || null;
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
-      const __manualKey = manualTradeKey(estScope, estDesc);
+      const __manualKey = manualTradeKey(scope, desc);
       const prompt =
         "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" +
-        "JOB: " + (estDesc.trim() || "(see photos)") + "\n" +
-        (estDims ? estDims + "\n" : "") +
-        (estScope ? "WORK TYPE: " + estScope + "\n" : "") +
-        (dimsText() ? "DIMENSIONS (use these exact numbers in the takeoff): " + dimsText() + "\n" : "") +
-        (estPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") +
+        "JOB: " + (desc.trim() || "(see photos)") + "\n" +
+        (dims ? dims + "\n" : "") +
+        (scope ? "WORK TYPE: " + scope + "\n" : "") +
+        (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") +
         EV_FORMULAS +
         "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" +
         "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" +
         TRADE_BASE_RULES +
-        tradeModuleFor(estScope, estDesc) +
-        ((aiActiveTrade.current && aiActiveTrade.current.trade === estScope) ? aiTradeModule(aiActiveTrade.current) : "") +
+        tradeModuleFor(scope, desc) +
+        ((aiTrade && aiTrade.trade === scope) ? aiTradeModule(aiTrade) : "") +
         "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" +
         "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" +
         "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" +
@@ -2445,7 +2494,7 @@ function App() {
         "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" +
         "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
-        ...estPhotos.slice(0, 3).map((ph) => {
+        ...photos.slice(0, 3).map((ph) => {
           const mt = ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg";
           return { type: "image", source: { type: "base64", media_type: mt, data: ph.split(",")[1] } };
         }),
@@ -2473,12 +2522,12 @@ function App() {
       }) : [];
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
-      const sysStr = (estScope + " " + estDesc).toLowerCase();
+      const sysStr = (scope + " " + desc).toLowerCase();
       items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines (shingle job can't keep metal-panel lines)
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic) {
-        const q = computeRoofQuantities(estDims, sysStr, num(estPanelW));
+        const q = computeRoofQuantities(dims, sysStr, num(panelW));
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -2527,14 +2576,14 @@ function App() {
         // Labor in code so it never depends on the AI doing the lookup. The rate
         // book is trusted ONLY when it captured the per-square bulk; a partial
         // match returns null (see computeLaborFromRateBook) so it can't drop hours.
-        const calc = computeLaborFromRateBook(items, rateBook, estDims, estScope, estDesc);
+        const calc = computeLaborFromRateBook(items, rateBook, dims, scope, desc);
         if (calc && calc.hours > 0) { laborHours = calc.hours; laborSrc = "ratebook"; }
         // squares on the job (drives the size-scaled realistic floor)
         let sqGuess = 0;
         items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
-        if (!sqGuess && estDims) { const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
+        if (!sqGuess && dims) { const m = String(dims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
         // Realistic minimum man-hours for a sized job (shared helper; BUG-1 fix).
-        const floor = realisticLaborFloor(sqGuess, estDims, sysStr, isRoof);
+        const floor = realisticLaborFloor(sqGuess, dims, sysStr, isRoof);
         if (floor > 0 && laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
       }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
@@ -2543,11 +2592,11 @@ function App() {
       // from the final man-hours + crew so they can never diverge (the 36-MH-but-
       // 13-days bug). If the AI's own day count is bigger, keep it (it implies more MH it knew about).
       // Feature B: apply this trade's labor calibration factor (from logged actuals)
-      const calibKey = (aiActiveTrade.current && aiActiveTrade.current.trade === estScope) ? aiActiveTrade.current.trade : (manualTradeKey(estScope, estDesc) || String(estScope || estDesc || "").toLowerCase().trim());
+      const calibKey = (aiTrade && aiTrade.trade === scope) ? aiTrade.trade : (manualTradeKey(scope, desc) || String(scope || desc || "").toLowerCase().trim());
       const calibEntry = calib[calibKey] || null;
       if (calibEntry && calibEntry.factor && calibEntry.factor !== 1) laborHours = Math.max(1, Math.round(laborHours * calibEntry.factor));
       const daysFinal = Math.max(1, Math.round(laborHours / (Math.max(1, crewN) * 8)));
-      setEstResult({
+      return {
         title: String(d.title || "Estimate"), trade: String(d.trade || "general").toLowerCase(),
         items, primaryOptions, chosenTier: null,
         laborHours: laborHours, laborRate: laborRate, laborSource: laborSrc,
@@ -2555,41 +2604,74 @@ function App() {
         crew: crewN, days: daysFinal, notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded, manualKey: __manualKey,
-        aiBuilt: !!(aiActiveTrade.current && aiActiveTrade.current.trade === estScope),
+        aiBuilt: !!(aiTrade && aiTrade.trade === scope),
         calibKey: calibKey, calibN: calibEntry ? (calibEntry.n || 0) : 0, calibFactor: calibEntry ? calibEntry.factor : 1,
-      });
+      };
+    }
+  };
+  // ONE-PAGE ESTIMATE — build every selected trade into a single combined estimate,
+  // each trade its OWN full result (takeoff + good/better/best + labor), one shared
+  // margin slider. Single trade => trades:[one]; same render path either way.
+  const buildUnifiedEstimate = async () => {
+    const sel = Object.keys(houseScope);
+    if (!sel.length) { flash("Add at least one trade first — AL's buttons up top."); return; }
+    setEstBusy("run"); setEstResult(null);
+    try {
+      const results = [];
+      for (const t of sel) {
+        const label = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t;
+        const type = (houseScope[t] && houseScope[t] !== true) ? String(houseScope[t]) : "";
+        const scope = label + (type ? " — " + type : "");
+        const pbk = PB_TRADE_KEY[t];
+        const spec = pbk ? (whSpecs || []).find((s) => s.trade === pbk) : null;
+        const dimBits = [];
+        if (spec && whInputs[pbk]) spec.inputs.forEach((inp) => { const v = whInputs[pbk][inp.name]; if (v != null && v !== "" && !(typeof v === "number" && v === 0)) dimBits.push(inp.label + ": " + v + (inp.unit ? " " + inp.unit : "")); });
+        const dims = [whDims, dimBits.join("; ")].filter(Boolean).join(" · ");
+        const desc = scope + (type ? " (" + type + ")" : "");
+        const aiT = aiTrades.find((x) => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
+        try {
+          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT });
+          results.push(Object.assign({ tradeKey: t, label: label }, r));
+        } catch (e) { results.push({ tradeKey: t, label: label, error: errMsg(e) }); }
+      }
+      const ok = results.filter((r) => !r.error);
+      if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); return; }
+      setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1 });
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
   };
-  // FIX 2A — when the house delegated to the Categories estimator, run it once the
-  // new scope/dims/photos have committed (fresh closure → reads the updated state).
-  useEffect(() => {
-    if (estRunPending && estScope) { setEstRunPending(false); runEstimate(); }
-  }, [estRunPending]);
-  // editable materials list helpers
-  const estItemSet = (i, field, val) => {
+  // editable materials list helpers — all keyed by trade index (ti) into estResult.trades
+  const estItemSet = (ti, i, field, val) => {
     setEstResult((r) => {
       if (!r) return r;
-      const items = r.items.map((it, idx) => {
-        if (idx !== i) return it;
-        if (field === "name" || field === "unit") return { ...it, [field]: val };
-        const v = num(val);
-        if (field === "qty") { const up = num(it.unitPrice); return { ...it, qty: v, cost: Math.round(up * v) }; }
-        if (field === "unitPrice") { return { ...it, unitPrice: v, cost: Math.round(v * (num(it.qty) || 0)) }; }
-        if (field === "cost") { const q = num(it.qty) || 0; return { ...it, cost: Math.round(v), unitPrice: q > 0 ? v / q : v }; }
-        return { ...it, [field]: v };
+      const trades = r.trades.map((tr, k) => {
+        if (k !== ti) return tr;
+        const items = tr.items.map((it, idx) => {
+          if (idx !== i) return it;
+          if (field === "name" || field === "unit") return { ...it, [field]: val };
+          const v = num(val);
+          if (field === "qty") { const up = num(it.unitPrice); return { ...it, qty: v, cost: Math.round(up * v) }; }
+          if (field === "unitPrice") { return { ...it, unitPrice: v, cost: Math.round(v * (num(it.qty) || 0)) }; }
+          if (field === "cost") { const q = num(it.qty) || 0; return { ...it, cost: Math.round(v), unitPrice: q > 0 ? v / q : v }; }
+          return { ...it, [field]: v };
+        });
+        return { ...tr, items };
       });
-      return { ...r, items };
+      return { ...r, trades };
     });
   };
-  const estItemAdd = () => setEstResult((r) => r ? { ...r, items: [...r.items, { name: "New item", qty: 1, unit: "", unitPrice: 0, cost: 0 }] } : r);
-  const estPickTier = (opt) => setEstResult((r) => {
-    if (!r || !r.items.length) return r;
-    // FIX 2C: reconcile the editable unit price with the tier total (was left stale → $0.47 ≠ total)
-    const items = r.items.map((it, idx) => idx === 0 ? { ...it, name: opt.name, cost: Math.round(opt.cost), unitPrice: (num(it.qty) > 0 ? Math.round((opt.cost / num(it.qty)) * 100) / 100 : opt.cost), unpriced: false } : it);
-    return { ...r, items, chosenTier: opt.tier };
+  const estItemAdd = (ti) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, items: [...tr.items, { name: "New item", qty: 1, unit: "", unitPrice: 0, cost: 0 }] } : tr) } : r);
+  const estPickTier = (ti, opt) => setEstResult((r) => {
+    if (!r) return r;
+    return { ...r, trades: r.trades.map((tr, k) => {
+      if (k !== ti || !tr.items.length) return tr;
+      // FIX 2C: reconcile the editable unit price with the tier total (was left stale → $0.47 ≠ total)
+      const items = tr.items.map((it, idx) => idx === 0 ? { ...it, name: opt.name, cost: Math.round(opt.cost), unitPrice: (num(it.qty) > 0 ? Math.round((opt.cost / num(it.qty)) * 100) / 100 : opt.cost), unpriced: false } : it);
+      return { ...tr, items, chosenTier: opt.tier };
+    }) };
   });
-  const estItemDel = (i) => setEstResult((r) => r ? { ...r, items: r.items.filter((_, idx) => idx !== i) } : r);
+  const estItemDel = (ti, i) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, items: tr.items.filter((_, idx) => idx !== i) } : tr) } : r);
+  const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, [field]: val } : tr) } : r);
   const addDimRow = (label, unit) => setEstDimRows((d) => [...d, { id: rid(), label: label || "", value: "", unit: unit || "" }]);
   const upDimRow = (id, patch) => setEstDimRows((d) => d.map((x) => x.id === id ? { ...x, ...patch } : x));
   const rmDimRow = (id) => setEstDimRows((d) => d.filter((x) => x.id !== id));
@@ -4525,12 +4607,8 @@ function App() {
         </main>
       )}
 
-      {me.role === "contractor" && tab === "estimator" && estMode === "categories" && !overlay && (
+      {me.role === "contractor" && tab === "estimator" && !overlay && (
         <main className="page">
-          <div style={{ display: "flex", gap: 6 }}>
-            <button className={"btn " + (estMode === "house" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => { setEstMode("house"); loadWholeHouseSpecs(); }}>🏠 House selector</button>
-            <button className={"btn " + (estMode === "categories" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => setEstMode("categories")}>📋 Categories</button>
-          </div>
           {(!myPlan || me.plan !== "pro") ? (
             <section className="card">
               <div className="h1">Pro Estimator <span className="propill">PRO</span></div>
@@ -4544,433 +4622,292 @@ function App() {
               <button className="btn primary full" onClick={() => { setMe({ ...me, plan: "pro" }); flash("Pro unlocked — estimator ready."); }}>Upgrade to Pro ($149/mo)</button>
               <button className="btn ghost full" onClick={() => goTab("profile")}>See all plans</button>
             </section>
-          ) : (
+          ) : !estResult ? (
             <>
-              <JobContextPanel photos={estPhotos} measurements={estDims} />
+              {whSpecs ? <HouseVisual view={houseView} selected={houseScope} activeTrade={activeTrade} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
+
               <section className="card">
-                <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>Pro Estimator</div></div>
-                {estTyping && (
-                  <div className="convrow ai" style={{ marginTop: 6 }}>
-                    <div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div>
-                    <div className="convbubble ai typing"><span></span><span></span><span></span></div>
-                  </div>
-                )}
-                {!estTyping && (estGreeted || estScope) && (
-                  <div className="convrow ai" style={{ marginTop: 6 }}>
-                    <div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div>
-                    <div className="convbubble ai">{estScope ? "Nice — here are the key dimensions for a " + estScope.toLowerCase() + " job. Fill in what you've got and I'll build the takeoff." : (estTyped || EST_GREETING)}</div>
-                  </div>
-                )}
+                <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div><span className="hint" style={{ marginLeft: "auto" }}>tap a button or just tell me</span></div>
+                <div className="convmsgs" style={{ maxHeight: 220, overflowY: "auto", marginTop: 6 }}>
+                  {alMsgs.length === 0 && (
+                    <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">Hey, I'm AL — let's build this estimate. First: are we working outside, inside, or on the systems?</div></div>
+                  )}
+                  {alMsgs.map((m, i) => (
+                    m.role === "ai"
+                      ? <div className="convrow ai" key={i}><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{m.text}</div></div>
+                      : <div className="convbubble me" key={i}>{m.text}</div>
+                  ))}
+                  {alBusy && (<div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai typing"><span></span><span></span><span></span></div></div>)}
+                </div>
 
-                {!estScope ? (
-                  !estTyping && estGreeted && (
-                  <div className="popin">
-                    {!estCat ? (
-                      <div className="scopegrid">
-                        {CATEGORIES.map((c, i) => (
-                          <button className="scopebtn" key={c.cat} style={{ animationDelay: (i * 40) + "ms" }} onClick={() => setEstCat(c.cat)}>
-                            {c.cat}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="popin">
-                        <button className="scopepick" onClick={() => setEstCat(null)}><span>← {estCat}</span><span className="scopechg">back</span></button>
-                        <div className="scopelist">
-                          {estSubs.map((sub, i) => (
-                            <button className="scopebtn wide" key={sub.label} style={{ animationDelay: (i * 40) + "ms" }}
-                              onClick={() => { setEstScope(sub.label); setEstDimRows([]); fetchCustomDims(sub.label); }}>
-                              <span className="scopemain">{sub.label}</span>
-                              {sub.hint && <span className="scopehint">{sub.hint}</span>}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div className="oratext">or tell me about the job</div>
-                    <textarea className="desc" rows={2} value={estOpenDesc} onChange={(e) => setEstOpenDesc(e.target.value)}
-                      placeholder="e.g. 22sq architectural reroof, one layer tear-off, 6/12 ranch, replace 3 sheets decking" />
-                    <button className="btn primary full" disabled={estBusy === "run" || !estOpenDesc.trim()} onClick={() => { setEstDesc(estOpenDesc); aiActiveTrade.current = null; runEstimate(); }}>
-                      {estBusy === "run" ? "Building takeoff…" : "✦ Build from description"}
-                    </button>
-
-                    {/* AI TRADE BUILDER (Feature A) — for trades not in the list */}
-                    <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 12 }}>
-                      <div className="seclabel">🤖 Custom / unlisted trade <span className="hint">AI builds a reusable trade — verify before bidding</span></div>
-                      <textarea className="desc" rows={2} value={aiTradeDesc} onChange={(e) => setAiTradeDesc(e.target.value)} placeholder="e.g. epoxy garage floor coating, radon mitigation, stucco patch" />
-                      <button className="btn ghost full" disabled={aiTradeBusy || !aiTradeDesc.trim()} onClick={buildAiTrade}>{aiTradeBusy ? "Building trade…" : "🤖 Build this trade with AI"}</button>
-                      {aiTradeDraft && (
-                        <div className="card" style={{ marginTop: 10, background: "#FFFBF4", border: "1px solid #F2C98A" }}>
-                          <div style={{ fontWeight: 700 }}>{aiTradeDraft.trade} <span className="hint">· {Math.round((aiTradeDraft.confidence || 0) * 100)}% confidence</span></div>
-                          {aiTradeDraft.summary && <p className="hint">{aiTradeDraft.summary}</p>}
-                          {aiTradeDraft.inputs && aiTradeDraft.inputs.length > 0 && <p className="hint"><b>Needs:</b> {aiTradeDraft.inputs.map((i) => i.name + (i.unit ? " (" + i.unit + ")" : "")).join(", ")}</p>}
-                          {aiTradeDraft.materials && aiTradeDraft.materials.length > 0 && (
-                            <div style={{ marginTop: 6 }}>
-                              <div className="seclabel">Materials</div>
-                              {aiTradeDraft.materials.map((m, i) => (<div key={i} className="costrow"><span>{m.item} <span className="hint">{m.source === "pricebook" ? "📗 book" : "~est"}</span></span><b>{$0(m.unitCost)}/{m.unit}</b></div>))}
-                            </div>
-                          )}
-                          {aiTradeDraft.labor && aiTradeDraft.labor.basis && <p className="hint" style={{ marginTop: 6 }}><b>Labor:</b> {aiTradeDraft.labor.ratePerUnit} MH/{aiTradeDraft.labor.unit} — {aiTradeDraft.labor.basis}</p>}
-                          {aiTradeDraft.equipment && <p className="hint"><b>Equipment:</b> {aiTradeDraft.equipment}</p>}
-                          {aiTradeDraft.caveats && aiTradeDraft.caveats.length > 0 && (
-                            <div style={{ marginTop: 6 }}><div className="seclabel" style={{ color: "#8A5A12" }}>⚠️ Verify</div>{aiTradeDraft.caveats.map((c, i) => (<div key={i} className="hint">• {c}</div>))}</div>
-                          )}
-                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                            <button className="btn primary grow1" onClick={() => useAiTrade(aiTradeDraft)}>Use for estimate</button>
-                            <button className="btn ghost" onClick={() => saveAiTrade(aiTradeDraft)}>Save</button>
-                            <button className="btn ghost" onClick={() => setAiTradeDraft(null)}>✕</button>
-                          </div>
-                        </div>
-                      )}
-                      {aiTrades.length > 0 && (
-                        <div style={{ marginTop: 10 }}>
-                          <div className="seclabel">My AI trades <span className="hint">tap to estimate · flagged until calibrated</span></div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                            {aiTrades.map((t) => (
-                              <span key={t.trade} style={{ fontSize: 12, background: "#FFF4E6", color: "#8A5A12", border: "1px solid #F2C98A", borderRadius: 12, padding: "3px 10px", cursor: "pointer" }} onClick={() => useAiTrade(t)}>
-                                🤖 {t.trade}{t.calibratedJobs > 0 ? " ✓" : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); delAiTrade(t.trade); }}>×</span>
-                              </span>
+                {(() => {
+                  const tradesHere = HOUSE_HOTSPOTS.filter((h) => h.state === houseView);
+                  const selKeys = Object.keys(houseScope);
+                  const needType = selKeys.filter((t) => HOUSE_TYPES[t] && houseScope[t] === true);
+                  return (
+                    <div className="popin" style={{ marginTop: 8 }}>
+                      {selStep === "category" && (
+                        <>
+                          <div className="convbubble ai" style={{ marginBottom: 6 }}>Outside, inside, or systems?</div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            {HOUSE_STATES.map((s) => (
+                              <button key={s.key} className={"btn " + (houseView === s.key ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => { setHouseView(s.key); setSelStep("trades"); }}>{CAT_LABEL[s.key]}</button>
                             ))}
                           </div>
+                        </>
+                      )}
+                      {selStep === "trades" && (
+                        <>
+                          <div className="convbubble ai" style={{ marginBottom: 6 }}>In {CAT_LABEL[houseView]}, what are you doing? Tap all that apply.</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {tradesHere.map((h) => {
+                              const on = !!houseScope[h.trade];
+                              return (
+                                <button key={h.trade} className={"btn " + (on ? "primary" : "ghost")} style={{ padding: "6px 10px", fontSize: 13 }} onClick={() => { if (on) { houseDeselect(h.trade); if (activeTrade === h.trade) setActiveTrade(null); } else { houseSelect(h.trade, true); setActiveTrade(h.trade); } }}>{on ? "✓ " : ""}{h.label}</button>
+                              );
+                            })}
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <input value={customTrade} onChange={(e) => setCustomTrade(e.target.value)} placeholder="Something else? type a trade…" style={{ flex: 1 }} />
+                            <button className="btn ghost" disabled={!customTrade.trim()} onClick={() => { houseSelect(customTrade.trim(), true); setActiveTrade(customTrade.trim()); setCustomTrade(""); }}>+ Add</button>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button className="btn ghost" onClick={() => setSelStep("category")}>← Change area</button>
+                            <button className="btn primary grow1" disabled={!selKeys.length} onClick={() => setSelStep(needType.length ? "type" : "ready")}>{selKeys.length ? "Continue →" : "Pick a trade"}</button>
+                          </div>
+                        </>
+                      )}
+                      {selStep === "type" && needType.length > 0 && (() => {
+                        const t = needType[0];
+                        return (
+                          <>
+                            <div className="convbubble ai" style={{ marginBottom: 6 }}>{TRADE_LABEL(t)} — which type / system? <span className="hint">locks the takeoff so systems don't mix</span></div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {HOUSE_TYPES[t].map((ty) => (
+                                <button key={ty} className="btn ghost" style={{ padding: "6px 10px", fontSize: 13 }} onClick={() => { houseSelect(t, ty); setActiveTrade(t); const rem = needType.filter((x) => x !== t); setSelStep(rem.length ? "type" : "ready"); }}>{ty}</button>
+                              ))}
+                            </div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                              <input value={customType} onChange={(e) => setCustomType(e.target.value)} placeholder="or type another system…" style={{ flex: 1 }} />
+                              <button className="btn ghost" disabled={!customType.trim()} onClick={() => { houseSelect(t, customType.trim()); setActiveTrade(t); setCustomType(""); const rem = needType.filter((x) => x !== t); setSelStep(rem.length ? "type" : "ready"); }}>Use</button>
+                            </div>
+                            <p className="hint" style={{ marginTop: 6 }}>“Mixed” combines systems — AL sizes each part separately so the bid stays accurate.</p>
+                          </>
+                        );
+                      })()}
+                      {selStep === "ready" && (
+                        <div className="convbubble ai">Scope locked in. Add measurements or photos below if you've got them, fill any blanks, then Build.</div>
+                      )}
+
+                      {selKeys.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                          {selKeys.map((t) => (
+                            <span key={t} onClick={() => { setActiveTrade(t); if (HOUSE_TYPES[t] && houseScope[t] === true) setSelStep("type"); }} style={{ cursor: "pointer", fontSize: 12, background: activeTrade === t ? "#0a7d36" : "#e7f6ec", color: activeTrade === t ? "#fff" : "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "3px 10px" }}>
+                              <b>{TRADE_LABEL(t)}</b>{houseScope[t] && houseScope[t] !== true ? ": " + houseScope[t] : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); houseDeselect(t); if (activeTrade === t) setActiveTrade(null); }}>×</span>
+                            </span>
+                          ))}
+                          {selStep !== "trades" && <button className="btn ghost" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setSelStep("trades")}>+ add more</button>}
                         </div>
                       )}
                     </div>
-                  </div>
-                  )
-                ) : (
-                  <div className="popin">
-                    <button className="scopepick" onClick={() => { setEstScope(null); setEstDimRows([]); }}>
-                      <span>{estScope}</span><span className="scopechg">change</span>
-                    </button>
-                    {estBusy === "dims" && (
-                      <div className="convrow ai" style={{ marginTop: 4 }}>
-                        <div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div>
-                        <div className="convbubble ai typing"><span></span><span></span><span></span></div>
-                      </div>
-                    )}
-                    {estDimRows.length > 0 && (
-                      <div className="seclabel" style={{ marginTop: 10 }}>Dimensions <span className="hint">fill in the numbers</span></div>
-                    )}
-                    {estDimRows.length > 0 && (
-                      <div className="dimrows">
-                        {estDimRows.map((d) => (
-                          <div className="dimrow" key={d.id}>
-                            <input className="in dimlabel" placeholder="Label" value={d.label} onChange={(e) => upDimRow(d.id, { label: e.target.value })} />
-                            <input className="in dimval" type="number" inputMode="decimal" placeholder="0" value={d.value} onChange={(e) => upDimRow(d.id, { value: e.target.value })} />
-                            <input className="in dimunit" placeholder="unit" value={d.unit} onChange={(e) => upDimRow(d.id, { unit: e.target.value })} />
-                            <button className="dimx" onClick={() => rmDimRow(d.id)}>×</button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <button className="dimchip custom" onClick={() => addDimRow("", "")}>+ add custom dimension</button>
-                    {/(standing seam|lok|snap.?lock|metal panel)/i.test((estScope || "") + " " + estDesc) && (
-                      <div className="panelw">
-                        <span className="panelwlbl">Panel width (drives panel LF)</span>
-                        <div className="panelwrow">
-                          {[12, 16, 18].map((w) => (
-                            <button key={w} className={"panelwbtn" + (num(estPanelW) === w ? " on" : "")} onClick={() => setEstPanelW(w)}>{w}"</button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                  );
+                })()}
 
-                    <textarea className="desc" rows={2} style={{ marginTop: 10 }} value={estDesc} onChange={(e) => setEstDesc(e.target.value)}
-                      placeholder="Anything to note? (materials, access, tear-off, special conditions)" />
-
-                    <div className="uploadrow">
-                      <label className="camerabtn" title="Add job photos">
-                        <input type="file" accept="image/*" multiple style={{ display: "none" }}
-                          onChange={async (e) => { const fs = [...e.target.files]; e.target.value = ""; for (const f of fs.slice(0, 3)) { try { const u = await imageToJpeg(f, 1600); setEstPhotos((p) => [...p, u].slice(0, 3)); } catch (er) { /* skip */ } } }} />
-                        <Camera size={20} /><span className="upbtnlbl">Photos</span>{estPhotos.length > 0 && <span className="camcount">{estPhotos.length}</span>}
-                      </label>
-                      <label className="camerabtn" title="Upload a measurement report or screenshot">
-                        <input type="file" accept="application/pdf,image/*" style={{ display: "none" }}
-                          onChange={(e) => { handleEstReport(e.target.files[0]); e.target.value = ""; }} />
-                        <ListChecks size={20} /><span className="upbtnlbl">{estBusy === "report" ? "Reading…" : "Report"}</span>
-                      </label>
-                      <button className="camerabtn" title="Order an aerial or LiDAR measurement" onClick={() => setMeasOpen(measOpen ? "" : "menu")}>
-                        <Sparkles size={20} /><span className="upbtnlbl">Measure</span>
-                      </button>
-                    </div>
-                    {measOpen === "menu" && (
-                      <div className="measmenu">
-                        <div className="measlbl">📡 Aerial roof reports</div>
-                        <button className="report" onClick={() => setEstSvcPrompt({ name: "EagleView", url: "https://myev.eagleview.com/place-order" })}><b>EagleView</b><span>Industry-standard aerial roof report</span><span className="reportgo">Tap for steps ↗</span></button>
-                        <button className="report" onClick={() => setEstSvcPrompt({ name: "GAF QuickMeasure", url: "https://quickmeasure.gaf.com" })}><b>GAF QuickMeasure</b><span>~$25-35 aerial report, ~1 hour</span><span className="reportgo">Tap for steps ↗</span></button>
-                        <div className="measlbl" style={{ marginTop: 8 }}>📱 LiDAR scans (on-site)</div>
-                        <button className="report" onClick={() => setEstSvcPrompt({ name: "Polycam", url: "https://poly.cam/login" })}><b>Polycam</b><span>LiDAR room & roof scans on Pro iPhones</span><span className="reportgo">Tap for steps ↗</span></button>
-                        <button className="report" onClick={() => setEstSvcPrompt({ name: "Canvas", url: "https://canvas.io/login" })}><b>Canvas</b><span>Contractor-grade LiDAR home scans</span><span className="reportgo">Tap for steps ↗</span></button>
-                        <p className="hint" style={{ marginTop: 6 }}>Got a report already? Tap <b>Report</b> to upload it — it auto-fills these dimensions.</p>
-                      </div>
-                    )}
-                    {estPhotos.length > 0 && (
-                      <div className="thumbrow">
-                        {estPhotos.map((p, i) => (<div className="thumb" key={i}><img src={p} alt="" /><button onClick={() => setEstPhotos((a) => a.filter((_, idx) => idx !== i))}>×</button></div>))}
-                      </div>
-                    )}
-                    {estDims && <p className="ai-note">📐 {estDims}</p>}
-                    <button className="btn primary full big" disabled={estBusy === "run" || estBusy === "dims"} onClick={runEstimate}>
-                      {estBusy === "run" ? "Building takeoff…" : "✦ Build estimate"}
-                    </button>
-                  </div>
-                )}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder="e.g. “west slope is 8/12” or “what do you still need?”" style={{ flex: 1 }} />
+                  <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
+                </div>
               </section>
 
-              {estResult && (() => {
-                const matTotal = estResult.items.reduce((a, b) => a + (num(b.cost) || 0), 0);
-                const matTax = Math.round(matTotal * estResult.taxRate);
-                const labor = Math.round(estResult.laborHours * estResult.laborRate);
-                const cost = labor + matTotal + matTax + estResult.equipment;
-                const price = estResult.margin != null ? cost : Math.round(cost / (1 - estMargin / 100) / 25) * 25;
-                const sell = Math.round(cost / (1 - estMargin / 100) / 25) * 25;
-                const profit = sell - cost;
-                return (
-                  <section className="card">
-                    <div className="h1">{estResult.title}</div>
-                    {estResult.aiBuilt && !(estResult.calibN > 0) && (
-                      <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>🤖 AI-built trade — VERIFY before bidding. Material prices are AI estimates until a real job calibrates them.</div>
-                    )}
-                    {/* Feature B: calibration status + log actuals */}
-                    {estResult.calibN > 0
-                      ? <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10, fontSize: 12.5, color: "#1B7A3D", fontWeight: 600 }}>✓ Calibrated from {estResult.calibN} job{estResult.calibN === 1 ? "" : "s"} — labor ×{estResult.calibFactor} from your actuals{estResult.calibN < 3 ? " (firms up over a few jobs)" : ""}.</div>
-                      : (estResult.calibKey ? <p className="hint" style={{ marginBottom: 6 }}>Uncalibrated — log this job's real hours when it's done to dial in “{estResult.calibKey}”.</p> : null)}
-                    {estResult.calibKey && (
-                      logOpen ? (
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", margin: "2px 0 8px" }}>
-                          <input type="number" value={logMH} onChange={(e) => setLogMH(e.target.value)} placeholder={"Actual MH (est " + estResult.laborHours + ")"} style={{ flex: 1 }} />
-                          <button className="btn primary" onClick={() => logActuals(estResult.calibKey, estResult.laborHours, num(logMH), estResult.title)}>Save</button>
-                          <button className="btn ghost" onClick={() => { setLogOpen(false); setLogMH(""); }}>✕</button>
-                        </div>
-                      ) : (
-                        <button className="btn ghost" style={{ marginBottom: 8, fontSize: 12 }} onClick={() => setLogOpen(true)}>📋 Log job actuals (calibrate)</button>
-                      )
-                    )}
-                    {estResult.manualLoaded
-                      ? <div className="manualbadge on">📘 Caza {estResult.manualKey} manual loaded</div>
-                      : (estResult.manualKey
-                          ? <div className="manualbadge off">⚪ No manual loaded ({estResult.manualKey}) — using built-in trade logic</div>
-                          : null)}
-                    {estResult.notes && <p className="hint">{estResult.notes}</p>}
-                    {estResult.checks && estResult.checks.length > 0 && (
-                      <div style={{ margin: "9px 0 5px", padding: "9px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10 }}>
-                        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#1B7A3D", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>✓ Opus pre-flight check</div>
-                        {estResult.checks.map((c, i) => (
-                          <div key={i} style={{ fontSize: 12.5, color: "#2F4A39", lineHeight: 1.45 }}>• {c}</div>
-                        ))}
-                      </div>
-                    )}
+              <div style={{ display: "flex", gap: 6 }}>
+                <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Photo
+                  <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; onWhPhoto(f); }} />
+                </label>
+                <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center", opacity: whReportBusy ? 0.6 : 1 }}>📄 Report
+                  <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; handleWhReport(f); }} />
+                </label>
+                <button className="btn ghost" style={{ flex: 1 }} onClick={() => setWhMeasuredOpen((o) => !o)}>📐 Measure</button>
+              </div>
+              {whMeasuredOpen && (
+                <section className="card"><p className="hint">Order or upload measurements: <a href="https://www.eagleview.com" target="_blank" rel="noopener noreferrer">EagleView</a> / <a href="https://hover.to" target="_blank" rel="noopener noreferrer">Hover</a> (roof &amp; exterior) · <a href="https://poly.cam" target="_blank" rel="noopener noreferrer">Polycam</a> (interior). Then tap 📄 Report to upload it and AL reads the numbers.</p></section>
+              )}
+              {(whPhotos.length > 0 || whDims) && (
+                <section className="card">
+                  {whPhotos.length > 0 && (<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{whPhotos.map((p, i) => (<div className="thumb" key={i}><img src={p} alt="" /><button onClick={() => setWhPhotos((a) => a.filter((_, idx) => idx !== i))}>×</button></div>))}</div>)}
+                  {whReportBusy && <p className="hint">Reading the report…</p>}
+                  {whDims && <p className="ai-note" style={{ marginTop: 6 }}>📐 {whDims} <button className="btn ghost" style={{ padding: "0 6px", marginLeft: 6 }} onClick={() => setWhDims("")}>✕</button></p>}
+                </section>
+              )}
 
-                    {estResult.primaryOptions && estResult.primaryOptions.length > 0 && (
-                      <>
-                        <div className="seclabel">Popular local options <span className="hint">good · better · best — tap to use</span></div>
-                        <div className="tiergrid">
-                          {estResult.primaryOptions.map((o, i) => (
-                            <div className={"tiercard" + (estResult.chosenTier === o.tier ? " on" : "")} key={i}>
-                              <div className="tiertop"><span className="tierbadge">{o.tier}</span><span className="tiercost">{$0(o.cost)}</span></div>
-                              <div className="tiername">{o.name}</div>
-                              {o.why && <div className="tierwhy">{o.why}</div>}
-                              <div className="tieract">
-                                <button className={"btn " + (estResult.chosenTier === o.tier ? "primary" : "ghost") + " grow1"} onClick={() => estPickTier(o)}>
-                                  {estResult.chosenTier === o.tier ? "✓ Using" : "Use this"}
-                                </button>
-                                {o.url && /^https?:\/\//.test(o.url) && (
-                                  <a className="btn ghost grow1" href={o.url} target="_blank" rel="noopener noreferrer">View ↗</a>
-                                )}
-                              </div>
+              {Object.keys(houseScope).length > 0 && (
+                <section className="card">
+                  <div className="seclabel">Details <span className="hint">fill any blanks — AL pre-fills from your files</span></div>
+                  {Object.keys(houseScope).map((ht) => {
+                    const pbk = PB_TRADE_KEY[ht];
+                    const spec = pbk ? (whSpecs || []).find((s) => s.trade === pbk) : null;
+                    const own = pbk ? (enginePB || []).filter((e) => e && String(e.trade) === pbk && String(e.material || "").trim()).map((e) => String(e.material).trim()) : [];
+                    const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
+                    const mats = ownUniq.concat((MATERIAL_SUGGESTIONS[ht] || []).filter((m) => !ownUniq.includes(m)));
+                    const curMat = houseScope[ht];
+                    const isSS = /standing seam|snap.?lock|\blok\b|metal panel/i.test(String(curMat || "") + " " + ht);
+                    return (
+                      <div className="card" style={{ marginTop: 10, borderColor: activeTrade === ht ? "#0a7d36" : undefined }} key={ht} onClick={() => setActiveTrade(ht)}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span className="seclabel">✓ {TRADE_LABEL(ht)}{curMat && curMat !== true ? " · " + curMat : ""}</span>
+                          <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); houseDeselect(ht); if (activeTrade === ht) setActiveTrade(null); }}>remove</button>
+                        </div>
+                        <label className="estf" style={{ marginTop: 6 }}><span>Material{HOUSE_TYPES[ht] ? " / system" : ""}</span>
+                          <select value={(curMat && curMat !== true) ? curMat : ""} onChange={(e) => houseSelect(ht, e.target.value)}>
+                            <option value="">— choose —</option>
+                            {curMat && curMat !== true && !(HOUSE_TYPES[ht] || mats).includes(curMat) && <option value={curMat}>{curMat}</option>}
+                            {(HOUSE_TYPES[ht] || mats).map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </label>
+                        {isSS && (
+                          <label className="estf" style={{ marginTop: 6 }}><span>Panel width (in)</span>
+                            <select value={num(housePanelW[ht]) || 0} onChange={(e) => setHousePanelW((p) => ({ ...p, [ht]: num(e.target.value) }))}>
+                              <option value={0}>default</option>{[12, 16, 18].map((w) => <option key={w} value={w}>{w}"</option>)}
+                            </select>
+                          </label>
+                        )}
+                        {spec ? (
+                          <div className="estfields" style={{ marginTop: 6 }}>
+                            {spec.inputs.map((inp) => (
+                              <label className="estf" key={inp.name}>
+                                <span>{inp.label}{inp.unit ? " (" + inp.unit + ")" : ""}{inp.required ? " *" : ""}</span>
+                                {inp.type === "enum"
+                                  ? <select value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : inp.default} onChange={(e) => whSet(pbk, inp.name, e.target.value)}>{(inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}</select>
+                                  : <input type="number" value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : ""} onChange={(e) => whSet(pbk, inp.name, num(e.target.value))} />}
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="hint" style={{ marginTop: 6 }}>No fixed dimensions — AL prices this from your description, photos, and measurements.</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </section>
+              )}
+
+              <button className="btn primary full big" disabled={estBusy === "run" || !Object.keys(houseScope).length} style={{ marginTop: 4 }} onClick={buildUnifiedEstimate}>
+                {estBusy === "run" ? "Building takeoff…" : (Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Add a trade to build")}
+              </button>
+            </>
+          ) : (
+            (() => {
+              const trades = estResult.trades || [];
+              const tradeCost = (t) => { const matTotal = t.items.reduce((a, b) => a + (num(b.cost) || 0), 0); const matTax = Math.round(matTotal * t.taxRate); const labor = Math.round(t.laborHours * t.laborRate); return { matTotal, matTax, labor, cost: labor + matTotal + matTax + t.equipment }; };
+              const combined = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+              const sell = Math.round(combined / (1 - estMargin / 100) / 25) * 25;
+              const profit = sell - combined;
+              return (
+                <>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                    <button className="btn ghost grow1" onClick={() => setEstResult(null)}>← Back to scope</button>
+                    <button className="btn ghost grow1" onClick={() => { setEstResult(null); setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlMsgs([]); }}>Start new estimate</button>
+                  </div>
+                  <div className="h1" style={{ marginBottom: 2 }}>{trades.length === 1 ? trades[0].title : "Combined estimate — " + trades.length + " trades"}</div>
+                  {estResult.errors && estResult.errors.length > 0 && <p className="hint">Couldn't build: {estResult.errors.map((e) => e.label).join(", ")} — tap Back to retry.</p>}
+
+                  {trades.map((t, ti) => {
+                    const c = tradeCost(t);
+                    return (
+                      <section className="card" key={ti}>
+                        {trades.length > 1 && <div className="h2" style={{ marginBottom: 4 }}>{t.label || t.title}</div>}
+                        {t.aiBuilt && !(t.calibN > 0) && (<div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>🤖 AI-built trade — VERIFY before bidding.</div>)}
+                        {t.calibN > 0
+                          ? <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10, fontSize: 12.5, color: "#1B7A3D", fontWeight: 600 }}>✓ Calibrated from {t.calibN} job{t.calibN === 1 ? "" : "s"} — labor ×{t.calibFactor}.</div>
+                          : (t.calibKey ? <p className="hint" style={{ marginBottom: 6 }}>Uncalibrated — log this job's real hours when it's done to dial in “{t.calibKey}”.</p> : null)}
+                        {t.manualLoaded
+                          ? <div className="manualbadge on">📘 Caza {t.manualKey} manual loaded</div>
+                          : (t.manualKey ? <div className="manualbadge off">⚪ No manual loaded ({t.manualKey}) — built-in trade logic</div> : null)}
+                        {t.notes && <p className="hint">{t.notes}</p>}
+                        {t.checks && t.checks.length > 0 && (
+                          <div style={{ margin: "9px 0 5px", padding: "9px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700, color: "#1B7A3D", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>✓ Opus pre-flight check</div>
+                            {t.checks.map((c2, i) => (<div key={i} style={{ fontSize: 12.5, color: "#2F4A39", lineHeight: 1.45 }}>• {c2}</div>))}
+                          </div>
+                        )}
+                        {t.primaryOptions && t.primaryOptions.length > 0 && (
+                          <>
+                            <div className="seclabel">Popular local options <span className="hint">good · better · best — tap to use</span></div>
+                            <div className="tiergrid">
+                              {t.primaryOptions.map((o, i) => (
+                                <div className={"tiercard" + (t.chosenTier === o.tier ? " on" : "")} key={i}>
+                                  <div className="tiertop"><span className="tierbadge">{o.tier}</span><span className="tiercost">{$0(o.cost)}</span></div>
+                                  <div className="tiername">{o.name}</div>
+                                  {o.why && <div className="tierwhy">{o.why}</div>}
+                                  <div className="tieract">
+                                    <button className={"btn " + (t.chosenTier === o.tier ? "primary" : "ghost") + " grow1"} onClick={() => estPickTier(ti, o)}>{t.chosenTier === o.tier ? "✓ Using" : "Use this"}</button>
+                                    {o.url && /^https?:\/\//.test(o.url) && (<a className="btn ghost grow1" href={o.url} target="_blank" rel="noopener noreferrer">View ↗</a>)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                        <div className="seclabel">Material takeoff <span className="hint">tap any field to edit</span></div>
+                        <div className="takeoff">
+                          {t.items.map((it, i) => (
+                            <div className="toitem" key={i}>
+                              <input className="toname" value={it.name} onChange={(e) => estItemSet(ti, i, "name", e.target.value)} />
+                              <input className="toqty" type="number" value={it.qty} onChange={(e) => estItemSet(ti, i, "qty", e.target.value)} />
+                              <input className="tounit" value={it.unit} onChange={(e) => estItemSet(ti, i, "unit", e.target.value)} placeholder="unit" />
+                              <span className="todollar" title="unit price">$<input className="tocost" type="number" value={it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0} onChange={(e) => estItemSet(ti, i, "unitPrice", e.target.value)} /></span>
+                              <b className="tolinecost" title={it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? "Priced from your price book" : ""}>{it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
+                              <button className="todel" onClick={() => estItemDel(ti, i)}><X size={14} /></button>
                             </div>
                           ))}
+                          <button className="btn ghost full" onClick={() => estItemAdd(ti)}><Plus size={14} /> Add material line</button>
                         </div>
-                        <p className="hint" style={{ margin: "2px 0 4px" }}>Popular, commonly-stocked options near {(profC.base || profC.town || "you")} — not a sales ranking. Picking one updates your primary material line below.</p>
-                      </>
+                        <div className="seclabel" style={{ marginTop: 12 }}>Labor &amp; site</div>
+                        <div className="estfields">
+                          <label className="estf"><span>Man-hours</span><input type="number" value={t.laborHours} onChange={(e) => estTradeField(ti, "laborHours", num(e.target.value))} /></label>
+                          <label className="estf"><span>Burdened $/hr</span><input type="number" value={t.laborRate} onChange={(e) => estTradeField(ti, "laborRate", num(e.target.value))} /></label>
+                          <label className="estf"><span>Crew</span><input type="number" value={t.crew} onChange={(e) => estTradeField(ti, "crew", num(e.target.value))} /></label>
+                          <label className="estf"><span>Days on site</span><input type="number" value={t.days} onChange={(e) => estTradeField(ti, "days", num(e.target.value))} /></label>
+                          <label className="estf"><span>Equipment $</span><input type="number" value={t.equipment} onChange={(e) => estTradeField(ti, "equipment", num(e.target.value))} /></label>
+                          <label className="estf"><span>Tax rate</span><input type="number" step="0.001" value={t.taxRate} onChange={(e) => estTradeField(ti, "taxRate", num(e.target.value))} /></label>
+                        </div>
+                        <div className="costbox" style={{ marginTop: 12 }}>
+                          <div className="costrow"><span>Materials ({t.items.length} lines)</span><b>{$0(c.matTotal)}</b></div>
+                          <div className="costrow"><span>Material tax ({(t.taxRate * 100).toFixed(1)}%)</span><b>{$0(c.matTax)}</b></div>
+                          <div className="costrow"><span>Labor — {t.laborHours} hrs @ {$0(t.laborRate)}{t.laborSource === "ratebook" ? <span className="labtag book">rate book</span> : t.laborSource === "engine" ? <span className="labtag book">engine</span> : <span className="labtag est">AI est. · verify</span>}</span><b>{$0(c.labor)}</b></div>
+                          <div className="costrow"><span>Equipment / disposal</span><b>{$0(t.equipment)}</b></div>
+                          <div className="costrow total"><span>{(t.label || "Trade")} cost</span><b>{$0(c.cost)}</b></div>
+                        </div>
+                        {t.calibKey && (logOpen === t.calibKey ? (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
+                            <input type="number" value={logMH} onChange={(e) => setLogMH(e.target.value)} placeholder={"Actual MH (est " + t.laborHours + ")"} style={{ flex: 1 }} />
+                            <button className="btn primary" onClick={() => { logActuals(t.calibKey, t.laborHours, num(logMH), t.title); }}>Save</button>
+                            <button className="btn ghost" onClick={() => { setLogOpen(false); setLogMH(""); }}>✕</button>
+                          </div>
+                        ) : (
+                          <button className="btn ghost" style={{ marginTop: 8, fontSize: 12 }} onClick={() => setLogOpen(t.calibKey)}>📋 Log job actuals (calibrate)</button>
+                        ))}
+                      </section>
+                    );
+                  })}
+
+                  <section className="card">
+                    {trades.length > 1 && (
+                      <div className="costbox">
+                        {trades.map((t, ti) => (<div className="costrow" key={ti}><span>{t.label || t.title}</span><b>{$0(tradeCost(t).cost)}</b></div>))}
+                        <div className="costrow total"><span>Combined cost</span><b>{$0(combined)}</b></div>
+                      </div>
                     )}
-
-                    <div className="seclabel">Material takeoff <span className="hint">tap any field to edit</span></div>
-                    <div className="takeoff">
-                      {estResult.items.map((it, i) => (
-                        <div className="toitem" key={i}>
-                          <input className="toname" value={it.name} onChange={(e) => estItemSet(i, "name", e.target.value)} />
-                          <input className="toqty" type="number" value={it.qty} onChange={(e) => estItemSet(i, "qty", e.target.value)} />
-                          <input className="tounit" value={it.unit} onChange={(e) => estItemSet(i, "unit", e.target.value)} placeholder="unit" />
-                          <span className="todollar" title="unit price">$<input className="tocost" type="number" value={it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0} onChange={(e) => estItemSet(i, "unitPrice", e.target.value)} /></span>
-                          <b className="tolinecost" title={it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? ("Priced from your price book (" + (it.matchType || "match") + ")") : it.priceTier === "retail" ? "HD/Lowe's retail price — verify before bidding" : it.priceTier === "seed" ? "Seed/estimated price — add it to your price book to lock it in" : ""}>{it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
-                          <button className="todel" onClick={() => estItemDel(i)}><X size={14} /></button>
-                        </div>
-                      ))}
-                      <button className="btn ghost full" onClick={estItemAdd}><Plus size={14} /> Add material line</button>
-                    </div>
-
-                    <div className="seclabel" style={{ marginTop: 12 }}>Labor &amp; site</div>
-                    <div className="estfields">
-                      <label className="estf"><span>Man-hours</span><input type="number" value={estResult.laborHours} onChange={(e) => setEstResult((r) => ({ ...r, laborHours: num(e.target.value) }))} /></label>
-                      <label className="estf"><span>Burdened $/hr</span><input type="number" value={estResult.laborRate} onChange={(e) => setEstResult((r) => ({ ...r, laborRate: num(e.target.value) }))} /></label>
-                      <label className="estf"><span>Crew</span><input type="number" value={estResult.crew} onChange={(e) => setEstResult((r) => ({ ...r, crew: num(e.target.value) }))} /></label>
-                      <label className="estf"><span>Days on site</span><input type="number" value={estResult.days} onChange={(e) => setEstResult((r) => ({ ...r, days: num(e.target.value) }))} /></label>
-                      <label className="estf"><span>Equipment $</span><input type="number" value={estResult.equipment} onChange={(e) => setEstResult((r) => ({ ...r, equipment: num(e.target.value) }))} /></label>
-                      <label className="estf"><span>Tax rate</span><input type="number" step="0.001" value={estResult.taxRate} onChange={(e) => setEstResult((r) => ({ ...r, taxRate: num(e.target.value) }))} /></label>
-                    </div>
-
-                    <div className="costbox" style={{ marginTop: 12 }}>
-                      <div className="costrow"><span>Materials ({estResult.items.length} lines)</span><b>{$0(matTotal)}</b></div>
-                      <div className="costrow"><span>Material tax ({(estResult.taxRate * 100).toFixed(1)}%)</span><b>{$0(matTax)}</b></div>
-                      <div className="costrow"><span>Labor — {estResult.laborHours} hrs @ {$0(estResult.laborRate)}{estResult.laborSource === "ratebook" ? <span className="labtag book">rate book</span> : <span className="labtag est">AI est. · verify</span>}</span><b>{$0(labor)}</b></div>
-                      <div className="costrow"><span>Equipment / disposal</span><b>{$0(estResult.equipment)}</b></div>
-                      <div className="costrow total"><span>Total cost</span><b>{$0(cost)}</b></div>
-                    </div>
-
-                    <div className="marginbox">
+                    <div className="marginbox" style={{ marginTop: trades.length > 1 ? 12 : 0 }}>
                       <div className="marginhead"><span>Gross margin</span><span className="marginpct">{estMargin}%</span></div>
-                      <input className="bidslider" type="range" min="15" max="50" step="1" value={estMargin}
-                        style={{ ["--pct"]: ((estMargin - 15) / 35 * 100) + "%" }}
-                        onChange={(e) => setEstMargin(num(e.target.value))} />
+                      <input className="bidslider" type="range" min="15" max="50" step="1" value={estMargin} style={{ ["--pct"]: ((estMargin - 15) / 35 * 100) + "%" }} onChange={(e) => setEstMargin(num(e.target.value))} />
                       <div className="bidends"><span>15%</span><span className="hint">profit {$0(profit)}</span><span>50%</span></div>
                       <div className="sellprice"><span>Your price</span><b>{$0(sell)}</b></div>
                     </div>
-
-                    <button className="btn ghost full" onClick={() => { setEstResult(null); setEstDesc(""); setEstPhotos([]); setEstDims(""); }}>Start a new estimate</button>
                   </section>
-                );
-              })()}
-            </>
+                </>
+              );
+            })()
           )}
-        </main>
-      )}
-
-      {me.role === "contractor" && tab === "estimator" && estMode === "house" && !overlay && (
-        <main className="page">
-          <div style={{ display: "flex", gap: 6 }}>
-            <button className={"btn " + (estMode === "house" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => { setEstMode("house"); loadWholeHouseSpecs(); }}>🏠 House selector</button>
-            <button className={"btn " + (estMode === "categories" ? "primary" : "ghost")} style={{ flex: 1 }} onClick={() => setEstMode("categories")}>📋 Categories</button>
-          </div>
-          {/* 1 · JOB CONTEXT (photos + extracted measurements; uploads live in the buttons below) */}
-          <section className="card">
-            <div className="seclabel">Job context</div>
-            {whPhotos.length > 0 && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-                {whPhotos.map((p, i) => (<div className="thumb" key={i}><img src={p} alt="" /><button onClick={() => setWhPhotos((a) => a.filter((_, idx) => idx !== i))}>×</button></div>))}
-              </div>
-            )}
-            {whReportBusy && <p className="hint">Reading the report…</p>}
-            {whDims && <p className="ai-note" style={{ marginTop: 6 }}>📐 {whDims} <button className="btn ghost" style={{ padding: "0 6px", marginLeft: 6 }} onClick={() => setWhDims("")}>✕</button></p>}
-            {!whPhotos.length && !whDims && !whReportBusy && <p className="hint">Add jobsite photos or a measurement report with the buttons below — AL uses them to size the job.</p>}
-          </section>
-
-          {/* 2 · AL CONVERSATION ZONE — real two-way chat (BUG 9) */}
-          <section className="card">
-            <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div><span className="hint" style={{ marginLeft: "auto" }}>ask or tell him about the job</span></div>
-            <div className="convmsgs" style={{ maxHeight: 240, overflowY: "auto", marginTop: 6 }}>
-              {alMsgs.length === 0 && (
-                <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{alOpener()}</div></div>
-              )}
-              {alMsgs.map((m, i) => (
-                m.role === "ai"
-                  ? <div className="convrow ai" key={i}><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{m.text}</div></div>
-                  : <div className="convbubble me" key={i}>{m.text}</div>
-              ))}
-              {alBusy && (
-                <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai typing"><span></span><span></span><span></span></div></div>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder="e.g. “west slope is 8/12” or “what do you still need?”" style={{ flex: 1 }} />
-              <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
-            </div>
-          </section>
-
-          {/* 3 · CONTRACTOR CONTEXT TOOLS (above the house) */}
-          <div style={{ display: "flex", gap: 6 }}>
-            <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Photo
-              <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; onWhPhoto(f); }} />
-            </label>
-            <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center", opacity: whReportBusy ? 0.6 : 1 }}>📄 Report
-              <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; handleWhReport(f); }} />
-            </label>
-            <button className="btn ghost" style={{ flex: 1 }} onClick={() => setWhMeasuredOpen((o) => !o)}>📐 Measured</button>
-          </div>
-          {whMeasuredOpen && (
-            <section className="card">
-              <p className="hint">Order or upload measurements: <a href="https://www.eagleview.com" target="_blank" rel="noopener noreferrer">EagleView</a> / <a href="https://hover.to" target="_blank" rel="noopener noreferrer">Hover</a> (roof &amp; exterior) · <a href="https://poly.cam" target="_blank" rel="noopener noreferrer">Polycam</a> (interior). Then tap 📄 Report to upload it and AL will read the numbers.</p>
-            </section>
-          )}
-
-          {/* 4 · HOUSE IMAGE + TOGGLE (primary selector) */}
-          {whSpecs
-            ? <InteractiveHouse scope={houseScope} onSelect={houseSelect} onDeselect={houseDeselect} priceBook={enginePB} role={me.role} />
-            : <section className="card"><p className="hint">Loading the house…</p></section>}
-
-          {/* 4 · SELECTED TRADES + DIMENSION INPUTS (only what was clicked) */}
-          {Object.keys(houseScope).length > 0 && (
-            <section className="card">
-              <div className="seclabel">Your scope <span className="hint">{Object.keys(houseScope).length} trade{Object.keys(houseScope).length === 1 ? "" : "s"} — tap the house to add or remove</span></div>
-              {Object.keys(houseScope).map((ht) => {
-                const pbk = PB_TRADE_KEY[ht];
-                const spec = pbk ? (whSpecs || []).find((s) => s.trade === pbk) : null;
-                const htLabel = (HOUSE_HOTSPOTS.find((h) => h.trade === ht) || {}).label || ht;
-                const own = pbk ? (enginePB || []).filter((e) => e && String(e.trade) === pbk && String(e.material || "").trim()).map((e) => String(e.material).trim()) : [];
-                const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
-                const mats = ownUniq.concat((MATERIAL_SUGGESTIONS[ht] || []).filter((m) => !ownUniq.includes(m)));
-                const curMat = houseScope[ht];
-                return (
-                  <div className="card" style={{ marginTop: 10 }} key={ht}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span className="seclabel">✓ {htLabel}</span>
-                      <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => houseDeselect(ht)}>remove</button>
-                    </div>
-                    <label className="estf" style={{ marginTop: 6 }}><span>Materials</span>
-                      <select value={(curMat && curMat !== true) ? curMat : ""} onChange={(e) => houseSelect(ht, e.target.value)}>
-                        <option value="">— choose a material —</option>
-                        {curMat && curMat !== true && !mats.includes(curMat) && <option value={curMat}>{curMat}</option>}
-                        {mats.map((m) => <option key={m} value={m}>{m}</option>)}
-                      </select>
-                    </label>
-                    {spec ? (
-                      <div className="estfields" style={{ marginTop: 6 }}>
-                        {spec.inputs.map((inp) => (
-                          <label className="estf" key={inp.name}>
-                            <span>{inp.label}{inp.unit ? " (" + inp.unit + ")" : ""}{inp.required ? " *" : ""}</span>
-                            {inp.type === "enum"
-                              ? <select value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : inp.default} onChange={(e) => whSet(pbk, inp.name, e.target.value)}>
-                                  {(inp.enumValues || []).map((ev) => <option key={ev} value={ev}>{ev}</option>)}
-                                </select>
-                              : <input type="number" value={(whInputs[pbk] && whInputs[pbk][inp.name] != null) ? whInputs[pbk][inp.name] : ""} onChange={(e) => whSet(pbk, inp.name, num(e.target.value))} />}
-                          </label>
-                        ))}
-                        <label className="estf">
-                          <span>Complexity ({spec.complexity.min}–{spec.complexity.max})</span>
-                          <input type="number" step="0.05" value={(whInputs[pbk] && whInputs[pbk].complexityFactor != null) ? whInputs[pbk].complexityFactor : spec.complexity.default} onChange={(e) => whSet(pbk, "complexityFactor", num(e.target.value))} />
-                        </label>
-                      </div>
-                    ) : (
-                      <p className="hint" style={{ marginTop: 6 }}>No extra dimensions needed — AL prices this from your description, photos, and uploaded measurements.</p>
-                    )}
-                  </div>
-                );
-              })}
-            </section>
-          )}
-
-          {/* 5 · BUILD ESTIMATE (bottom) */}
-          <button className="btn primary full" disabled={whBusy || !Object.keys(houseScope).length} style={{ marginTop: 4 }} onClick={buildWholeHouse}>
-            {whBusy ? "Building combined estimate…" : (Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Tap the house to add trades")}
-          </button>
-
-          {whResult && (
-            <section className="costbox" style={{ marginTop: 14 }}>
-              <div className="h1">Combined estimate — {whResult.combined.tradeCount} trade{whResult.combined.tradeCount === 1 ? "" : "s"}</div>
-              {whResult.errors && whResult.errors.length > 0 && <p className="hint">Skipped (no engine spec): {whResult.errors.map((e) => e.trade).join(", ")}</p>}
-              {whResult.combined.byTrade.map((b) => (
-                <div className="costrow" key={b.trade}><span>{b.title}{b.unpriced > 0 ? <span className="hint"> · ⚠️ {b.unpriced} line{b.unpriced === 1 ? "" : "s"} need a price</span> : null}</span><b>{$0(b.grandTotal)}</b></div>
-              ))}
-              <div className="costrow"><span>Materials — all trades</span><b>{$0(whResult.combined.materialTotal)}</b></div>
-              <div className="costrow"><span>Labor — all trades · {whResult.combined.laborHours} hrs</span><b>{$0(whResult.combined.laborCost)}</b></div>
-              <div className="costrow total"><span>Combined total</span><b>{$0(whResult.combined.grandTotal)}</b></div>
-              {whResult.combined.priceSummary && (whResult.combined.priceSummary.pricebook + whResult.combined.priceSummary.retail) > 0 && (
-                <p className="hint">💲 {whResult.combined.priceSummary.pricebook} material line{whResult.combined.priceSummary.pricebook === 1 ? "" : "s"} priced from your book{whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : ""} · {whResult.combined.priceSummary.seed} on seed pricing.</p>
-              )}
-              <p className="hint">Real-priced takeoff — the SAME full takeoff as the Categories view: current local material pricing + your price book, labor from your production rates. Verify quantities against the measurements before sending.</p>
-            </section>
-          )}
-
           {/* PRICING DETAILS / PRICE BOOK — hidden from the main flow (bottom toggle) */}
           {whSpecs && (
             <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book"} <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}</span></button>

@@ -3050,17 +3050,17 @@ const HOUSE_STATES = [{
   key: "exterior",
   label: "Outside",
   aspect: 33.06,
-  hint: "Tap the roof, siding, windows, doors, or garage."
+  hint: "Roof, siding, windows, doors, garage."
 }, {
   key: "interior",
   label: "Inside",
   aspect: 66.40,
-  hint: "Roof's off — tap rooms, flooring, drywall, or trim."
+  hint: "Roof's off — rooms, flooring, drywall, trim."
 }, {
   key: "systems",
   label: "Systems",
   aspect: 56.28,
-  hint: "Walls cut away — tap HVAC, electrical, plumbing, or insulation."
+  hint: "Walls cut away — HVAC, electrical, plumbing, insulation."
 }];
 // Invisible hotspots, positioned as % of the image box {x,y,w,h}. Rough starting
 // placements over each render — refine on-device. trade = scope key.
@@ -3571,6 +3571,120 @@ function InteractiveHouse(props) {
     role: props.role
   });
 }
+const TRADE_LABEL = t => (HOUSE_HOTSPOTS.find(h => h.trade === t) || {}).label || t;
+// Pure VISUAL house — reacts to the conversation, never tapped. Crossfades between
+// the three render states per category and brightens the active/selected trade
+// area(s), dimming the rest. No clickable hotspots, no hover labels.
+function HouseVisual({
+  view,
+  selected,
+  activeTrade
+}) {
+  const cur = HOUSE_STATES.find(s => s.key === view) || HOUSE_STATES[0];
+  const sel = selected || {};
+  const here = HOUSE_HOTSPOTS.filter(h => h.state === view && sel[h.trade]);
+  const anyHL = here.length > 0;
+  const activeHere = activeTrade && HOUSE_HOTSPOTS.find(h => h.state === view && h.trade === activeTrade);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card househero",
+    style: {
+      marginTop: 10,
+      overflow: "hidden",
+      padding: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4,
+      marginBottom: 8
+    }
+  }, HOUSE_STATES.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.key,
+    style: {
+      flex: 1,
+      textAlign: "center",
+      padding: "5px 2px",
+      fontSize: 12,
+      fontWeight: view === s.key ? 700 : 500,
+      color: view === s.key ? "#0a7d36" : "#9aa3ad",
+      borderBottom: view === s.key ? "2px solid #0a7d36" : "2px solid #eef0f2",
+      transition: "color .3s"
+    }
+  }, CAT_LABEL[s.key]))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      width: "100%",
+      height: 0,
+      paddingTop: cur.aspect + "%",
+      transition: "padding-top .45s ease",
+      borderRadius: 10,
+      overflow: "hidden",
+      background: "#dfe6ee"
+    }
+  }, HOUSE_STATES.map(s => /*#__PURE__*/React.createElement("img", {
+    key: s.key,
+    src: HOUSE_IMG[s.key],
+    alt: CAT_LABEL[s.key] + " view",
+    style: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+      opacity: view === s.key ? 1 : 0,
+      transform: view === s.key ? "scale(1)" : "scale(1.05)",
+      transition: "opacity .45s ease, transform .6s ease",
+      pointerEvents: "none"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      inset: 0,
+      background: "rgba(8,12,20,.42)",
+      opacity: anyHL ? 1 : 0,
+      transition: "opacity .35s ease",
+      pointerEvents: "none"
+    }
+  }), here.map(h => {
+    const isActive = activeTrade === h.trade;
+    return /*#__PURE__*/React.createElement("div", {
+      key: h.trade,
+      style: {
+        position: "absolute",
+        left: h.x + "%",
+        top: h.y + "%",
+        width: h.w + "%",
+        height: h.h + "%",
+        borderRadius: 8,
+        border: "2px solid " + (isActive ? "#36e07a" : "rgba(124,255,176,.75)"),
+        background: isActive ? "rgba(255,255,255,.16)" : "rgba(124,255,176,.04)",
+        boxShadow: isActive ? "0 0 16px rgba(54,224,122,.85)" : "0 0 8px rgba(124,255,176,.45)",
+        pointerEvents: "none",
+        transition: "all .35s ease"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        position: "absolute",
+        top: -9,
+        left: 6,
+        fontSize: 10,
+        fontWeight: 700,
+        color: "#fff",
+        background: isActive ? "#1B7A3D" : "#2a3340",
+        padding: "1px 6px",
+        borderRadius: 6,
+        whiteSpace: "nowrap"
+      }
+    }, h.label));
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 8,
+      textAlign: "center"
+    }
+  }, activeHere ? "Sizing " + TRADE_LABEL(activeTrade) + " — AL's on it." : anyHL ? here.length + " selected in " + CAT_LABEL[view] : "AL highlights each area as you go — pick trades with the buttons."));
+}
 
 /* ============================================================ */
 function App() {
@@ -3704,6 +3818,12 @@ function App() {
   const [whResult, setWhResult] = useState(null); // combined estimate (real-priced LLM takeoff per trade)
   const [whBusy, setWhBusy] = useState(false);
   const [houseScope, setHouseScope] = useState({}); // Stage 5 image-house: { trade: materialName } across all 21 house trades
+  const [housePanelW, setHousePanelW] = useState({}); // per-trade panel width (standing-seam roofing) — drives panel LF
+  const [selStep, setSelStep] = useState("category"); // guided chat selection step: "category" | "trades" | "type" | "ready"
+  const [customTrade, setCustomTrade] = useState(""); // "type a trade" box in the chat
+  const [customType, setCustomType] = useState(""); // "type a system" box in the chat
+  const [houseView, setHouseView] = useState("exterior"); // visual house category state (driven by the chat, not tapped)
+  const [activeTrade, setActiveTrade] = useState(null); // trade AL is currently working → brightened on the house
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
   const [whPbOpen, setWhPbOpen] = useState(false);
   const [whDims, setWhDims] = useState(""); // extracted measurements for the house flow
@@ -4358,7 +4478,7 @@ function App() {
     setTab(k);
     setViewing(null);
     setChatJob(null);
-    if (k === "estimator" && estMode === "house") loadWholeHouseSpecs();
+    if (k === "estimator") loadWholeHouseSpecs();
     window.scrollTo(0, 0);
   };
   const shareApp = async () => {
@@ -5267,7 +5387,7 @@ function App() {
       const lbl = (HOUSE_HOTSPOTS.find(h => h.trade === t) || {}).label || t;
       const m = houseScope[t];
       return "- " + lbl + (m && m !== true ? " (material: " + m + ")" : " (no material chosen yet)");
-    }).join("\n") : "(none yet — tell them to tap the house, or capture what they describe)";
+    }).join("\n") : "(none yet — tell them to pick a trade with the buttons up top, or capture what they describe)";
     let known = whDims ? "Measurements on file: " + whDims + "\n" : "";
     const entered = sel.map(t => {
       const k = PB_TRADE_KEY[t];
@@ -5285,10 +5405,10 @@ function App() {
     }).filter(Boolean).join("\n");
     return "SELECTED TRADES:\n" + trades + "\n" + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
   };
-  const AL_HOUSE_SYS = ctx => "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " + "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " + "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " + "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to tap the house or describe the job. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
+  const AL_HOUSE_SYS = ctx => "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " + "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " + "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " + "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
   const alOpener = () => {
     const sel = Object.keys(houseScope);
-    if (!sel.length) return "Hey, I'm AL. Tap parts of the house below to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
+    if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
     const labels = sel.map(t => (HOUSE_HOTSPOTS.find(h => h.trade === t) || {}).label || t);
     const nonDet = sel.filter(t => !PB_TRADE_KEY[t]);
     if (nonDet.length && !whDims && !whPhotos.length) return "Got " + labels.join(", ") + ". To size that I'll need measurements or photos — tap 📄 Report or 📷 Photo, or just tell me the numbers right here.";
@@ -5455,20 +5575,31 @@ function App() {
     setLogMH("");
     flash(key + " calibrated from " + entry.n + " job" + (entry.n === 1 ? "" : "s") + " — labor ×" + entry.factor + (entry.n < 3 ? " (firms up over a few jobs)" : "") + ".");
   };
-  const runEstimate = async () => {
-    if (!estScope && !estOpenDesc.trim() && !estDesc.trim() && !estPhotos.length && !estDims) {
-      flash("Pick a work type or describe the job first.");
-      return;
-    }
-    setEstBusy("run");
-    setEstResult(null);
-    try {
+  // Build ONE trade's full result object (material takeoff + good/better/best +
+  // Opus pre-flight + labor + calibration). Pure-ish: takes the scope/desc/dims/
+  // photos as params and RETURNS the trade object (no setState) so the unified
+  // flow can build one OR many trades into a single combined estimate.
+  const buildOneTrade = async ({
+    scope,
+    desc,
+    dims,
+    photos,
+    panelW,
+    aiTrade
+  }) => {
+    {
+      scope = scope || "";
+      desc = desc || "";
+      dims = dims || "";
+      photos = photos || [];
+      panelW = panelW || 0;
+      aiTrade = aiTrade || null;
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
-      const __manualKey = manualTradeKey(estScope, estDesc);
-      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (estDesc.trim() || "(see photos)") + "\n" + (estDims ? estDims + "\n" : "") + (estScope ? "WORK TYPE: " + estScope + "\n" : "") + (dimsText() ? "DIMENSIONS (use these exact numbers in the takeoff): " + dimsText() + "\n" : "") + (estPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(estScope, estDesc) + (aiActiveTrade.current && aiActiveTrade.current.trade === estScope ? aiTradeModule(aiActiveTrade.current) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
-      const content = [...estPhotos.slice(0, 3).map(ph => {
+      const __manualKey = manualTradeKey(scope, desc);
+      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+      const content = [...photos.slice(0, 3).map(ph => {
         const mt = ph.startsWith("data:") ? ph.substring(5, ph.indexOf(";")) || "image/jpeg" : "image/jpeg";
         return {
           type: "image",
@@ -5535,12 +5666,12 @@ function App() {
       }) : [];
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
-      const sysStr = (estScope + " " + estDesc).toLowerCase();
+      const sysStr = (scope + " " + desc).toLowerCase();
       items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines (shingle job can't keep metal-panel lines)
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic) {
-        const q = computeRoofQuantities(estDims, sysStr, num(estPanelW));
+        const q = computeRoofQuantities(dims, sysStr, num(panelW));
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -5637,7 +5768,7 @@ function App() {
         // Labor in code so it never depends on the AI doing the lookup. The rate
         // book is trusted ONLY when it captured the per-square bulk; a partial
         // match returns null (see computeLaborFromRateBook) so it can't drop hours.
-        const calc = computeLaborFromRateBook(items, rateBook, estDims, estScope, estDesc);
+        const calc = computeLaborFromRateBook(items, rateBook, dims, scope, desc);
         if (calc && calc.hours > 0) {
           laborHours = calc.hours;
           laborSrc = "ratebook";
@@ -5648,12 +5779,12 @@ function App() {
           const u = (it.unit || "").toLowerCase();
           if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0);
         });
-        if (!sqGuess && estDims) {
-          const m = String(estDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i);
+        if (!sqGuess && dims) {
+          const m = String(dims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i);
           if (m) sqGuess = (num(m[1]) || 0) / 100;
         }
         // Realistic minimum man-hours for a sized job (shared helper; BUG-1 fix).
-        const floor = realisticLaborFloor(sqGuess, estDims, sysStr, isRoof);
+        const floor = realisticLaborFloor(sqGuess, dims, sysStr, isRoof);
         if (floor > 0 && laborHours < floor) {
           laborHours = floor;
           if (laborSrc !== "ratebook") laborSrc = "estimate";
@@ -5665,11 +5796,11 @@ function App() {
       // from the final man-hours + crew so they can never diverge (the 36-MH-but-
       // 13-days bug). If the AI's own day count is bigger, keep it (it implies more MH it knew about).
       // Feature B: apply this trade's labor calibration factor (from logged actuals)
-      const calibKey = aiActiveTrade.current && aiActiveTrade.current.trade === estScope ? aiActiveTrade.current.trade : manualTradeKey(estScope, estDesc) || String(estScope || estDesc || "").toLowerCase().trim();
+      const calibKey = aiTrade && aiTrade.trade === scope ? aiTrade.trade : manualTradeKey(scope, desc) || String(scope || desc || "").toLowerCase().trim();
       const calibEntry = calib[calibKey] || null;
       if (calibEntry && calibEntry.factor && calibEntry.factor !== 1) laborHours = Math.max(1, Math.round(laborHours * calibEntry.factor));
       const daysFinal = Math.max(1, Math.round(laborHours / (Math.max(1, crewN) * 8)));
-      setEstResult({
+      return {
         title: String(d.title || "Estimate"),
         trade: String(d.trade || "general").toLowerCase(),
         items,
@@ -5686,98 +5817,177 @@ function App() {
         checks: Array.isArray(d.checks) ? d.checks.map(c => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded,
         manualKey: __manualKey,
-        aiBuilt: !!(aiActiveTrade.current && aiActiveTrade.current.trade === estScope),
+        aiBuilt: !!(aiTrade && aiTrade.trade === scope),
         calibKey: calibKey,
         calibN: calibEntry ? calibEntry.n || 0 : 0,
         calibFactor: calibEntry ? calibEntry.factor : 1
+      };
+    }
+  };
+  // ONE-PAGE ESTIMATE — build every selected trade into a single combined estimate,
+  // each trade its OWN full result (takeoff + good/better/best + labor), one shared
+  // margin slider. Single trade => trades:[one]; same render path either way.
+  const buildUnifiedEstimate = async () => {
+    const sel = Object.keys(houseScope);
+    if (!sel.length) {
+      flash("Add at least one trade first — AL's buttons up top.");
+      return;
+    }
+    setEstBusy("run");
+    setEstResult(null);
+    try {
+      const results = [];
+      for (const t of sel) {
+        const label = (HOUSE_HOTSPOTS.find(h => h.trade === t) || {}).label || t;
+        const type = houseScope[t] && houseScope[t] !== true ? String(houseScope[t]) : "";
+        const scope = label + (type ? " — " + type : "");
+        const pbk = PB_TRADE_KEY[t];
+        const spec = pbk ? (whSpecs || []).find(s => s.trade === pbk) : null;
+        const dimBits = [];
+        if (spec && whInputs[pbk]) spec.inputs.forEach(inp => {
+          const v = whInputs[pbk][inp.name];
+          if (v != null && v !== "" && !(typeof v === "number" && v === 0)) dimBits.push(inp.label + ": " + v + (inp.unit ? " " + inp.unit : ""));
+        });
+        const dims = [whDims, dimBits.join("; ")].filter(Boolean).join(" · ");
+        const desc = scope + (type ? " (" + type + ")" : "");
+        const aiT = aiTrades.find(x => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
+        try {
+          const r = await buildOneTrade({
+            scope,
+            desc,
+            dims,
+            photos: whPhotos,
+            panelW: num(housePanelW[t]) || 0,
+            aiTrade: aiT
+          });
+          results.push(Object.assign({
+            tradeKey: t,
+            label: label
+          }, r));
+        } catch (e) {
+          results.push({
+            tradeKey: t,
+            label: label,
+            error: errMsg(e)
+          });
+        }
+      }
+      const ok = results.filter(r => !r.error);
+      if (!ok.length) {
+        flash("Estimate failed: " + (results[0] && results[0].error || "tap Build again"));
+        setEstBusy("");
+        return;
+      }
+      setEstResult({
+        trades: ok,
+        errors: results.filter(r => r.error),
+        multi: ok.length > 1
       });
     } catch (e) {
       flash("Estimate failed: " + errMsg(e));
     }
     setEstBusy("");
   };
-  // FIX 2A — when the house delegated to the Categories estimator, run it once the
-  // new scope/dims/photos have committed (fresh closure → reads the updated state).
-  useEffect(() => {
-    if (estRunPending && estScope) {
-      setEstRunPending(false);
-      runEstimate();
-    }
-  }, [estRunPending]);
-  // editable materials list helpers
-  const estItemSet = (i, field, val) => {
+  // editable materials list helpers — all keyed by trade index (ti) into estResult.trades
+  const estItemSet = (ti, i, field, val) => {
     setEstResult(r => {
       if (!r) return r;
-      const items = r.items.map((it, idx) => {
-        if (idx !== i) return it;
-        if (field === "name" || field === "unit") return {
-          ...it,
-          [field]: val
-        };
-        const v = num(val);
-        if (field === "qty") {
-          const up = num(it.unitPrice);
+      const trades = r.trades.map((tr, k) => {
+        if (k !== ti) return tr;
+        const items = tr.items.map((it, idx) => {
+          if (idx !== i) return it;
+          if (field === "name" || field === "unit") return {
+            ...it,
+            [field]: val
+          };
+          const v = num(val);
+          if (field === "qty") {
+            const up = num(it.unitPrice);
+            return {
+              ...it,
+              qty: v,
+              cost: Math.round(up * v)
+            };
+          }
+          if (field === "unitPrice") {
+            return {
+              ...it,
+              unitPrice: v,
+              cost: Math.round(v * (num(it.qty) || 0))
+            };
+          }
+          if (field === "cost") {
+            const q = num(it.qty) || 0;
+            return {
+              ...it,
+              cost: Math.round(v),
+              unitPrice: q > 0 ? v / q : v
+            };
+          }
           return {
             ...it,
-            qty: v,
-            cost: Math.round(up * v)
+            [field]: v
           };
-        }
-        if (field === "unitPrice") {
-          return {
-            ...it,
-            unitPrice: v,
-            cost: Math.round(v * (num(it.qty) || 0))
-          };
-        }
-        if (field === "cost") {
-          const q = num(it.qty) || 0;
-          return {
-            ...it,
-            cost: Math.round(v),
-            unitPrice: q > 0 ? v / q : v
-          };
-        }
+        });
         return {
-          ...it,
-          [field]: v
+          ...tr,
+          items
         };
       });
       return {
         ...r,
-        items
+        trades
       };
     });
   };
-  const estItemAdd = () => setEstResult(r => r ? {
+  const estItemAdd = ti => setEstResult(r => r ? {
     ...r,
-    items: [...r.items, {
-      name: "New item",
-      qty: 1,
-      unit: "",
-      unitPrice: 0,
-      cost: 0
-    }]
+    trades: r.trades.map((tr, k) => k === ti ? {
+      ...tr,
+      items: [...tr.items, {
+        name: "New item",
+        qty: 1,
+        unit: "",
+        unitPrice: 0,
+        cost: 0
+      }]
+    } : tr)
   } : r);
-  const estPickTier = opt => setEstResult(r => {
-    if (!r || !r.items.length) return r;
-    // FIX 2C: reconcile the editable unit price with the tier total (was left stale → $0.47 ≠ total)
-    const items = r.items.map((it, idx) => idx === 0 ? {
-      ...it,
-      name: opt.name,
-      cost: Math.round(opt.cost),
-      unitPrice: num(it.qty) > 0 ? Math.round(opt.cost / num(it.qty) * 100) / 100 : opt.cost,
-      unpriced: false
-    } : it);
+  const estPickTier = (ti, opt) => setEstResult(r => {
+    if (!r) return r;
     return {
       ...r,
-      items,
-      chosenTier: opt.tier
+      trades: r.trades.map((tr, k) => {
+        if (k !== ti || !tr.items.length) return tr;
+        // FIX 2C: reconcile the editable unit price with the tier total (was left stale → $0.47 ≠ total)
+        const items = tr.items.map((it, idx) => idx === 0 ? {
+          ...it,
+          name: opt.name,
+          cost: Math.round(opt.cost),
+          unitPrice: num(it.qty) > 0 ? Math.round(opt.cost / num(it.qty) * 100) / 100 : opt.cost,
+          unpriced: false
+        } : it);
+        return {
+          ...tr,
+          items,
+          chosenTier: opt.tier
+        };
+      })
     };
   });
-  const estItemDel = i => setEstResult(r => r ? {
+  const estItemDel = (ti, i) => setEstResult(r => r ? {
     ...r,
-    items: r.items.filter((_, idx) => idx !== i)
+    trades: r.trades.map((tr, k) => k === ti ? {
+      ...tr,
+      items: tr.items.filter((_, idx) => idx !== i)
+    } : tr)
+  } : r);
+  const estTradeField = (ti, field, val) => setEstResult(r => r ? {
+    ...r,
+    trades: r.trades.map((tr, k) => k === ti ? {
+      ...tr,
+      [field]: val
+    } : tr)
   } : r);
   const addDimRow = (label, unit) => setEstDimRows(d => [...d, {
     id: rid(),
@@ -8931,29 +9141,9 @@ function App() {
       unit: "sq",
       rate: 1
     }])
-  }, "+ Add task")))), me.role === "contractor" && tab === "estimator" && estMode === "categories" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }, "+ Add task")))), me.role === "contractor" && tab === "estimator" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (estMode === "house" ? "primary" : "ghost"),
-    style: {
-      flex: 1
-    },
-    onClick: () => {
-      setEstMode("house");
-      loadWholeHouseSpecs();
-    }
-  }, "🏠 House selector"), /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (estMode === "categories" ? "primary" : "ghost"),
-    style: {
-      flex: 1
-    },
-    onClick: () => setEstMode("categories")
-  }, "📋 Categories")), !myPlan || me.plan !== "pro" ? /*#__PURE__*/React.createElement("section", {
+  }, !myPlan || me.plan !== "pro" ? /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h1"
@@ -8975,763 +9165,15 @@ function App() {
   }, "Upgrade to Pro ($149/mo)"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => goTab("profile")
-  }, "See all plans")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(JobContextPanel, {
-    photos: estPhotos,
-    measurements: estDims
-  }), /*#__PURE__*/React.createElement("section", {
+  }, "See all plans")) : !estResult ? /*#__PURE__*/React.createElement(React.Fragment, null, whSpecs ? /*#__PURE__*/React.createElement(HouseVisual, {
+    view: houseView,
+    selected: houseScope,
+    activeTrade: activeTrade
+  }) : /*#__PURE__*/React.createElement("section", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "convhead"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg",
-    src: AL_NOTEPAD,
-    alt: "AL"
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "h1",
-    style: {
-      margin: 0
-    }
-  }, "Pro Estimator")), estTyping && /*#__PURE__*/React.createElement("div", {
-    className: "convrow ai",
-    style: {
-      marginTop: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "convbubble ai typing"
-  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null))), !estTyping && (estGreeted || estScope) && /*#__PURE__*/React.createElement("div", {
-    className: "convrow ai",
-    style: {
-      marginTop: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "convbubble ai"
-  }, estScope ? "Nice — here are the key dimensions for a " + estScope.toLowerCase() + " job. Fill in what you've got and I'll build the takeoff." : estTyped || EST_GREETING)), !estScope ? !estTyping && estGreeted && /*#__PURE__*/React.createElement("div", {
-    className: "popin"
-  }, !estCat ? /*#__PURE__*/React.createElement("div", {
-    className: "scopegrid"
-  }, CATEGORIES.map((c, i) => /*#__PURE__*/React.createElement("button", {
-    className: "scopebtn",
-    key: c.cat,
-    style: {
-      animationDelay: i * 40 + "ms"
-    },
-    onClick: () => setEstCat(c.cat)
-  }, c.cat))) : /*#__PURE__*/React.createElement("div", {
-    className: "popin"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "scopepick",
-    onClick: () => setEstCat(null)
-  }, /*#__PURE__*/React.createElement("span", null, "← ", estCat), /*#__PURE__*/React.createElement("span", {
-    className: "scopechg"
-  }, "back")), /*#__PURE__*/React.createElement("div", {
-    className: "scopelist"
-  }, estSubs.map((sub, i) => /*#__PURE__*/React.createElement("button", {
-    className: "scopebtn wide",
-    key: sub.label,
-    style: {
-      animationDelay: i * 40 + "ms"
-    },
-    onClick: () => {
-      setEstScope(sub.label);
-      setEstDimRows([]);
-      fetchCustomDims(sub.label);
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "scopemain"
-  }, sub.label), sub.hint && /*#__PURE__*/React.createElement("span", {
-    className: "scopehint"
-  }, sub.hint))))), /*#__PURE__*/React.createElement("div", {
-    className: "oratext"
-  }, "or tell me about the job"), /*#__PURE__*/React.createElement("textarea", {
-    className: "desc",
-    rows: 2,
-    value: estOpenDesc,
-    onChange: e => setEstOpenDesc(e.target.value),
-    placeholder: "e.g. 22sq architectural reroof, one layer tear-off, 6/12 ranch, replace 3 sheets decking"
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    disabled: estBusy === "run" || !estOpenDesc.trim(),
-    onClick: () => {
-      setEstDesc(estOpenDesc);
-      aiActiveTrade.current = null;
-      runEstimate();
-    }
-  }, estBusy === "run" ? "Building takeoff…" : "✦ Build from description"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 14,
-      borderTop: "1px solid #eee",
-      paddingTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel"
-  }, "🤖 Custom / unlisted trade ", /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "AI builds a reusable trade — verify before bidding")), /*#__PURE__*/React.createElement("textarea", {
-    className: "desc",
-    rows: 2,
-    value: aiTradeDesc,
-    onChange: e => setAiTradeDesc(e.target.value),
-    placeholder: "e.g. epoxy garage floor coating, radon mitigation, stucco patch"
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    disabled: aiTradeBusy || !aiTradeDesc.trim(),
-    onClick: buildAiTrade
-  }, aiTradeBusy ? "Building trade…" : "🤖 Build this trade with AI"), aiTradeDraft && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 10,
-      background: "#FFFBF4",
-      border: "1px solid #F2C98A"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 700
-    }
-  }, aiTradeDraft.trade, " ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "· ", Math.round((aiTradeDraft.confidence || 0) * 100), "% confidence")), aiTradeDraft.summary && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, aiTradeDraft.summary), aiTradeDraft.inputs && aiTradeDraft.inputs.length > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, /*#__PURE__*/React.createElement("b", null, "Needs:"), " ", aiTradeDraft.inputs.map(i => i.name + (i.unit ? " (" + i.unit + ")" : "")).join(", ")), aiTradeDraft.materials && aiTradeDraft.materials.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel"
-  }, "Materials"), aiTradeDraft.materials.map((m, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "costrow"
-  }, /*#__PURE__*/React.createElement("span", null, m.item, " ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, m.source === "pricebook" ? "📗 book" : "~est")), /*#__PURE__*/React.createElement("b", null, $0(m.unitCost), "/", m.unit)))), aiTradeDraft.labor && aiTradeDraft.labor.basis && /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 6
-    }
-  }, /*#__PURE__*/React.createElement("b", null, "Labor:"), " ", aiTradeDraft.labor.ratePerUnit, " MH/", aiTradeDraft.labor.unit, " — ", aiTradeDraft.labor.basis), aiTradeDraft.equipment && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, /*#__PURE__*/React.createElement("b", null, "Equipment:"), " ", aiTradeDraft.equipment), aiTradeDraft.caveats && aiTradeDraft.caveats.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel",
-    style: {
-      color: "#8A5A12"
-    }
-  }, "⚠️ Verify"), aiTradeDraft.caveats.map((c, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "hint"
-  }, "• ", c))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 6,
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn primary grow1",
-    onClick: () => useAiTrade(aiTradeDraft)
-  }, "Use for estimate"), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    onClick: () => saveAiTrade(aiTradeDraft)
-  }, "Save"), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    onClick: () => setAiTradeDraft(null)
-  }, "✕"))), aiTrades.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel"
-  }, "My AI trades ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "tap to estimate · flagged until calibrated")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 6,
-      marginTop: 4
-    }
-  }, aiTrades.map(t => /*#__PURE__*/React.createElement("span", {
-    key: t.trade,
-    style: {
-      fontSize: 12,
-      background: "#FFF4E6",
-      color: "#8A5A12",
-      border: "1px solid #F2C98A",
-      borderRadius: 12,
-      padding: "3px 10px",
-      cursor: "pointer"
-    },
-    onClick: () => useAiTrade(t)
-  }, "🤖 ", t.trade, t.calibratedJobs > 0 ? " ✓" : "", " ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontWeight: 700
-    },
-    onClick: e => {
-      e.stopPropagation();
-      delAiTrade(t.trade);
-    }
-  }, "×"))))))) : /*#__PURE__*/React.createElement("div", {
-    className: "popin"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "scopepick",
-    onClick: () => {
-      setEstScope(null);
-      setEstDimRows([]);
-    }
-  }, /*#__PURE__*/React.createElement("span", null, estScope), /*#__PURE__*/React.createElement("span", {
-    className: "scopechg"
-  }, "change")), estBusy === "dims" && /*#__PURE__*/React.createElement("div", {
-    className: "convrow ai",
-    style: {
-      marginTop: 4
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "convbubble ai typing"
-  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null))), estDimRows.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "seclabel",
-    style: {
-      marginTop: 10
-    }
-  }, "Dimensions ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "fill in the numbers")), estDimRows.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "dimrows"
-  }, estDimRows.map(d => /*#__PURE__*/React.createElement("div", {
-    className: "dimrow",
-    key: d.id
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "in dimlabel",
-    placeholder: "Label",
-    value: d.label,
-    onChange: e => upDimRow(d.id, {
-      label: e.target.value
-    })
-  }), /*#__PURE__*/React.createElement("input", {
-    className: "in dimval",
-    type: "number",
-    inputMode: "decimal",
-    placeholder: "0",
-    value: d.value,
-    onChange: e => upDimRow(d.id, {
-      value: e.target.value
-    })
-  }), /*#__PURE__*/React.createElement("input", {
-    className: "in dimunit",
-    placeholder: "unit",
-    value: d.unit,
-    onChange: e => upDimRow(d.id, {
-      unit: e.target.value
-    })
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "dimx",
-    onClick: () => rmDimRow(d.id)
-  }, "×")))), /*#__PURE__*/React.createElement("button", {
-    className: "dimchip custom",
-    onClick: () => addDimRow("", "")
-  }, "+ add custom dimension"), /(standing seam|lok|snap.?lock|metal panel)/i.test((estScope || "") + " " + estDesc) && /*#__PURE__*/React.createElement("div", {
-    className: "panelw"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "panelwlbl"
-  }, "Panel width (drives panel LF)"), /*#__PURE__*/React.createElement("div", {
-    className: "panelwrow"
-  }, [12, 16, 18].map(w => /*#__PURE__*/React.createElement("button", {
-    key: w,
-    className: "panelwbtn" + (num(estPanelW) === w ? " on" : ""),
-    onClick: () => setEstPanelW(w)
-  }, w, "\"")))), /*#__PURE__*/React.createElement("textarea", {
-    className: "desc",
-    rows: 2,
-    style: {
-      marginTop: 10
-    },
-    value: estDesc,
-    onChange: e => setEstDesc(e.target.value),
-    placeholder: "Anything to note? (materials, access, tear-off, special conditions)"
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "uploadrow"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "camerabtn",
-    title: "Add job photos"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "image/*",
-    multiple: true,
-    style: {
-      display: "none"
-    },
-    onChange: async e => {
-      const fs = [...e.target.files];
-      e.target.value = "";
-      for (const f of fs.slice(0, 3)) {
-        try {
-          const u = await imageToJpeg(f, 1600);
-          setEstPhotos(p => [...p, u].slice(0, 3));
-        } catch (er) {/* skip */}
-      }
-    }
-  }), /*#__PURE__*/React.createElement(Camera, {
-    size: 20
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "upbtnlbl"
-  }, "Photos"), estPhotos.length > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "camcount"
-  }, estPhotos.length)), /*#__PURE__*/React.createElement("label", {
-    className: "camerabtn",
-    title: "Upload a measurement report or screenshot"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "application/pdf,image/*",
-    style: {
-      display: "none"
-    },
-    onChange: e => {
-      handleEstReport(e.target.files[0]);
-      e.target.value = "";
-    }
-  }), /*#__PURE__*/React.createElement(ListChecks, {
-    size: 20
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "upbtnlbl"
-  }, estBusy === "report" ? "Reading…" : "Report")), /*#__PURE__*/React.createElement("button", {
-    className: "camerabtn",
-    title: "Order an aerial or LiDAR measurement",
-    onClick: () => setMeasOpen(measOpen ? "" : "menu")
-  }, /*#__PURE__*/React.createElement(Sparkles, {
-    size: 20
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "upbtnlbl"
-  }, "Measure"))), measOpen === "menu" && /*#__PURE__*/React.createElement("div", {
-    className: "measmenu"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "measlbl"
-  }, "📡 Aerial roof reports"), /*#__PURE__*/React.createElement("button", {
-    className: "report",
-    onClick: () => setEstSvcPrompt({
-      name: "EagleView",
-      url: "https://myev.eagleview.com/place-order"
-    })
-  }, /*#__PURE__*/React.createElement("b", null, "EagleView"), /*#__PURE__*/React.createElement("span", null, "Industry-standard aerial roof report"), /*#__PURE__*/React.createElement("span", {
-    className: "reportgo"
-  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
-    className: "report",
-    onClick: () => setEstSvcPrompt({
-      name: "GAF QuickMeasure",
-      url: "https://quickmeasure.gaf.com"
-    })
-  }, /*#__PURE__*/React.createElement("b", null, "GAF QuickMeasure"), /*#__PURE__*/React.createElement("span", null, "~$25-35 aerial report, ~1 hour"), /*#__PURE__*/React.createElement("span", {
-    className: "reportgo"
-  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("div", {
-    className: "measlbl",
-    style: {
-      marginTop: 8
-    }
-  }, "📱 LiDAR scans (on-site)"), /*#__PURE__*/React.createElement("button", {
-    className: "report",
-    onClick: () => setEstSvcPrompt({
-      name: "Polycam",
-      url: "https://poly.cam/login"
-    })
-  }, /*#__PURE__*/React.createElement("b", null, "Polycam"), /*#__PURE__*/React.createElement("span", null, "LiDAR room & roof scans on Pro iPhones"), /*#__PURE__*/React.createElement("span", {
-    className: "reportgo"
-  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
-    className: "report",
-    onClick: () => setEstSvcPrompt({
-      name: "Canvas",
-      url: "https://canvas.io/login"
-    })
-  }, /*#__PURE__*/React.createElement("b", null, "Canvas"), /*#__PURE__*/React.createElement("span", null, "Contractor-grade LiDAR home scans"), /*#__PURE__*/React.createElement("span", {
-    className: "reportgo"
-  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 6
-    }
-  }, "Got a report already? Tap ", /*#__PURE__*/React.createElement("b", null, "Report"), " to upload it — it auto-fills these dimensions.")), estPhotos.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "thumbrow"
-  }, estPhotos.map((p, i) => /*#__PURE__*/React.createElement("div", {
-    className: "thumb",
-    key: i
-  }, /*#__PURE__*/React.createElement("img", {
-    src: p,
-    alt: ""
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setEstPhotos(a => a.filter((_, idx) => idx !== i))
-  }, "×")))), estDims && /*#__PURE__*/React.createElement("p", {
-    className: "ai-note"
-  }, "📐 ", estDims), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full big",
-    disabled: estBusy === "run" || estBusy === "dims",
-    onClick: runEstimate
-  }, estBusy === "run" ? "Building takeoff…" : "✦ Build estimate"))), estResult && (() => {
-    const matTotal = estResult.items.reduce((a, b) => a + (num(b.cost) || 0), 0);
-    const matTax = Math.round(matTotal * estResult.taxRate);
-    const labor = Math.round(estResult.laborHours * estResult.laborRate);
-    const cost = labor + matTotal + matTax + estResult.equipment;
-    const price = estResult.margin != null ? cost : Math.round(cost / (1 - estMargin / 100) / 25) * 25;
-    const sell = Math.round(cost / (1 - estMargin / 100) / 25) * 25;
-    const profit = sell - cost;
-    return /*#__PURE__*/React.createElement("section", {
-      className: "card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "h1"
-    }, estResult.title), estResult.aiBuilt && !(estResult.calibN > 0) && /*#__PURE__*/React.createElement("div", {
-      style: {
-        margin: "4px 0 8px",
-        padding: "8px 11px",
-        background: "#FFF4E6",
-        border: "1px solid #F2C98A",
-        borderRadius: 10,
-        fontSize: 12.5,
-        color: "#8A5A12",
-        fontWeight: 600
-      }
-    }, "🤖 AI-built trade — VERIFY before bidding. Material prices are AI estimates until a real job calibrates them."), estResult.calibN > 0 ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        margin: "4px 0 8px",
-        padding: "8px 11px",
-        background: "#F0FAF3",
-        border: "1px solid #BFE6CC",
-        borderRadius: 10,
-        fontSize: 12.5,
-        color: "#1B7A3D",
-        fontWeight: 600
-      }
-    }, "✓ Calibrated from ", estResult.calibN, " job", estResult.calibN === 1 ? "" : "s", " — labor ×", estResult.calibFactor, " from your actuals", estResult.calibN < 3 ? " (firms up over a few jobs)" : "", ".") : estResult.calibKey ? /*#__PURE__*/React.createElement("p", {
-      className: "hint",
-      style: {
-        marginBottom: 6
-      }
-    }, "Uncalibrated — log this job's real hours when it's done to dial in “", estResult.calibKey, "”.") : null, estResult.calibKey && (logOpen ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: 6,
-        alignItems: "center",
-        margin: "2px 0 8px"
-      }
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: logMH,
-      onChange: e => setLogMH(e.target.value),
-      placeholder: "Actual MH (est " + estResult.laborHours + ")",
-      style: {
-        flex: 1
-      }
-    }), /*#__PURE__*/React.createElement("button", {
-      className: "btn primary",
-      onClick: () => logActuals(estResult.calibKey, estResult.laborHours, num(logMH), estResult.title)
-    }, "Save"), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost",
-      onClick: () => {
-        setLogOpen(false);
-        setLogMH("");
-      }
-    }, "✕")) : /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost",
-      style: {
-        marginBottom: 8,
-        fontSize: 12
-      },
-      onClick: () => setLogOpen(true)
-    }, "📋 Log job actuals (calibrate)")), estResult.manualLoaded ? /*#__PURE__*/React.createElement("div", {
-      className: "manualbadge on"
-    }, "📘 Caza ", estResult.manualKey, " manual loaded") : estResult.manualKey ? /*#__PURE__*/React.createElement("div", {
-      className: "manualbadge off"
-    }, "⚪ No manual loaded (", estResult.manualKey, ") — using built-in trade logic") : null, estResult.notes && /*#__PURE__*/React.createElement("p", {
-      className: "hint"
-    }, estResult.notes), estResult.checks && estResult.checks.length > 0 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        margin: "9px 0 5px",
-        padding: "9px 11px",
-        background: "#F0FAF3",
-        border: "1px solid #BFE6CC",
-        borderRadius: 10
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        fontWeight: 700,
-        color: "#1B7A3D",
-        textTransform: "uppercase",
-        letterSpacing: ".4px",
-        marginBottom: 4
-      }
-    }, "✓ Opus pre-flight check"), estResult.checks.map((c, i) => /*#__PURE__*/React.createElement("div", {
-      key: i,
-      style: {
-        fontSize: 12.5,
-        color: "#2F4A39",
-        lineHeight: 1.45
-      }
-    }, "• ", c))), estResult.primaryOptions && estResult.primaryOptions.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-      className: "seclabel"
-    }, "Popular local options ", /*#__PURE__*/React.createElement("span", {
-      className: "hint"
-    }, "good · better · best — tap to use")), /*#__PURE__*/React.createElement("div", {
-      className: "tiergrid"
-    }, estResult.primaryOptions.map((o, i) => /*#__PURE__*/React.createElement("div", {
-      className: "tiercard" + (estResult.chosenTier === o.tier ? " on" : ""),
-      key: i
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "tiertop"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "tierbadge"
-    }, o.tier), /*#__PURE__*/React.createElement("span", {
-      className: "tiercost"
-    }, $0(o.cost))), /*#__PURE__*/React.createElement("div", {
-      className: "tiername"
-    }, o.name), o.why && /*#__PURE__*/React.createElement("div", {
-      className: "tierwhy"
-    }, o.why), /*#__PURE__*/React.createElement("div", {
-      className: "tieract"
-    }, /*#__PURE__*/React.createElement("button", {
-      className: "btn " + (estResult.chosenTier === o.tier ? "primary" : "ghost") + " grow1",
-      onClick: () => estPickTier(o)
-    }, estResult.chosenTier === o.tier ? "✓ Using" : "Use this"), o.url && /^https?:\/\//.test(o.url) && /*#__PURE__*/React.createElement("a", {
-      className: "btn ghost grow1",
-      href: o.url,
-      target: "_blank",
-      rel: "noopener noreferrer"
-    }, "View ↗"))))), /*#__PURE__*/React.createElement("p", {
-      className: "hint",
-      style: {
-        margin: "2px 0 4px"
-      }
-    }, "Popular, commonly-stocked options near ", profC.base || profC.town || "you", " — not a sales ranking. Picking one updates your primary material line below.")), /*#__PURE__*/React.createElement("div", {
-      className: "seclabel"
-    }, "Material takeoff ", /*#__PURE__*/React.createElement("span", {
-      className: "hint"
-    }, "tap any field to edit")), /*#__PURE__*/React.createElement("div", {
-      className: "takeoff"
-    }, estResult.items.map((it, i) => /*#__PURE__*/React.createElement("div", {
-      className: "toitem",
-      key: i
-    }, /*#__PURE__*/React.createElement("input", {
-      className: "toname",
-      value: it.name,
-      onChange: e => estItemSet(i, "name", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "toqty",
-      type: "number",
-      value: it.qty,
-      onChange: e => estItemSet(i, "qty", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "tounit",
-      value: it.unit,
-      onChange: e => estItemSet(i, "unit", e.target.value),
-      placeholder: "unit"
-    }), /*#__PURE__*/React.createElement("span", {
-      className: "todollar",
-      title: "unit price"
-    }, "$", /*#__PURE__*/React.createElement("input", {
-      className: "tocost",
-      type: "number",
-      value: it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0,
-      onChange: e => estItemSet(i, "unitPrice", e.target.value)
-    })), /*#__PURE__*/React.createElement("b", {
-      className: "tolinecost",
-      title: it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? "Priced from your price book (" + (it.matchType || "match") + ")" : it.priceTier === "retail" ? "HD/Lowe's retail price — verify before bidding" : it.priceTier === "seed" ? "Seed/estimated price — add it to your price book to lock it in" : ""
-    }, it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : "", $0(it.cost)), /*#__PURE__*/React.createElement("button", {
-      className: "todel",
-      onClick: () => estItemDel(i)
-    }, /*#__PURE__*/React.createElement(X, {
-      size: 14
-    })))), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost full",
-      onClick: estItemAdd
-    }, /*#__PURE__*/React.createElement(Plus, {
-      size: 14
-    }), " Add material line")), /*#__PURE__*/React.createElement("div", {
-      className: "seclabel",
-      style: {
-        marginTop: 12
-      }
-    }, "Labor & site"), /*#__PURE__*/React.createElement("div", {
-      className: "estfields"
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Man-hours"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: estResult.laborHours,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        laborHours: num(e.target.value)
-      }))
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Burdened $/hr"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: estResult.laborRate,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        laborRate: num(e.target.value)
-      }))
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Crew"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: estResult.crew,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        crew: num(e.target.value)
-      }))
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Days on site"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: estResult.days,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        days: num(e.target.value)
-      }))
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Equipment $"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: estResult.equipment,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        equipment: num(e.target.value)
-      }))
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Tax rate"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      step: "0.001",
-      value: estResult.taxRate,
-      onChange: e => setEstResult(r => ({
-        ...r,
-        taxRate: num(e.target.value)
-      }))
-    }))), /*#__PURE__*/React.createElement("div", {
-      className: "costbox",
-      style: {
-        marginTop: 12
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Materials (", estResult.items.length, " lines)"), /*#__PURE__*/React.createElement("b", null, $0(matTotal))), /*#__PURE__*/React.createElement("div", {
-      className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Material tax (", (estResult.taxRate * 100).toFixed(1), "%)"), /*#__PURE__*/React.createElement("b", null, $0(matTax))), /*#__PURE__*/React.createElement("div", {
-      className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Labor — ", estResult.laborHours, " hrs @ ", $0(estResult.laborRate), estResult.laborSource === "ratebook" ? /*#__PURE__*/React.createElement("span", {
-      className: "labtag book"
-    }, "rate book") : /*#__PURE__*/React.createElement("span", {
-      className: "labtag est"
-    }, "AI est. · verify")), /*#__PURE__*/React.createElement("b", null, $0(labor))), /*#__PURE__*/React.createElement("div", {
-      className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Equipment / disposal"), /*#__PURE__*/React.createElement("b", null, $0(estResult.equipment))), /*#__PURE__*/React.createElement("div", {
-      className: "costrow total"
-    }, /*#__PURE__*/React.createElement("span", null, "Total cost"), /*#__PURE__*/React.createElement("b", null, $0(cost)))), /*#__PURE__*/React.createElement("div", {
-      className: "marginbox"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "marginhead"
-    }, /*#__PURE__*/React.createElement("span", null, "Gross margin"), /*#__PURE__*/React.createElement("span", {
-      className: "marginpct"
-    }, estMargin, "%")), /*#__PURE__*/React.createElement("input", {
-      className: "bidslider",
-      type: "range",
-      min: "15",
-      max: "50",
-      step: "1",
-      value: estMargin,
-      style: {
-        ["--pct"]: (estMargin - 15) / 35 * 100 + "%"
-      },
-      onChange: e => setEstMargin(num(e.target.value))
-    }), /*#__PURE__*/React.createElement("div", {
-      className: "bidends"
-    }, /*#__PURE__*/React.createElement("span", null, "15%"), /*#__PURE__*/React.createElement("span", {
-      className: "hint"
-    }, "profit ", $0(profit)), /*#__PURE__*/React.createElement("span", null, "50%")), /*#__PURE__*/React.createElement("div", {
-      className: "sellprice"
-    }, /*#__PURE__*/React.createElement("span", null, "Your price"), /*#__PURE__*/React.createElement("b", null, $0(sell)))), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost full",
-      onClick: () => {
-        setEstResult(null);
-        setEstDesc("");
-        setEstPhotos([]);
-        setEstDims("");
-      }
-    }, "Start a new estimate"));
-  })())), me.role === "contractor" && tab === "estimator" && estMode === "house" && !overlay && /*#__PURE__*/React.createElement("main", {
-    className: "page"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (estMode === "house" ? "primary" : "ghost"),
-    style: {
-      flex: 1
-    },
-    onClick: () => {
-      setEstMode("house");
-      loadWholeHouseSpecs();
-    }
-  }, "🏠 House selector"), /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (estMode === "categories" ? "primary" : "ghost"),
-    style: {
-      flex: 1
-    },
-    onClick: () => setEstMode("categories")
-  }, "📋 Categories")), /*#__PURE__*/React.createElement("section", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel"
-  }, "Job context"), whPhotos.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 6,
-      flexWrap: "wrap",
-      marginTop: 6
-    }
-  }, whPhotos.map((p, i) => /*#__PURE__*/React.createElement("div", {
-    className: "thumb",
-    key: i
-  }, /*#__PURE__*/React.createElement("img", {
-    src: p,
-    alt: ""
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setWhPhotos(a => a.filter((_, idx) => idx !== i))
-  }, "×")))), whReportBusy && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Reading the report…"), whDims && /*#__PURE__*/React.createElement("p", {
-    className: "ai-note",
-    style: {
-      marginTop: 6
-    }
-  }, "📐 ", whDims, " ", /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    style: {
-      padding: "0 6px",
-      marginLeft: 6
-    },
-    onClick: () => setWhDims("")
-  }, "✕")), !whPhotos.length && !whDims && !whReportBusy && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Add jobsite photos or a measurement report with the buttons below — AL uses them to size the job.")), /*#__PURE__*/React.createElement("section", {
+  }, "Loading the house…")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convhead"
@@ -9749,10 +9191,10 @@ function App() {
     style: {
       marginLeft: "auto"
     }
-  }, "ask or tell him about the job")), /*#__PURE__*/React.createElement("div", {
+  }, "tap a button or just tell me")), /*#__PURE__*/React.createElement("div", {
     className: "convmsgs",
     style: {
-      maxHeight: 240,
+      maxHeight: 220,
       overflowY: "auto",
       marginTop: 6
     }
@@ -9766,7 +9208,7 @@ function App() {
     alt: ""
   })), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai"
-  }, alOpener())), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
+  }, "Hey, I'm AL — let's build this estimate. First: are we working outside, inside, or on the systems?")), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
     className: "convrow ai",
     key: i
   }, /*#__PURE__*/React.createElement("div", {
@@ -9790,7 +9232,198 @@ function App() {
     alt: ""
   })), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai typing"
-  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null)))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null)))), (() => {
+    const tradesHere = HOUSE_HOTSPOTS.filter(h => h.state === houseView);
+    const selKeys = Object.keys(houseScope);
+    const needType = selKeys.filter(t => HOUSE_TYPES[t] && houseScope[t] === true);
+    return /*#__PURE__*/React.createElement("div", {
+      className: "popin",
+      style: {
+        marginTop: 8
+      }
+    }, selStep === "category" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "convbubble ai",
+      style: {
+        marginBottom: 6
+      }
+    }, "Outside, inside, or systems?"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6
+      }
+    }, HOUSE_STATES.map(s => /*#__PURE__*/React.createElement("button", {
+      key: s.key,
+      className: "btn " + (houseView === s.key ? "primary" : "ghost"),
+      style: {
+        flex: 1
+      },
+      onClick: () => {
+        setHouseView(s.key);
+        setSelStep("trades");
+      }
+    }, CAT_LABEL[s.key])))), selStep === "trades" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "convbubble ai",
+      style: {
+        marginBottom: 6
+      }
+    }, "In ", CAT_LABEL[houseView], ", what are you doing? Tap all that apply."), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6
+      }
+    }, tradesHere.map(h => {
+      const on = !!houseScope[h.trade];
+      return /*#__PURE__*/React.createElement("button", {
+        key: h.trade,
+        className: "btn " + (on ? "primary" : "ghost"),
+        style: {
+          padding: "6px 10px",
+          fontSize: 13
+        },
+        onClick: () => {
+          if (on) {
+            houseDeselect(h.trade);
+            if (activeTrade === h.trade) setActiveTrade(null);
+          } else {
+            houseSelect(h.trade, true);
+            setActiveTrade(h.trade);
+          }
+        }
+      }, on ? "✓ " : "", h.label);
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      value: customTrade,
+      onChange: e => setCustomTrade(e.target.value),
+      placeholder: "Something else? type a trade…",
+      style: {
+        flex: 1
+      }
+    }), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      disabled: !customTrade.trim(),
+      onClick: () => {
+        houseSelect(customTrade.trim(), true);
+        setActiveTrade(customTrade.trim());
+        setCustomTrade("");
+      }
+    }, "+ Add")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      onClick: () => setSelStep("category")
+    }, "← Change area"), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary grow1",
+      disabled: !selKeys.length,
+      onClick: () => setSelStep(needType.length ? "type" : "ready")
+    }, selKeys.length ? "Continue →" : "Pick a trade"))), selStep === "type" && needType.length > 0 && (() => {
+      const t = needType[0];
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        className: "convbubble ai",
+        style: {
+          marginBottom: 6
+        }
+      }, TRADE_LABEL(t), " — which type / system? ", /*#__PURE__*/React.createElement("span", {
+        className: "hint"
+      }, "locks the takeoff so systems don't mix")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6
+        }
+      }, HOUSE_TYPES[t].map(ty => /*#__PURE__*/React.createElement("button", {
+        key: ty,
+        className: "btn ghost",
+        style: {
+          padding: "6px 10px",
+          fontSize: 13
+        },
+        onClick: () => {
+          houseSelect(t, ty);
+          setActiveTrade(t);
+          const rem = needType.filter(x => x !== t);
+          setSelStep(rem.length ? "type" : "ready");
+        }
+      }, ty))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 6,
+          marginTop: 8
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        value: customType,
+        onChange: e => setCustomType(e.target.value),
+        placeholder: "or type another system…",
+        style: {
+          flex: 1
+        }
+      }), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost",
+        disabled: !customType.trim(),
+        onClick: () => {
+          houseSelect(t, customType.trim());
+          setActiveTrade(t);
+          setCustomType("");
+          const rem = needType.filter(x => x !== t);
+          setSelStep(rem.length ? "type" : "ready");
+        }
+      }, "Use")), /*#__PURE__*/React.createElement("p", {
+        className: "hint",
+        style: {
+          marginTop: 6
+        }
+      }, "“Mixed” combines systems — AL sizes each part separately so the bid stays accurate."));
+    })(), selStep === "ready" && /*#__PURE__*/React.createElement("div", {
+      className: "convbubble ai"
+    }, "Scope locked in. Add measurements or photos below if you've got them, fill any blanks, then Build."), selKeys.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 10
+      }
+    }, selKeys.map(t => /*#__PURE__*/React.createElement("span", {
+      key: t,
+      onClick: () => {
+        setActiveTrade(t);
+        if (HOUSE_TYPES[t] && houseScope[t] === true) setSelStep("type");
+      },
+      style: {
+        cursor: "pointer",
+        fontSize: 12,
+        background: activeTrade === t ? "#0a7d36" : "#e7f6ec",
+        color: activeTrade === t ? "#fff" : "#0a7d36",
+        border: "1px solid #b6e0c4",
+        borderRadius: 12,
+        padding: "3px 10px"
+      }
+    }, /*#__PURE__*/React.createElement("b", null, TRADE_LABEL(t)), houseScope[t] && houseScope[t] !== true ? ": " + houseScope[t] : "", " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700
+      },
+      onClick: e => {
+        e.stopPropagation();
+        houseDeselect(t);
+        if (activeTrade === t) setActiveTrade(null);
+      }
+    }, "×"))), selStep !== "trades" && /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px",
+        fontSize: 12
+      },
+      onClick: () => setSelStep("trades")
+    }, "+ add more")));
+  })(), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -9860,7 +9493,7 @@ function App() {
       flex: 1
     },
     onClick: () => setWhMeasuredOpen(o => !o)
-  }, "📐 Measured")), whMeasuredOpen && /*#__PURE__*/React.createElement("section", {
+  }, "📐 Measure")), whMeasuredOpen && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
@@ -9876,36 +9509,58 @@ function App() {
     href: "https://poly.cam",
     target: "_blank",
     rel: "noopener noreferrer"
-  }, "Polycam"), " (interior). Then tap 📄 Report to upload it and AL will read the numbers.")), whSpecs ? /*#__PURE__*/React.createElement(InteractiveHouse, {
-    scope: houseScope,
-    onSelect: houseSelect,
-    onDeselect: houseDeselect,
-    priceBook: enginePB,
-    role: me.role
-  }) : /*#__PURE__*/React.createElement("section", {
+  }, "Polycam"), " (interior). Then tap 📄 Report to upload it and AL reads the numbers.")), (whPhotos.length > 0 || whDims) && /*#__PURE__*/React.createElement("section", {
     className: "card"
-  }, /*#__PURE__*/React.createElement("p", {
+  }, whPhotos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, whPhotos.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    className: "thumb",
+    key: i
+  }, /*#__PURE__*/React.createElement("img", {
+    src: p,
+    alt: ""
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setWhPhotos(a => a.filter((_, idx) => idx !== i))
+  }, "×")))), whReportBusy && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Loading the house…")), Object.keys(houseScope).length > 0 && /*#__PURE__*/React.createElement("section", {
+  }, "Reading the report…"), whDims && /*#__PURE__*/React.createElement("p", {
+    className: "ai-note",
+    style: {
+      marginTop: 6
+    }
+  }, "📐 ", whDims, " ", /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "0 6px",
+      marginLeft: 6
+    },
+    onClick: () => setWhDims("")
+  }, "✕"))), Object.keys(houseScope).length > 0 && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "seclabel"
-  }, "Your scope ", /*#__PURE__*/React.createElement("span", {
+  }, "Details ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, Object.keys(houseScope).length, " trade", Object.keys(houseScope).length === 1 ? "" : "s", " — tap the house to add or remove")), Object.keys(houseScope).map(ht => {
+  }, "fill any blanks — AL pre-fills from your files")), Object.keys(houseScope).map(ht => {
     const pbk = PB_TRADE_KEY[ht];
     const spec = pbk ? (whSpecs || []).find(s => s.trade === pbk) : null;
-    const htLabel = (HOUSE_HOTSPOTS.find(h => h.trade === ht) || {}).label || ht;
     const own = pbk ? (enginePB || []).filter(e => e && String(e.trade) === pbk && String(e.material || "").trim()).map(e => String(e.material).trim()) : [];
     const ownUniq = own.filter((m, i) => own.indexOf(m) === i);
     const mats = ownUniq.concat((MATERIAL_SUGGESTIONS[ht] || []).filter(m => !ownUniq.includes(m)));
     const curMat = houseScope[ht];
+    const isSS = /standing seam|snap.?lock|\blok\b|metal panel/i.test(String(curMat || "") + " " + ht);
     return /*#__PURE__*/React.createElement("div", {
       className: "card",
       style: {
-        marginTop: 10
+        marginTop: 10,
+        borderColor: activeTrade === ht ? "#0a7d36" : undefined
       },
-      key: ht
+      key: ht,
+      onClick: () => setActiveTrade(ht)
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
@@ -9914,28 +9569,48 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("span", {
       className: "seclabel"
-    }, "✓ ", htLabel), /*#__PURE__*/React.createElement("button", {
+    }, "✓ ", TRADE_LABEL(ht), curMat && curMat !== true ? " · " + curMat : ""), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
         padding: "2px 8px"
       },
-      onClick: () => houseDeselect(ht)
+      onClick: e => {
+        e.stopPropagation();
+        houseDeselect(ht);
+        if (activeTrade === ht) setActiveTrade(null);
+      }
     }, "remove")), /*#__PURE__*/React.createElement("label", {
       className: "estf",
       style: {
         marginTop: 6
       }
-    }, /*#__PURE__*/React.createElement("span", null, "Materials"), /*#__PURE__*/React.createElement("select", {
+    }, /*#__PURE__*/React.createElement("span", null, "Material", HOUSE_TYPES[ht] ? " / system" : ""), /*#__PURE__*/React.createElement("select", {
       value: curMat && curMat !== true ? curMat : "",
       onChange: e => houseSelect(ht, e.target.value)
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "— choose a material —"), curMat && curMat !== true && !mats.includes(curMat) && /*#__PURE__*/React.createElement("option", {
+    }, "— choose —"), curMat && curMat !== true && !(HOUSE_TYPES[ht] || mats).includes(curMat) && /*#__PURE__*/React.createElement("option", {
       value: curMat
-    }, curMat), mats.map(m => /*#__PURE__*/React.createElement("option", {
+    }, curMat), (HOUSE_TYPES[ht] || mats).map(m => /*#__PURE__*/React.createElement("option", {
       key: m,
       value: m
-    }, m)))), spec ? /*#__PURE__*/React.createElement("div", {
+    }, m)))), isSS && /*#__PURE__*/React.createElement("label", {
+      className: "estf",
+      style: {
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "Panel width (in)"), /*#__PURE__*/React.createElement("select", {
+      value: num(housePanelW[ht]) || 0,
+      onChange: e => setHousePanelW(p => ({
+        ...p,
+        [ht]: num(e.target.value)
+      }))
+    }, /*#__PURE__*/React.createElement("option", {
+      value: 0
+    }, "default"), [12, 16, 18].map(w => /*#__PURE__*/React.createElement("option", {
+      key: w,
+      value: w
+    }, w, "\"")))), spec ? /*#__PURE__*/React.createElement("div", {
       className: "estfields",
       style: {
         marginTop: 6
@@ -9953,51 +9628,339 @@ function App() {
       type: "number",
       value: whInputs[pbk] && whInputs[pbk][inp.name] != null ? whInputs[pbk][inp.name] : "",
       onChange: e => whSet(pbk, inp.name, num(e.target.value))
-    }))), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Complexity (", spec.complexity.min, "–", spec.complexity.max, ")"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      step: "0.05",
-      value: whInputs[pbk] && whInputs[pbk].complexityFactor != null ? whInputs[pbk].complexityFactor : spec.complexity.default,
-      onChange: e => whSet(pbk, "complexityFactor", num(e.target.value))
-    }))) : /*#__PURE__*/React.createElement("p", {
+    })))) : /*#__PURE__*/React.createElement("p", {
       className: "hint",
       style: {
         marginTop: 6
       }
-    }, "No extra dimensions needed — AL prices this from your description, photos, and uploaded measurements."));
+    }, "No fixed dimensions — AL prices this from your description, photos, and measurements."));
   })), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    disabled: whBusy || !Object.keys(houseScope).length,
+    className: "btn primary full big",
+    disabled: estBusy === "run" || !Object.keys(houseScope).length,
     style: {
       marginTop: 4
     },
-    onClick: buildWholeHouse
-  }, whBusy ? "Building combined estimate…" : Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Tap the house to add trades"), whResult && /*#__PURE__*/React.createElement("section", {
-    className: "costbox",
-    style: {
-      marginTop: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "h1"
-  }, "Combined estimate — ", whResult.combined.tradeCount, " trade", whResult.combined.tradeCount === 1 ? "" : "s"), whResult.errors && whResult.errors.length > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Skipped (no engine spec): ", whResult.errors.map(e => e.trade).join(", ")), whResult.combined.byTrade.map(b => /*#__PURE__*/React.createElement("div", {
-    className: "costrow",
-    key: b.trade
-  }, /*#__PURE__*/React.createElement("span", null, b.title, b.unpriced > 0 ? /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, " · ⚠️ ", b.unpriced, " line", b.unpriced === 1 ? "" : "s", " need a price") : null), /*#__PURE__*/React.createElement("b", null, $0(b.grandTotal)))), /*#__PURE__*/React.createElement("div", {
-    className: "costrow"
-  }, /*#__PURE__*/React.createElement("span", null, "Materials — all trades"), /*#__PURE__*/React.createElement("b", null, $0(whResult.combined.materialTotal))), /*#__PURE__*/React.createElement("div", {
-    className: "costrow"
-  }, /*#__PURE__*/React.createElement("span", null, "Labor — all trades · ", whResult.combined.laborHours, " hrs"), /*#__PURE__*/React.createElement("b", null, $0(whResult.combined.laborCost))), /*#__PURE__*/React.createElement("div", {
-    className: "costrow total"
-  }, /*#__PURE__*/React.createElement("span", null, "Combined total"), /*#__PURE__*/React.createElement("b", null, $0(whResult.combined.grandTotal))), whResult.combined.priceSummary && whResult.combined.priceSummary.pricebook + whResult.combined.priceSummary.retail > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "💲 ", whResult.combined.priceSummary.pricebook, " material line", whResult.combined.priceSummary.pricebook === 1 ? "" : "s", " priced from your book", whResult.combined.priceSummary.retail ? " · " + whResult.combined.priceSummary.retail + " retail (verify)" : "", " · ", whResult.combined.priceSummary.seed, " on seed pricing."), /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Real-priced takeoff — the SAME full takeoff as the Categories view: current local material pricing + your price book, labor from your production rates. Verify quantities against the measurements before sending.")), whSpecs && /*#__PURE__*/React.createElement("button", {
+    onClick: buildUnifiedEstimate
+  }, estBusy === "run" ? "Building takeoff…" : Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Add a trade to build")) : (() => {
+    const trades = estResult.trades || [];
+    const tradeCost = t => {
+      const matTotal = t.items.reduce((a, b) => a + (num(b.cost) || 0), 0);
+      const matTax = Math.round(matTotal * t.taxRate);
+      const labor = Math.round(t.laborHours * t.laborRate);
+      return {
+        matTotal,
+        matTax,
+        labor,
+        cost: labor + matTotal + matTax + t.equipment
+      };
+    };
+    const combined = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+    const sell = Math.round(combined / (1 - estMargin / 100) / 25) * 25;
+    const profit = sell - combined;
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginBottom: 4
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost grow1",
+      onClick: () => setEstResult(null)
+    }, "← Back to scope"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost grow1",
+      onClick: () => {
+        setEstResult(null);
+        setHouseScope({});
+        setHousePanelW({});
+        setWhDims("");
+        setWhPhotos([]);
+        setActiveTrade(null);
+        setSelStep("category");
+        setAlMsgs([]);
+      }
+    }, "Start new estimate")), /*#__PURE__*/React.createElement("div", {
+      className: "h1",
+      style: {
+        marginBottom: 2
+      }
+    }, trades.length === 1 ? trades[0].title : "Combined estimate — " + trades.length + " trades"), estResult.errors && estResult.errors.length > 0 && /*#__PURE__*/React.createElement("p", {
+      className: "hint"
+    }, "Couldn't build: ", estResult.errors.map(e => e.label).join(", "), " — tap Back to retry."), trades.map((t, ti) => {
+      const c = tradeCost(t);
+      return /*#__PURE__*/React.createElement("section", {
+        className: "card",
+        key: ti
+      }, trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+        className: "h2",
+        style: {
+          marginBottom: 4
+        }
+      }, t.label || t.title), t.aiBuilt && !(t.calibN > 0) && /*#__PURE__*/React.createElement("div", {
+        style: {
+          margin: "4px 0 8px",
+          padding: "8px 11px",
+          background: "#FFF4E6",
+          border: "1px solid #F2C98A",
+          borderRadius: 10,
+          fontSize: 12.5,
+          color: "#8A5A12",
+          fontWeight: 600
+        }
+      }, "🤖 AI-built trade — VERIFY before bidding."), t.calibN > 0 ? /*#__PURE__*/React.createElement("div", {
+        style: {
+          margin: "4px 0 8px",
+          padding: "8px 11px",
+          background: "#F0FAF3",
+          border: "1px solid #BFE6CC",
+          borderRadius: 10,
+          fontSize: 12.5,
+          color: "#1B7A3D",
+          fontWeight: 600
+        }
+      }, "✓ Calibrated from ", t.calibN, " job", t.calibN === 1 ? "" : "s", " — labor ×", t.calibFactor, ".") : t.calibKey ? /*#__PURE__*/React.createElement("p", {
+        className: "hint",
+        style: {
+          marginBottom: 6
+        }
+      }, "Uncalibrated — log this job's real hours when it's done to dial in “", t.calibKey, "”.") : null, t.manualLoaded ? /*#__PURE__*/React.createElement("div", {
+        className: "manualbadge on"
+      }, "📘 Caza ", t.manualKey, " manual loaded") : t.manualKey ? /*#__PURE__*/React.createElement("div", {
+        className: "manualbadge off"
+      }, "⚪ No manual loaded (", t.manualKey, ") — built-in trade logic") : null, t.notes && /*#__PURE__*/React.createElement("p", {
+        className: "hint"
+      }, t.notes), t.checks && t.checks.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          margin: "9px 0 5px",
+          padding: "9px 11px",
+          background: "#F0FAF3",
+          border: "1px solid #BFE6CC",
+          borderRadius: 10
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11.5,
+          fontWeight: 700,
+          color: "#1B7A3D",
+          textTransform: "uppercase",
+          letterSpacing: ".4px",
+          marginBottom: 4
+        }
+      }, "✓ Opus pre-flight check"), t.checks.map((c2, i) => /*#__PURE__*/React.createElement("div", {
+        key: i,
+        style: {
+          fontSize: 12.5,
+          color: "#2F4A39",
+          lineHeight: 1.45
+        }
+      }, "• ", c2))), t.primaryOptions && t.primaryOptions.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        className: "seclabel"
+      }, "Popular local options ", /*#__PURE__*/React.createElement("span", {
+        className: "hint"
+      }, "good · better · best — tap to use")), /*#__PURE__*/React.createElement("div", {
+        className: "tiergrid"
+      }, t.primaryOptions.map((o, i) => /*#__PURE__*/React.createElement("div", {
+        className: "tiercard" + (t.chosenTier === o.tier ? " on" : ""),
+        key: i
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "tiertop"
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "tierbadge"
+      }, o.tier), /*#__PURE__*/React.createElement("span", {
+        className: "tiercost"
+      }, $0(o.cost))), /*#__PURE__*/React.createElement("div", {
+        className: "tiername"
+      }, o.name), o.why && /*#__PURE__*/React.createElement("div", {
+        className: "tierwhy"
+      }, o.why), /*#__PURE__*/React.createElement("div", {
+        className: "tieract"
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "btn " + (t.chosenTier === o.tier ? "primary" : "ghost") + " grow1",
+        onClick: () => estPickTier(ti, o)
+      }, t.chosenTier === o.tier ? "✓ Using" : "Use this"), o.url && /^https?:\/\//.test(o.url) && /*#__PURE__*/React.createElement("a", {
+        className: "btn ghost grow1",
+        href: o.url,
+        target: "_blank",
+        rel: "noopener noreferrer"
+      }, "View ↗")))))), /*#__PURE__*/React.createElement("div", {
+        className: "seclabel"
+      }, "Material takeoff ", /*#__PURE__*/React.createElement("span", {
+        className: "hint"
+      }, "tap any field to edit")), /*#__PURE__*/React.createElement("div", {
+        className: "takeoff"
+      }, t.items.map((it, i) => /*#__PURE__*/React.createElement("div", {
+        className: "toitem",
+        key: i
+      }, /*#__PURE__*/React.createElement("input", {
+        className: "toname",
+        value: it.name,
+        onChange: e => estItemSet(ti, i, "name", e.target.value)
+      }), /*#__PURE__*/React.createElement("input", {
+        className: "toqty",
+        type: "number",
+        value: it.qty,
+        onChange: e => estItemSet(ti, i, "qty", e.target.value)
+      }), /*#__PURE__*/React.createElement("input", {
+        className: "tounit",
+        value: it.unit,
+        onChange: e => estItemSet(ti, i, "unit", e.target.value),
+        placeholder: "unit"
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "todollar",
+        title: "unit price"
+      }, "$", /*#__PURE__*/React.createElement("input", {
+        className: "tocost",
+        type: "number",
+        value: it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0,
+        onChange: e => estItemSet(ti, i, "unitPrice", e.target.value)
+      })), /*#__PURE__*/React.createElement("b", {
+        className: "tolinecost",
+        title: it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? "Priced from your price book" : ""
+      }, it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : "", $0(it.cost)), /*#__PURE__*/React.createElement("button", {
+        className: "todel",
+        onClick: () => estItemDel(ti, i)
+      }, /*#__PURE__*/React.createElement(X, {
+        size: 14
+      })))), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost full",
+        onClick: () => estItemAdd(ti)
+      }, /*#__PURE__*/React.createElement(Plus, {
+        size: 14
+      }), " Add material line")), /*#__PURE__*/React.createElement("div", {
+        className: "seclabel",
+        style: {
+          marginTop: 12
+        }
+      }, "Labor & site"), /*#__PURE__*/React.createElement("div", {
+        className: "estfields"
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Man-hours"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: t.laborHours,
+        onChange: e => estTradeField(ti, "laborHours", num(e.target.value))
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Burdened $/hr"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: t.laborRate,
+        onChange: e => estTradeField(ti, "laborRate", num(e.target.value))
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Crew"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: t.crew,
+        onChange: e => estTradeField(ti, "crew", num(e.target.value))
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Days on site"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: t.days,
+        onChange: e => estTradeField(ti, "days", num(e.target.value))
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Equipment $"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: t.equipment,
+        onChange: e => estTradeField(ti, "equipment", num(e.target.value))
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Tax rate"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        step: "0.001",
+        value: t.taxRate,
+        onChange: e => estTradeField(ti, "taxRate", num(e.target.value))
+      }))), /*#__PURE__*/React.createElement("div", {
+        className: "costbox",
+        style: {
+          marginTop: 12
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "costrow"
+      }, /*#__PURE__*/React.createElement("span", null, "Materials (", t.items.length, " lines)"), /*#__PURE__*/React.createElement("b", null, $0(c.matTotal))), /*#__PURE__*/React.createElement("div", {
+        className: "costrow"
+      }, /*#__PURE__*/React.createElement("span", null, "Material tax (", (t.taxRate * 100).toFixed(1), "%)"), /*#__PURE__*/React.createElement("b", null, $0(c.matTax))), /*#__PURE__*/React.createElement("div", {
+        className: "costrow"
+      }, /*#__PURE__*/React.createElement("span", null, "Labor — ", t.laborHours, " hrs @ ", $0(t.laborRate), t.laborSource === "ratebook" ? /*#__PURE__*/React.createElement("span", {
+        className: "labtag book"
+      }, "rate book") : t.laborSource === "engine" ? /*#__PURE__*/React.createElement("span", {
+        className: "labtag book"
+      }, "engine") : /*#__PURE__*/React.createElement("span", {
+        className: "labtag est"
+      }, "AI est. · verify")), /*#__PURE__*/React.createElement("b", null, $0(c.labor))), /*#__PURE__*/React.createElement("div", {
+        className: "costrow"
+      }, /*#__PURE__*/React.createElement("span", null, "Equipment / disposal"), /*#__PURE__*/React.createElement("b", null, $0(t.equipment))), /*#__PURE__*/React.createElement("div", {
+        className: "costrow total"
+      }, /*#__PURE__*/React.createElement("span", null, t.label || "Trade", " cost"), /*#__PURE__*/React.createElement("b", null, $0(c.cost)))), t.calibKey && (logOpen === t.calibKey ? /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          gap: 6,
+          alignItems: "center",
+          marginTop: 8
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        value: logMH,
+        onChange: e => setLogMH(e.target.value),
+        placeholder: "Actual MH (est " + t.laborHours + ")",
+        style: {
+          flex: 1
+        }
+      }), /*#__PURE__*/React.createElement("button", {
+        className: "btn primary",
+        onClick: () => {
+          logActuals(t.calibKey, t.laborHours, num(logMH), t.title);
+        }
+      }, "Save"), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost",
+        onClick: () => {
+          setLogOpen(false);
+          setLogMH("");
+        }
+      }, "✕")) : /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost",
+        style: {
+          marginTop: 8,
+          fontSize: 12
+        },
+        onClick: () => setLogOpen(t.calibKey)
+      }, "📋 Log job actuals (calibrate)")));
+    }), /*#__PURE__*/React.createElement("section", {
+      className: "card"
+    }, trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+      className: "costbox"
+    }, trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
+      className: "costrow",
+      key: ti
+    }, /*#__PURE__*/React.createElement("span", null, t.label || t.title), /*#__PURE__*/React.createElement("b", null, $0(tradeCost(t).cost)))), /*#__PURE__*/React.createElement("div", {
+      className: "costrow total"
+    }, /*#__PURE__*/React.createElement("span", null, "Combined cost"), /*#__PURE__*/React.createElement("b", null, $0(combined)))), /*#__PURE__*/React.createElement("div", {
+      className: "marginbox",
+      style: {
+        marginTop: trades.length > 1 ? 12 : 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "marginhead"
+    }, /*#__PURE__*/React.createElement("span", null, "Gross margin"), /*#__PURE__*/React.createElement("span", {
+      className: "marginpct"
+    }, estMargin, "%")), /*#__PURE__*/React.createElement("input", {
+      className: "bidslider",
+      type: "range",
+      min: "15",
+      max: "50",
+      step: "1",
+      value: estMargin,
+      style: {
+        ["--pct"]: (estMargin - 15) / 35 * 100 + "%"
+      },
+      onChange: e => setEstMargin(num(e.target.value))
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "bidends"
+    }, /*#__PURE__*/React.createElement("span", null, "15%"), /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "profit ", $0(profit)), /*#__PURE__*/React.createElement("span", null, "50%")), /*#__PURE__*/React.createElement("div", {
+      className: "sellprice"
+    }, /*#__PURE__*/React.createElement("span", null, "Your price"), /*#__PURE__*/React.createElement("b", null, $0(sell))))));
+  })(), whSpecs && /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 10
