@@ -620,6 +620,30 @@ function realisticLaborFloor(sqGuess, dims, sysStr, isRoof) {
   return Math.round(sqGuess * perSq);
 }
 
+// SYSTEM PURITY (BUG 8): deterministically drop takeoff lines that belong to a
+// DIFFERENT roofing/siding system than the job's, so a shingle roof can't ship
+// metal-panel/standing-seam lines (and vice-versa). Targets system-specific
+// products only — never generic accessories (drip edge, valley metal, step
+// flashing are used on shingle roofs too, so "metal" alone is NOT banned).
+function stripCrossSystem(items, sysStr) {
+  if (!Array.isArray(items)) return items || [];
+  const s = (sysStr || "").toLowerCase();
+  const metal = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|metal roof/.test(s);
+  const shingle = /shingle|asphalt|architectural|3-tab|laminate/.test(s) && !metal;
+  const tpo = /\btpo\b/.test(s), epdm = /\bepdm\b/.test(s);
+  const vinyl = /vinyl (siding|lap)/.test(s);
+  const fiber = /fiber.?cement|hardie/.test(s);
+  let banned = null;
+  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof/i;
+  else if (metal) banned = /asphalt|3-tab|architectural shingle|laminate shingle|shingle bundle|starter shingle/i;
+  else if (tpo) banned = /shingle|asphalt|standing seam|metal panel|epdm membrane/i;
+  else if (epdm) banned = /shingle|asphalt|standing seam|metal panel|tpo membrane/i;
+  else if (vinyl) banned = /fiber.?cement|hardie|cedar lap|steel siding/i;
+  else if (fiber) banned = /vinyl (siding|lap)|steel siding/i;
+  if (!banned) return items;
+  return items.filter((it) => !banned.test(String(it && it.name || "")));
+}
+
 const rid = () => Math.random().toString(36).slice(2, 9);
 const $0 = (n) => "$" + (Math.round(n) || 0).toLocaleString();
 const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
@@ -1120,17 +1144,14 @@ function ImageHouse({ scope, onSelect, onDeselect, priceBook, role, onImgError }
         ))}
         {spots.map((h) => {
           const on = !!sc[h.trade];
+          const hot = hover === h.trade;
           return (
             <div key={h.trade}
               onMouseEnter={() => setHover(h.trade)} onMouseLeave={() => setHover((p) => p === h.trade ? null : p)}
               onClick={() => setSidebar(h.trade)}
-              style={{ position: "absolute", left: h.x + "%", top: h.y + "%", width: h.w + "%", height: h.h + "%", cursor: "pointer", borderRadius: 8, background: on ? "rgba(20,160,74,.28)" : (hover === h.trade ? "rgba(255,255,255,.18)" : "transparent"), border: on ? "2px solid #14a04a" : (hover === h.trade ? "2px solid rgba(255,255,255,.85)" : "2px solid transparent"), transition: "background .15s, border-color .15s" }}>
-              {/* rest marker dot (discoverability without labels) */}
-              <span style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", width: 12, height: 12, borderRadius: "50%", background: on ? "#14a04a" : "rgba(255,255,255,.92)", border: "2px solid " + (on ? "#0a7d36" : "rgba(0,0,0,.28)"), animation: on ? "none" : "alh_pulse 2.4s infinite", pointerEvents: "none" }}>{on ? <span style={{ position: "absolute", left: 1, top: -3, color: "#fff", fontSize: 9, fontWeight: 900 }}>✓</span> : null}</span>
-              {/* spring-in hover label */}
-              {hover === h.trade && (
-                <span style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", background: "rgba(17,24,39,.92)", color: "#fff", fontSize: 12, fontWeight: 700, padding: "4px 9px", borderRadius: 8, whiteSpace: "nowrap", animation: "alh_spring .22s ease", pointerEvents: "none", zIndex: 3 }}>{h.label}{on ? " ✓" : ""}</span>
-              )}
+              style={{ position: "absolute", left: h.x + "%", top: h.y + "%", width: h.w + "%", height: h.h + "%", cursor: "pointer", borderRadius: 8, background: on ? "rgba(20,160,74,.28)" : (hot ? "rgba(255,255,255,.18)" : "transparent"), border: on ? "2px solid #14a04a" : (hot ? "2px solid rgba(255,255,255,.85)" : "2px dashed rgba(255,255,255,.4)"), transition: "background .15s, border-color .15s" }}>
+              {/* always-visible compact label — works on touch (no hover needed, BUG 7) */}
+              <span style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)" + (hot ? " scale(1.1)" : ""), background: on ? "rgba(10,125,54,.96)" : "rgba(17,24,39,.82)", color: "#fff", fontSize: 10, fontWeight: 700, lineHeight: 1.1, padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap", pointerEvents: "none", zIndex: hot ? 4 : 3, boxShadow: "0 1px 3px rgba(0,0,0,.4)", transition: "transform .15s" }}>{on ? "✓ " : ""}{h.label}</span>
             </div>
           );
         })}
@@ -1522,6 +1543,7 @@ function App() {
     const d = parseJSON(text);
     let items = Array.isArray(d.items) ? d.items.map((it) => ({ name: String(it.name || "Item"), qty: num(it.qty), unit: String(it.unit || ""), cost: Math.round(num(it.cost)) })) : [];
     const sysStr = (label + " " + mat).toLowerCase();
+    items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines
     const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane/.test(sysStr);
     // deterministic roof quantities (drip edge, valley, ice&water…) — same override Categories applies
     if (isRoof && whDims) {
@@ -2296,7 +2318,7 @@ function App() {
         try { d = repairJSON(raw.slice(st)); }
         catch (e2) { throw new Error("Estimate failed: the takeoff was long and got cut off — tap Build estimate again."); }
       }
-      const items = Array.isArray(d.items) ? d.items.map((it) => {
+      let items = Array.isArray(d.items) ? d.items.map((it) => {
         const qty = num(it.qty) || 0;
         const cost = Math.round(num(it.cost) || 0);
         const unitPrice = qty > 0 ? cost / qty : cost; // per-unit so qty edits recompute cost
@@ -2305,6 +2327,7 @@ function App() {
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
       const sysStr = (estScope + " " + estDesc).toLowerCase();
+      items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines (shingle job can't keep metal-panel lines)
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic) {
