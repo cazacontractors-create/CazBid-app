@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>CazBid</title>
+<!-- PWA: home-screen icon + standalone launch -->
+<link rel="apple-touch-icon" href="/assets/cazbid-icon-180.png" />
+<link rel="icon" type="image/png" href="/assets/cazbid-icon-192.png" />
+<link rel="manifest" href="/assets/manifest.json" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="CazBid" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#0d0d10" />
 <!-- React 18.3.1 (UMD, inlined — no CDN dependency; works offline and on Netlify) -->
 <script>
 /**
@@ -4151,223 +4160,9 @@ function App() {
       const epb = await pGet(ENGINE_PB_KEY);
       if (epb && Array.isArray(epb)) setEnginePB(epb);
       loaded.current = true;
-      setTimeout(() => seedDemo(), 2500);
     })();
   }, []);
-  // styled placeholder "photo" for a demo work-feed post (no real image generation in prototype) — an SVG data URL
-  const demoPhoto = (label, hue) => {
-    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='480' height='360'>" + "<rect width='480' height='360' fill='hsl(" + hue + ",18%,88%)'/>" + "<rect y='250' width='480' height='110' fill='hsl(" + hue + ",22%,62%)'/>" + "<polygon points='0,250 240,150 480,250' fill='hsl(" + hue + ",30%,46%)'/>" + "<text x='240' y='325' font-family='Arial' font-size='22' fill='#15181C' text-anchor='middle' font-weight='bold'>" + label + "</text>" + "</svg>";
-    return "data:image/svg+xml;base64," + btoa(svg);
-  };
-  const makeDemoContractors = place => {
-    const here = place || "North Country";
-    // pick a nearby-sounding regional descriptor; fall back gracefully
-    const co1 = (here + " Roofing & Metal").replace(/\s+/g, " ").trim();
-    const co2 = (here + " Exteriors").replace(/\s+/g, " ").trim();
-    const co3 = (here + " Home Pros").replace(/\s+/g, " ").trim();
-    const t = here + ", NY";
-    const ago = d => new Date(Date.now() - d).toISOString();
-    return [{
-      uid: "demo-co-1",
-      company: co1,
-      trades: "Roofing, metal roofs",
-      town: t,
-      base: t,
-      radius: 40,
-      bio: "Family-run, fully insured, 20+ years in the " + here + " area. Standing seam and shingle specialists.",
-      posts: [{
-        id: "dp1a",
-        photo: demoPhoto("Standing seam metal", 210),
-        caption: "Standing seam install we wrapped up near " + here + " — 26ga, hidden fasteners.",
-        at: ago(7e8)
-      }, {
-        id: "dp1b",
-        photo: demoPhoto("Architectural shingle", 30),
-        caption: "Full tear-off and reshingle, GAF Timberline HDZ. Clean site at the end of every day.",
-        at: ago(16e8)
-      }],
-      seedReviews: [{
-        stars: 5,
-        comment: "Crew was fast and clean. Roof looks great.",
-        at: ago(9e8)
-      }, {
-        stars: 5,
-        comment: "Fair price, no surprises.",
-        at: ago(2e9)
-      }]
-    }, {
-      uid: "demo-co-2",
-      company: co2,
-      trades: "Siding, windows, decks",
-      town: t,
-      base: t,
-      radius: 45,
-      bio: "Exterior remodels done right in " + here + ". James Hardie certified. We show up on time.",
-      posts: [{
-        id: "dp2a",
-        photo: demoPhoto("James Hardie siding", 140),
-        caption: "Hardie board refresh on a two-story — color is Iron Gray. Big curb-appeal jump.",
-        at: ago(11e8)
-      }, {
-        id: "dp2b",
-        photo: demoPhoto("Composite deck", 25),
-        caption: "12x16 composite deck with black aluminum rail. Built to last.",
-        at: ago(19e8)
-      }],
-      seedReviews: [{
-        stars: 4,
-        comment: "Good work, showed up when they said they would.",
-        at: ago(12e8)
-      }]
-    }, {
-      uid: "demo-co-3",
-      company: co3,
-      trades: "Roofing, siding, gutters",
-      town: t,
-      base: t,
-      radius: 35,
-      bio: "Local " + here + " crew, no subs. Free estimates, written warranties.",
-      posts: [{
-        id: "dp3a",
-        photo: demoPhoto("Seamless gutters", 200),
-        caption: "Seamless aluminum gutters, 6\" K-style, on a farmhouse. Leaf guard included.",
-        at: ago(6e8)
-      }],
-      seedReviews: [{
-        stars: 5,
-        comment: "Honest and professional. Highly recommend.",
-        at: ago(6e8)
-      }, {
-        stars: 5,
-        comment: "Did exactly what was quoted.",
-        at: ago(15e8)
-      }]
-    }];
-  };
-  const seedDemo = async () => {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const seed = (await sGet(SEED_KEY)) || {
-        day: "",
-        contractorsDone: false
-      };
-      // 1) Seed a few AI contractors once (only if the user index is thin)
-      const uidx = (await sGet(USER_INDEX)) || [];
-      if (!seed.contractorsDone || uidx.length < 3) {
-        // derive a local-sounding area from the tester's own town so demo pros feel local
-        const rawTown = (profH.town || profC.base || profC.town || "").trim();
-        const place = rawTown ? rawTown.split(",")[0].trim() : "";
-        const demoCos = makeDemoContractors(place);
-        for (const c of demoCos) {
-          await sSet(USER_KEY(c.uid), {
-            ...c,
-            role: "contractor",
-            avatar: "",
-            thumb: "",
-            demo: true,
-            seedReviews: c.seedReviews || [],
-            updatedAt: new Date().toISOString()
-          });
-        }
-        const merged = [...new Set([...demoCos.map(c => c.uid), ...uidx])].slice(0, 100);
-        await sSet(USER_INDEX, merged);
-        seed.contractorsDone = true;
-      }
-      // 2) Seed one fresh demo job per day
-      if (seed.day !== today) {
-        const samples = [{
-          title: "Asphalt shingle reroof — ranch",
-          desc: "Tear off one layer and reshingle my single-story ranch, about 1,700 sqft. A few spots feel soft near the bathroom vent.",
-          town: "Turin, NY",
-          lo: 9500,
-          hi: 13500
-        }, {
-          title: "Vinyl siding refresh",
-          desc: "Replace faded vinyl siding on a two-story, plus wrap two windows. House is roughly 24x40.",
-          town: "Port Leyden, NY",
-          lo: 14000,
-          hi: 19000
-        }, {
-          title: "Composite back deck",
-          desc: "Build a 12x16 composite deck off the kitchen door, about 3 ft off grade, with stairs and railing.",
-          town: "Constableville, NY",
-          lo: 11000,
-          hi: 16000
-        }, {
-          title: "Metal roof over porch",
-          desc: "Standing seam metal roof on a covered front porch, low slope, about 300 sqft.",
-          town: "Glenfield, NY",
-          lo: 4500,
-          hi: 7000
-        }, {
-          title: "Gutter replacement",
-          desc: "Replace all gutters and downspouts on a 1.5 story farmhouse, seamless aluminum.",
-          town: "Lyons Falls, NY",
-          lo: 1800,
-          hi: 3200
-        }];
-        const pick = samples[Math.floor(Math.random() * samples.length)];
-        const jid = "demo-job-" + today.replace(/-/g, "");
-        const existing = await sGet(JOB_KEY(jid));
-        if (!existing) {
-          const price = Math.round((pick.lo + pick.hi) / 2);
-          const demoHomeowners = [{
-            uid: "demo-ho-1",
-            name: "Karen M.",
-            bio: "Homeowner in " + pick.town + ". Looking for reliable local pros."
-          }, {
-            uid: "demo-ho-2",
-            name: "Dave R.",
-            bio: "Fixing up our place room by room. Value good communication."
-          }, {
-            uid: "demo-ho-3",
-            name: "The Whitakers",
-            bio: "Recently bought an older home — lots of projects ahead!"
-          }];
-          const dho = demoHomeowners[Math.floor(Math.random() * demoHomeowners.length)];
-          const job = {
-            id: jid,
-            createdAt: new Date().toISOString(),
-            status: "open",
-            homeownerUid: dho.uid,
-            homeownerName: dho.name,
-            contact: "(demo)",
-            town: pick.town,
-            address: "",
-            desc: pick.desc,
-            roofDims: "",
-            photos: [],
-            title: pick.title,
-            summary: pick.desc,
-            includes: [],
-            priceLow: pick.lo,
-            priceHigh: pick.hi,
-            days: 2,
-            mh: 24,
-            note: "Demo job for testing.",
-            price,
-            applicants: [],
-            chosen: null,
-            demo: true
-          };
-          await sSet(JOB_KEY(jid), job);
-          const jidx = (await sGet(JOB_INDEX)) || [];
-          await sSet(JOB_INDEX, [jid, ...jidx.filter(x => x !== jid)].slice(0, 120));
-          await sSet(USER_KEY(dho.uid), {
-            uid: dho.uid,
-            role: "homeowner",
-            name: dho.name,
-            town: pick.town,
-            bio: dho.bio,
-            demo: true,
-            updatedAt: new Date().toISOString()
-          });
-        }
-        seed.day = today;
-      }
-      await sSet(SEED_KEY, seed);
-    } catch (e) {/* seeding is best-effort */}
-  };
+  // (Demo contractor/homeowner/job seeding removed — no simulated data.)
 
   /* ----- autosave: me / job draft / profile drafts ----- */
   useEffect(() => {
@@ -6253,7 +6048,6 @@ function App() {
       goTab("myjobs");
       await refreshBoard();
       flash("Job posted ✓ Interested pros will show up here — you pick who gets it.");
-      demoApply(job);
     } catch (e) {
       flash("Post failed: " + errMsg(e));
     }
@@ -6318,46 +6112,10 @@ function App() {
       goTab("myjobs");
       await refreshBoard();
       flash("Estimate posted ✓ Local pros will apply — you pick who gets it.");
-      demoApply(job);
     } catch (e) {
       flash("Post failed: " + errMsg(e));
     }
     setBusy("");
-  };
-  const demoApply = async job => {
-    // a couple of demo contractors raise their hand, with different bids, so the
-    // homeowner sees a real "pick your pro" moment even with no real contractors around
-    const demoPros = [{
-      uid: "demo-co-1",
-      company: "North Country Roofing",
-      factor: 0.93
-    }, {
-      uid: "demo-co-3",
-      company: "Adirondack Home Pros",
-      factor: 1.07
-    }];
-    const lo = num(job.priceLow) || job.price,
-      hi = num(job.priceHigh) || job.price;
-    demoPros.forEach((dp, i) => {
-      setTimeout(async () => {
-        try {
-          const fresh = await sGet(JOB_KEY(job.id));
-          if (!fresh || fresh.status !== "open") return;
-          if ((fresh.applicants || []).some(a => a.uid === dp.uid)) return;
-          const mid = Math.round((lo + hi) / 2);
-          const bid = Math.max(lo, Math.min(hi, Math.round(mid * dp.factor / 50) * 50));
-          fresh.applicants = [...(fresh.applicants || []), {
-            uid: dp.uid,
-            company: dp.company,
-            bid,
-            at: new Date().toISOString(),
-            demo: true
-          }];
-          await sSet(JOB_KEY(fresh.id), fresh);
-          if (tab === "myjobs" || tab === "feed") await refreshBoard();
-        } catch (e) {/* best effort */}
-      }, 4000 + i * 5000 + Math.random() * 1500);
-    });
   };
   const myPlan = PLANS.find(pl => pl.id === me.plan) || null;
   const monthApps = board.filter(j => {
