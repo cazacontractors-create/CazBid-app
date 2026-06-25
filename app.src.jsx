@@ -66,6 +66,7 @@ const PRICEBOOK_KEY = "cazbid-pricebook-v1";
 const RATEBOOK_KEY = "cazbid-ratebook-v1";
 const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
+const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -650,6 +651,18 @@ function stripCrossSystem(items, sysStr) {
   else if (fiber) banned = /vinyl (siding|lap)|steel siding/i;
   if (!banned) return items;
   return items.filter((it) => !banned.test(String(it && it.name || "")));
+}
+
+// CALIBRATION (Feature B): turn logged job actuals into a per-trade labor factor.
+// Damped so one job can't swing estimates — a single job applies 1/3 of the
+// correction, 3+ jobs the full average (actual ÷ estimated) ratio.
+function calibFactorFrom(jobs) {
+  if (!Array.isArray(jobs) || !jobs.length) return 1;
+  const ratios = jobs.map((j) => (j.est > 0 ? j.act / j.est : 0)).filter((r) => r > 0 && isFinite(r));
+  if (!ratios.length) return 1;
+  const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+  const damp = Math.min(1, ratios.length / 3);
+  return Math.round((1 + (avg - 1) * damp) * 1000) / 1000;
 }
 
 const rid = () => Math.random().toString(36).slice(2, 9);
@@ -1298,6 +1311,10 @@ function App() {
   const [aiTradeBusy, setAiTradeBusy] = useState(false);
   const [aiTradeDraft, setAiTradeDraft] = useState(null); // generated def under review
   const aiActiveTrade = useRef(null);                // def to inject into the next estimate
+  // ---- job-cost calibration (Feature B) ----
+  const [calib, setCalib] = useState({});            // { tradeKey: { jobs:[{est,act,at,title}], factor, n } }
+  const [logOpen, setLogOpen] = useState(false);     // "log actuals" form open on the result
+  const [logMH, setLogMH] = useState("");
   // ---- contractor Pro estimator ----
   const [estDesc, setEstDesc] = useState("");
   const [estPhotos, setEstPhotos] = useState([]);
@@ -1590,6 +1607,10 @@ function App() {
     const floor = realisticLaborFloor(sqGuess, whDims, sysStr, isRoof);
     if (floor > 0 && laborHours < floor) laborHours = floor;
     if (laborHours <= 0) laborHours = Math.max(8, (num(d.crew) || 2) * (num(d.days) || 1) * 8);
+    // Feature B: apply this trade's labor calibration factor (from logged actuals)
+    const calibKey = manualTradeKey(label, mat) || houseTrade;
+    const ce = calib[calibKey];
+    if (ce && ce.factor && ce.factor !== 1) laborHours = Math.max(1, Math.round(laborHours * ce.factor));
     const laborCost = Math.round(laborHours * laborRate);
     const grandTotal = Math.round(matTotal + laborCost + (num(d.equipment) || 0));
     return { trade: houseTrade, title: String(d.title || label), materialTotal: Math.round(matTotal), laborCost: laborCost, laborHours: laborHours, grandTotal: grandTotal };
@@ -1679,6 +1700,8 @@ function App() {
       if (epb && Array.isArray(epb)) setEnginePB(epb);
       const ait = await pGet(AI_TRADES_KEY);
       if (ait && Array.isArray(ait)) setAiTrades(ait);
+      const clb = await pGet(CALIB_KEY);
+      if (clb && typeof clb === "object") setCalib(clb);
       loaded.current = true;
     })();
   }, []);
@@ -2273,6 +2296,24 @@ function App() {
     flash("Loaded “" + t.trade + "” — add measurements if any, then Build estimate.");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+  // Feature B: log a finished job's ACTUAL man-hours against the estimate → update
+  // that trade's labor calibration factor (with confirmation), clearing AI/seed flags.
+  const logActuals = (key, est, act, title) => {
+    if (!key || !(act > 0)) { flash("Enter the actual man-hours."); return; }
+    const entry = calib[key] ? { jobs: (calib[key].jobs || []).slice() } : { jobs: [] };
+    entry.jobs = [{ est: Math.round(est) || 0, act: Math.round(act), at: new Date().toISOString(), title: title || "" }].concat(entry.jobs).slice(0, 20);
+    entry.factor = calibFactorFrom(entry.jobs);
+    entry.n = entry.jobs.length;
+    const next = Object.assign({}, calib, { [key]: entry });
+    setCalib(next); pSet(CALIB_KEY, next);
+    // an AI-built trade with a logged job is no longer purely unverified
+    if (aiTrades.some((t) => t.trade === key)) {
+      const at = aiTrades.map((t) => t.trade === key ? Object.assign({}, t, { calibratedJobs: (t.calibratedJobs || 0) + 1 }) : t);
+      setAiTrades(at); pSet(AI_TRADES_KEY, at);
+    }
+    setLogOpen(false); setLogMH("");
+    flash(key + " calibrated from " + entry.n + " job" + (entry.n === 1 ? "" : "s") + " — labor ×" + entry.factor + (entry.n < 3 ? " (firms up over a few jobs)" : "") + ".");
+  };
   const runEstimate = async () => {
     if (!estScope && !estOpenDesc.trim() && !estDesc.trim() && !estPhotos.length && !estDims) { flash("Pick a work type or describe the job first."); return; }
     setEstBusy("run");
@@ -2399,6 +2440,10 @@ function App() {
       // Man-hours and days-on-site MUST come from the same number — derive days
       // from the final man-hours + crew so they can never diverge (the 36-MH-but-
       // 13-days bug). If the AI's own day count is bigger, keep it (it implies more MH it knew about).
+      // Feature B: apply this trade's labor calibration factor (from logged actuals)
+      const calibKey = (aiActiveTrade.current && aiActiveTrade.current.trade === estScope) ? aiActiveTrade.current.trade : (manualTradeKey(estScope, estDesc) || String(estScope || estDesc || "").toLowerCase().trim());
+      const calibEntry = calib[calibKey] || null;
+      if (calibEntry && calibEntry.factor && calibEntry.factor !== 1) laborHours = Math.max(1, Math.round(laborHours * calibEntry.factor));
       const daysFinal = Math.max(1, Math.round(laborHours / (Math.max(1, crewN) * 8)));
       setEstResult({
         title: String(d.title || "Estimate"), trade: String(d.trade || "general").toLowerCase(),
@@ -2409,6 +2454,7 @@ function App() {
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded, manualKey: __manualKey,
         aiBuilt: !!(aiActiveTrade.current && aiActiveTrade.current.trade === estScope),
+        calibKey: calibKey, calibN: calibEntry ? (calibEntry.n || 0) : 0, calibFactor: calibEntry ? calibEntry.factor : 1,
       });
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
@@ -4574,8 +4620,23 @@ function App() {
                 return (
                   <section className="card">
                     <div className="h1">{estResult.title}</div>
-                    {estResult.aiBuilt && (
+                    {estResult.aiBuilt && !(estResult.calibN > 0) && (
                       <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>🤖 AI-built trade — VERIFY before bidding. Material prices are AI estimates until a real job calibrates them.</div>
+                    )}
+                    {/* Feature B: calibration status + log actuals */}
+                    {estResult.calibN > 0
+                      ? <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10, fontSize: 12.5, color: "#1B7A3D", fontWeight: 600 }}>✓ Calibrated from {estResult.calibN} job{estResult.calibN === 1 ? "" : "s"} — labor ×{estResult.calibFactor} from your actuals{estResult.calibN < 3 ? " (firms up over a few jobs)" : ""}.</div>
+                      : (estResult.calibKey ? <p className="hint" style={{ marginBottom: 6 }}>Uncalibrated — log this job's real hours when it's done to dial in “{estResult.calibKey}”.</p> : null)}
+                    {estResult.calibKey && (
+                      logOpen ? (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", margin: "2px 0 8px" }}>
+                          <input type="number" value={logMH} onChange={(e) => setLogMH(e.target.value)} placeholder={"Actual MH (est " + estResult.laborHours + ")"} style={{ flex: 1 }} />
+                          <button className="btn primary" onClick={() => logActuals(estResult.calibKey, estResult.laborHours, num(logMH), estResult.title)}>Save</button>
+                          <button className="btn ghost" onClick={() => { setLogOpen(false); setLogMH(""); }}>✕</button>
+                        </div>
+                      ) : (
+                        <button className="btn ghost" style={{ marginBottom: 8, fontSize: 12 }} onClick={() => setLogOpen(true)}>📋 Log job actuals (calibrate)</button>
+                      )
                     )}
                     {estResult.manualLoaded
                       ? <div className="manualbadge on">📘 Caza {estResult.manualKey} manual loaded</div>
