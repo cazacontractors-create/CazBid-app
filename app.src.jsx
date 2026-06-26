@@ -1342,12 +1342,13 @@ const TRADE_LABEL = (t) => (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).lab
 // Pure VISUAL house — reacts to the conversation, never tapped. Crossfades between
 // the three render states per category and brightens the active/selected trade
 // area(s), dimming the rest. No clickable hotspots, no hover labels.
-function HouseVisual({ view, selected, activeTrade }) {
+function HouseVisual({ view, selected, activeTrade, onChipTap, onChipRemove, onAddMore }) {
   const cur = HOUSE_STATES.find((s) => s.key === view) || HOUSE_STATES[0];
   const sel = selected || {};
   const here = HOUSE_HOTSPOTS.filter((h) => h.state === view && sel[h.trade]);
   const anyHL = here.length > 0;
   const activeHere = activeTrade && HOUSE_HOTSPOTS.find((h) => h.state === view && h.trade === activeTrade);
+  const selKeys = Object.keys(sel);
   return (
     <div className="card househero" style={{ marginTop: 10, overflow: "hidden", padding: 10 }}>
       {/* category tabs — read-only status, the chat drives them */}
@@ -1373,9 +1374,24 @@ function HouseVisual({ view, selected, activeTrade }) {
           );
         })}
       </div>
-      <p className="hint" style={{ marginTop: 8, textAlign: "center" }}>
-        {activeHere ? "Sizing " + TRADE_LABEL(activeTrade) + " — AL's on it." : anyHL ? here.length + " selected in " + CAT_LABEL[view] : "AL highlights each area as you go — pick trades with the buttons."}
-      </p>
+      {/* SCOPE RAIL — selected items pinned on the anchor; the chat below shows only the active question */}
+      {selKeys.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, alignItems: "center" }}>
+          {selKeys.map((t) => {
+            const on = activeTrade === t;
+            return (
+              <span key={t} onClick={() => onChipTap && onChipTap(t)} title={HOUSE_TYPES[t] ? "Tap to set/change type" : "Tap to focus"} style={{ cursor: "pointer", fontSize: 12, background: on ? "#0a7d36" : "#e7f6ec", color: on ? "#fff" : "#0a7d36", border: "1px solid " + (on ? "#0a7d36" : "#b6e0c4"), borderRadius: 12, padding: "3px 9px", whiteSpace: "nowrap" }}>
+                <b>{TRADE_LABEL(t)}</b>{sel[t] && sel[t] !== true ? ": " + sel[t] : ""} <span style={{ fontWeight: 700, marginLeft: 2 }} onClick={(e) => { e.stopPropagation(); onChipRemove && onChipRemove(t); }}>×</span>
+              </span>
+            );
+          })}
+          {onAddMore && <button className="btn ghost" style={{ padding: "2px 9px", fontSize: 12 }} onClick={onAddMore}>+ add</button>}
+        </div>
+      ) : (
+        <p className="hint" style={{ marginTop: 8, textAlign: "center" }}>
+          {activeHere ? "Sizing " + TRADE_LABEL(activeTrade) + " — AL's on it." : "AL highlights each area as you go — pick trades with the buttons."}
+        </p>
+      )}
     </div>
   );
 }
@@ -1510,6 +1526,7 @@ function App() {
   const [listening, setListening] = useState(false); // mic is actively capturing
   const recogRef = useRef(null);                     // SpeechRecognition instance
   const voiceRef = useRef(false);                    // mirrors voiceMode for async callbacks (stale-closure-proof)
+  const ttsPrimedRef = useRef(false);                // TTS unlocked by a user gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -2409,7 +2426,7 @@ function App() {
   const alContext = () => {
     const sel = Object.keys(houseScope);
     const trades = sel.length
-      ? sel.map((t) => { const lbl = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t; const m = houseScope[t]; return "- " + lbl + (m && m !== true ? " (material: " + m + ")" : " (no material chosen yet)"); }).join("\n")
+      ? sel.map((t) => { const lbl = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t; const m = houseScope[t]; const types = HOUSE_TYPES[t] ? (" [allowed types: " + HOUSE_TYPES[t].join(" / ") + "]") : ""; return "- key=" + t + " (" + lbl + ")" + (m && m !== true ? " current type: " + m : " no type chosen yet") + types; }).join("\n")
       : "(none yet — tell them to pick a trade with the buttons up top, or capture what they describe)";
     let known = whDims ? ("Measurements on file: " + whDims + "\n") : "";
     const entered = sel.map((t) => { const k = PB_TRADE_KEY[t]; const f = k && whInputs[k]; if (!f) return null; const vals = Object.keys(f).filter((x) => x !== "complexityFactor" && num(f[x]) > 0).map((x) => x + "=" + f[x]); return vals.length ? (((HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).label || t) + ": " + vals.join(", ")) : null; }).filter(Boolean).join("\n");
@@ -2425,8 +2442,9 @@ function App() {
     "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " +
     (voice ? "VOICE MODE — the contractor is talking to you hands-free (often driving). Your reply is READ ALOUD, so: keep it to ONE short spoken sentence; ALWAYS read back any number they just gave before moving on ('West slope eight twelve — got that') so a mis-hear is caught; say numbers like a foreman ('eight twelve' for pitch, 'twenty-two squares'); never read a list of options aloud — ask one thing. No emojis, no symbols, no markdown — it gets spoken literally. " : "") +
     "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " +
+    "If the contractor asks to CHANGE or SWITCH a material/system for a selected trade (e.g. 'make the roof shingles instead'), set materialChange to that trade's key= and the new type (use one of that trade's [allowed types] when listed), and CONFIRM it in your message. If a quote is already on screen, tell them to tap Build to refresh it with the new material. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
-    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"materialChange\": {\"trade\": the selected trade's key, \"type\": the new material/system} ONLY when they ask to change a material, else null, \"ready\": true only if every selected trade has enough to bid}";
   const alOpener = () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
@@ -2442,20 +2460,33 @@ function App() {
   // later = replace speakAL only. AL reads numbers back before they commit. ----
   const SpeechRec = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
   const ttsOK = (typeof window !== "undefined") && !!window.speechSynthesis;
+  // Unlock TTS inside a user gesture — iOS Safari stays silent until the first
+  // speak() fires from a tap; this primes it once so later async replies play.
+  const primeTTS = () => {
+    if (!ttsOK || ttsPrimedRef.current) return;
+    try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; window.speechSynthesis.speak(u); ttsPrimedRef.current = true; } catch (e) {}
+  };
   const speakAL = (text) => {
     if (!ttsOK || !text) return;
     try {
-      const clean = String(text).replace(/[\u{1F000}-\u{1FFFF}←-➿⬀-⯿]/gu, "").replace(/[*_`#>]/g, "").trim();
+      // strip emoji/symbols/markdown — they'd be read out literally; keep ASCII speech.
+      const clean = String(text).replace(/[*_`#>~]/g, "").replace(/[^\x00-\x7F]+/g, " ").replace(/\s+/g, " ").trim();
       if (!clean) return;
-      window.speechSynthesis.cancel();
+      const synth = window.speechSynthesis;
+      try { synth.cancel(); } catch (e) {}
       const u = new SpeechSynthesisUtterance(clean);
-      u.rate = 1.0; u.pitch = 1.0;
-      window.speechSynthesis.speak(u);
+      u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0; u.lang = "en-US";
+      const vs = (synth.getVoices && synth.getVoices()) || [];
+      const en = vs.filter((v) => /^en/i.test(v.lang || ""));
+      if (en.length) u.voice = en.find((v) => /en[-_]?us/i.test(v.lang || "")) || en[0];
+      // defer past the cancel() (Chrome drops a speak() fired in the same tick) + nudge resume.
+      setTimeout(() => { try { synth.speak(u); setTimeout(() => { try { if (synth.paused) synth.resume(); } catch (e) {} }, 140); } catch (e) {} }, 60);
     } catch (e) { /* TTS best-effort */ }
   };
   const stopListening = () => { try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
   const startVoiceInput = () => {
     if (listening) { stopListening(); return; }
+    primeTTS(); // this tap is our chance to unlock iOS audio
     // tapping the mic enables the spoken loop so AL reads its reply back
     if (!voiceMode) { setVoiceMode(true); voiceRef.current = true; }
     if (!SpeechRec) { flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade."); return; }
@@ -2474,7 +2505,7 @@ function App() {
       const next = !v;
       voiceRef.current = next;
       if (!next) { try { if (ttsOK) window.speechSynthesis.cancel(); } catch (e) {} stopListening(); }
-      else { flash("Voice on — AL reads replies aloud and confirms numbers back."); }
+      else { primeTTS(); speakAL("Voice on. What are we working on?"); flash("Voice on — AL reads replies aloud and confirms numbers back."); }
       return next;
     });
   };
@@ -2492,6 +2523,16 @@ function App() {
       setAlMsgs([...msgs, { role: "ai", text: alText }]);
       if (voiceRef.current) speakAL(alText);
       if (d.dims && String(d.dims).trim()) setWhDims((prev) => (prev ? (prev + "; " + String(d.dims).trim()) : String(d.dims).trim()).slice(0, 600));
+      // material/system change requested in conversation → update the locked scope so the NEXT Build honors it
+      if (d.materialChange && typeof d.materialChange === "object" && d.materialChange.trade) {
+        const want = String(d.materialChange.trade).toLowerCase().trim();
+        const key = Object.keys(houseScope).find((k) => k.toLowerCase() === want || TRADE_LABEL(k).toLowerCase() === want || TRADE_LABEL(k).toLowerCase().indexOf(want) >= 0 || want.indexOf(k.toLowerCase()) >= 0);
+        if (key && d.materialChange.type) {
+          let type = String(d.materialChange.type).trim();
+          if (HOUSE_TYPES[key]) { const opt = HOUSE_TYPES[key].find((o) => { const lo = o.toLowerCase(), lt = type.toLowerCase(); return lo === lt || lo.indexOf(lt) >= 0 || lt.indexOf(lo.split(" ")[0]) >= 0; }); if (opt) type = opt; }
+          houseSelect(key, type); setActiveTrade(key);
+        }
+      }
       if (d.inputs && typeof d.inputs === "object") {
         Object.keys(d.inputs).forEach((k) => { const f = d.inputs[k]; if (f && typeof f === "object") Object.keys(f).forEach((field) => { const v = f[field]; if (v != null && v !== "") whSet(k, field, typeof v === "number" ? v : num(v)); }); });
       }
@@ -4814,7 +4855,10 @@ function App() {
                   )}
                 </section>
               )}
-              {whSpecs ? <HouseVisual view={houseView} selected={houseScope} activeTrade={activeTrade} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
+              {whSpecs ? <HouseVisual view={houseView} selected={houseScope} activeTrade={activeTrade}
+                onChipTap={(t) => { setActiveTrade(t); const v = (HOUSE_HOTSPOTS.find((h) => h.trade === t) || {}).state; if (v) setHouseView(v); if (HOUSE_TYPES[t] && houseScope[t] === true) setSelStep("type"); }}
+                onChipRemove={(t) => { houseDeselect(t); if (activeTrade === t) setActiveTrade(null); }}
+                onAddMore={() => setSelStep("trades")} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
 
               <section className="card">
                 <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div>
@@ -4888,19 +4932,9 @@ function App() {
                         );
                       })()}
                       {selStep === "ready" && (
-                        <div className="convbubble ai">Scope locked in. Add measurements or photos below if you've got them, fill any blanks, then Build.</div>
+                        <div className="convbubble ai">Scope locked in (pinned on the house above). Add measurements or photos below if you've got them, fill any blanks, then Build.</div>
                       )}
-
-                      {selKeys.length > 0 && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                          {selKeys.map((t) => (
-                            <span key={t} onClick={() => { setActiveTrade(t); if (HOUSE_TYPES[t] && houseScope[t] === true) setSelStep("type"); }} style={{ cursor: "pointer", fontSize: 12, background: activeTrade === t ? "#0a7d36" : "#e7f6ec", color: activeTrade === t ? "#fff" : "#0a7d36", border: "1px solid #b6e0c4", borderRadius: 12, padding: "3px 10px" }}>
-                              <b>{TRADE_LABEL(t)}</b>{houseScope[t] && houseScope[t] !== true ? ": " + houseScope[t] : ""} <span style={{ fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); houseDeselect(t); if (activeTrade === t) setActiveTrade(null); }}>×</span>
-                            </span>
-                          ))}
-                          {selStep !== "trades" && <button className="btn ghost" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setSelStep("trades")}>+ add more</button>}
-                        </div>
-                      )}
+                      {/* selected-scope chips now live pinned on the house (the visual anchor), not here */}
                     </div>
                   );
                 })()}
