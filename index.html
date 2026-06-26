@@ -583,6 +583,7 @@ const RATEBOOK_KEY = "cazbid-ratebook-v1";
 const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
+const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
 const SEED_PRICES = [{
   id: "pb_acm_aluminum_roll_valley_flashing",
   cat: "Sloped roof",
@@ -2796,6 +2797,44 @@ async function pSet(key, val) {
   } catch (e) {/* best effort */}
 }
 
+// ESTIMATE STORE (build-set #3) — the ONE persistence interface for saved estimates.
+// The UI only ever calls list/get/save/remove; Phase 1 backs them with on-device
+// storage (pGet/pSet). Cloud + JobNimbus later reimplement THESE SAME methods, so
+// migrating storage is one module, not a rebuild. Records are cloud/JobNimbus-shaped
+// from day one: { id, customerName, jobAddress, createdAt, updatedAt, status,
+// jobNimbusId, price, payload }. NOTE: local storage is NOT a backup (cache clear /
+// lost phone = gone); it stops mid-session loss until cloud sync ships.
+const estStore = {
+  async list() {
+    const a = await pGet(ESTIMATES_KEY);
+    return Array.isArray(a) ? a : [];
+  },
+  async get(id) {
+    return (await estStore.list()).find(e => e.id === id) || null;
+  },
+  async save(rec) {
+    const all = await estStore.list();
+    const now = new Date().toISOString();
+    const idx = all.findIndex(e => e.id === rec.id);
+    const prev = idx >= 0 ? all[idx] : {};
+    const merged = Object.assign({}, prev, rec, {
+      createdAt: prev.createdAt || rec.createdAt || now,
+      updatedAt: now
+    });
+    if (idx >= 0) all[idx] = merged;else all.unshift(merged);
+    await pSet(ESTIMATES_KEY, all);
+    return {
+      record: merged,
+      all
+    };
+  },
+  async remove(id) {
+    const all = (await estStore.list()).filter(e => e.id !== id);
+    await pSet(ESTIMATES_KEY, all);
+    return all;
+  }
+};
+
 /* ---------- small components ---------- */
 function Avatar({
   user,
@@ -3826,6 +3865,13 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  // saved-estimates library (build-set #3)
+  const [estimates, setEstimates] = useState([]); // the saved list (from estStore)
+  const [estId, setEstId] = useState(null); // id of the estimate currently open/in-progress
+  const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
+  const [estAddress, setEstAddress] = useState(""); // job address on the current estimate
+  const [estStatus, setEstStatus] = useState("draft"); // draft | sent | won | lost
+  const [savedOpen, setSavedOpen] = useState(false); // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
   // ---- Whole House / Addition (deterministic multi-trade) ----
   const [whSpecs, setWhSpecs] = useState(null); // trade input schemas from /trade-specs
@@ -4606,6 +4652,8 @@ function App() {
       if (ait && Array.isArray(ait)) setAiTrades(ait);
       const clb = await pGet(CALIB_KEY);
       if (clb && typeof clb === "object") setCalib(clb);
+      const ests = await estStore.list();
+      if (ests && ests.length) setEstimates(ests);
       loaded.current = true;
     })();
   }, []);
@@ -4617,6 +4665,16 @@ function App() {
     clearTimeout(meTimer.current);
     meTimer.current = setTimeout(() => pSet(ME_KEY, me), 500);
   }, [me]);
+  // autosave: the in-progress estimate (build-set #3) — survives close/reopen; never lost mid-session.
+  const estSaveTimer = useRef(null);
+  useEffect(() => {
+    if (!loaded.current) return;
+    if (!estResult || !(estResult.trades && estResult.trades.length)) return;
+    clearTimeout(estSaveTimer.current);
+    estSaveTimer.current = setTimeout(() => {
+      persistCurrent();
+    }, 600);
+  }, [estResult, estMargin, estCustomer, estAddress, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -6011,6 +6069,116 @@ function App() {
       [field]: val
     } : tr)
   } : r);
+  // ---- saved-estimates library (build-set #3) ----
+  const tradeCostOf = t => {
+    const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0);
+    const matTax = Math.round(matTotal * (num(t.taxRate) || 0));
+    const labor = Math.round((num(t.laborHours) || 0) * (num(t.laborRate) || 0));
+    return labor + matTotal + matTax + (num(t.equipment) || 0);
+  };
+  const combinedCostOf = trades => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
+  const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // Build the full reopenable payload from current state.
+  const currentEstPayload = () => ({
+    trades: estResult && estResult.trades || [],
+    multi: !!(estResult && estResult.multi),
+    errors: estResult && estResult.errors || [],
+    estMargin: estMargin,
+    houseScope: houseScope,
+    housePanelW: housePanelW,
+    whDims: whDims,
+    whPhotos: whPhotos,
+    houseView: houseView
+  });
+  // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
+  const persistCurrent = async extra => {
+    if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
+    const id = estId || "est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    const price = sellOf(combinedCostOf(estResult.trades), estMargin);
+    const title = estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades";
+    const rec = Object.assign({
+      id: id,
+      customerName: estCustomer.trim(),
+      jobAddress: estAddress.trim(),
+      status: estStatus,
+      jobNimbusId: null,
+      price: price,
+      title: title,
+      tradeCount: estResult.trades.length,
+      payload: currentEstPayload()
+    }, extra || {});
+    if (!estId) setEstId(id);
+    const {
+      all
+    } = await estStore.save(rec);
+    setEstimates(all);
+    return id;
+  };
+  // Reopen a saved estimate into the editor (result view).
+  const openSavedEstimate = rec => {
+    if (!rec || !rec.payload) return;
+    const p = rec.payload;
+    setEstId(rec.id);
+    setEstCustomer(rec.customerName || "");
+    setEstAddress(rec.jobAddress || "");
+    setEstStatus(rec.status || "draft");
+    setEstMargin(num(p.estMargin) || 30);
+    setHouseScope(p.houseScope || {});
+    setHousePanelW(p.housePanelW || {});
+    setWhDims(p.whDims || "");
+    setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []);
+    setHouseView(p.houseView || "exterior");
+    setActiveTrade(null);
+    setSelStep("ready");
+    setSavedOpen(false);
+    setEstResult({
+      trades: p.trades || [],
+      multi: !!p.multi,
+      errors: p.errors || []
+    });
+  };
+  const deleteSavedEstimate = async id => {
+    const all = await estStore.remove(id);
+    setEstimates(all);
+    if (estId === id) {
+      setEstId(null);
+    }
+    flash("Estimate deleted.");
+  };
+  const renameSavedEstimate = async rec => {
+    const name = window.prompt("Customer name", rec.customerName || "");
+    if (name == null) return;
+    const addr = window.prompt("Job address", rec.jobAddress || "");
+    const {
+      all
+    } = await estStore.save({
+      id: rec.id,
+      customerName: String(name).trim(),
+      jobAddress: String(addr == null ? rec.jobAddress || "" : addr).trim()
+    });
+    setEstimates(all);
+    if (estId === rec.id) {
+      setEstCustomer(String(name).trim());
+      if (addr != null) setEstAddress(String(addr).trim());
+    }
+  };
+  // "Start new": SAVE the current one first (never destroy work), then clear to a fresh scope.
+  const startNewEstimate = async () => {
+    await persistCurrent();
+    setEstResult(null);
+    setEstId(null);
+    setEstCustomer("");
+    setEstAddress("");
+    setEstStatus("draft");
+    setHouseScope({});
+    setHousePanelW({});
+    setWhDims("");
+    setWhPhotos([]);
+    setActiveTrade(null);
+    setSelStep("category");
+    setAlMsgs([]);
+    flash("Saved. Starting a fresh estimate.");
+  };
   const addDimRow = (label, unit) => setEstDimRows(d => [...d, {
     id: rid(),
     label: label || "",
@@ -9187,7 +9355,80 @@ function App() {
   }, "Upgrade to Pro ($149/mo)"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => goTab("profile")
-  }, "See all plans")) : !estResult ? /*#__PURE__*/React.createElement(React.Fragment, null, whSpecs ? /*#__PURE__*/React.createElement(HouseVisual, {
+  }, "See all plans")) : !estResult ? /*#__PURE__*/React.createElement(React.Fragment, null, estimates.length > 0 && /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    style: {
+      justifyContent: "space-between",
+      display: "flex"
+    },
+    onClick: () => setSavedOpen(o => !o)
+  }, /*#__PURE__*/React.createElement("span", null, "📁 Saved estimates"), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, estimates.length, " · ", savedOpen ? "hide" : "show")), savedOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, estimates.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).map(rec => /*#__PURE__*/React.createElement("div", {
+    key: rec.id,
+    className: "costrow",
+    style: {
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      display: "block",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, rec.customerName || "(no name)", rec.status && rec.status !== "draft" ? " · " + rec.status : ""), /*#__PURE__*/React.createElement("span", {
+    className: "hint",
+    style: {
+      display: "block",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, [rec.jobAddress, rec.title, (rec.updatedAt || "").slice(0, 10)].filter(Boolean).join(" · "))), /*#__PURE__*/React.createElement("b", {
+    style: {
+      whiteSpace: "nowrap"
+    }
+  }, $0(rec.price || 0)), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 8px"
+    },
+    onClick: () => openSavedEstimate(rec)
+  }, "Open"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 6px"
+    },
+    title: "Rename",
+    onClick: () => renameSavedEstimate(rec)
+  }, "✏️"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 6px"
+    },
+    title: "Delete",
+    onClick: () => {
+      if (window.confirm("Delete this saved estimate?")) deleteSavedEstimate(rec.id);
+    }
+  }, "🗑"))), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Saved on this device only — not a backup yet (cache clear / new phone = gone). Export/PDF anything you send."))), whSpecs ? /*#__PURE__*/React.createElement(HouseVisual, {
     view: houseView,
     selected: houseScope,
     activeTrade: activeTrade
@@ -9687,20 +9928,46 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("button", {
       className: "btn ghost grow1",
-      onClick: () => setEstResult(null)
+      onClick: () => {
+        persistCurrent();
+        setEstResult(null);
+      }
     }, "← Back to scope"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost grow1",
-      onClick: () => {
-        setEstResult(null);
-        setHouseScope({});
-        setHousePanelW({});
-        setWhDims("");
-        setWhPhotos([]);
-        setActiveTrade(null);
-        setSelStep("category");
-        setAlMsgs([]);
+      onClick: startNewEstimate
+    }, "Start new estimate")), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginBottom: 4
       }
-    }, "Start new estimate")), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "estfields"
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Customer"), /*#__PURE__*/React.createElement("input", {
+      value: estCustomer,
+      onChange: e => setEstCustomer(e.target.value),
+      placeholder: "name"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Job address"), /*#__PURE__*/React.createElement("input", {
+      value: estAddress,
+      onChange: e => setEstAddress(e.target.value),
+      placeholder: "address"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Status"), /*#__PURE__*/React.createElement("select", {
+      value: estStatus,
+      onChange: e => setEstStatus(e.target.value)
+    }, ["draft", "sent", "won", "lost"].map(s => /*#__PURE__*/React.createElement("option", {
+      key: s,
+      value: s
+    }, s))))), /*#__PURE__*/React.createElement("p", {
+      className: "hint",
+      style: {
+        marginTop: 4
+      }
+    }, "💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.")), /*#__PURE__*/React.createElement("div", {
       className: "h1",
       style: {
         marginBottom: 2
