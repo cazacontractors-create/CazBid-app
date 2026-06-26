@@ -1506,6 +1506,10 @@ function App() {
   const [alMsgs, setAlMsgs] = useState([]);        // house AL chat thread [{role:"ai"|"me", text}]
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
+  const [listening, setListening] = useState(false); // mic is actively capturing
+  const recogRef = useRef(null);                     // SpeechRecognition instance
+  const voiceRef = useRef(false);                    // mirrors voiceMode for async callbacks (stale-closure-proof)
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -2415,10 +2419,11 @@ function App() {
     const gaps = (whSpecs || []).filter((s) => whChecked[s.trade]).map((s) => { const miss = s.inputs.filter((inp) => inp.required && !(whInputs[s.trade] && num(whInputs[s.trade][inp.name]) > 0)).map((inp) => inp.label); return miss.length ? (s.label + ": " + miss.join(", ")) : null; }).filter(Boolean).join("\n");
     return "SELECTED TRADES:\n" + trades + "\n" + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
   };
-  const AL_HOUSE_SYS = (ctx) =>
+  const AL_HOUSE_SYS = (ctx, voice) =>
     "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " +
     "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " +
     "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " +
+    (voice ? "VOICE MODE — the contractor is talking to you hands-free (often driving). Your reply is READ ALOUD, so: keep it to ONE short spoken sentence; ALWAYS read back any number they just gave before moving on ('West slope eight twelve — got that') so a mis-hear is caught; say numbers like a foreman ('eight twelve' for pitch, 'twenty-two squares'); never read a list of options aloud — ask one thing. No emojis, no symbols, no markdown — it gets spoken literally. " : "") +
     "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
     "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"ready\": true only if every selected trade has enough to bid}";
@@ -2430,6 +2435,49 @@ function App() {
     if (nonDet.length && !whDims && !whPhotos.length) return "Got " + labels.join(", ") + ". To size that I'll need measurements or photos — tap 📄 Report or 📷 Photo, or just tell me the numbers right here.";
     return "Got " + labels.join(", ") + (whDims ? " plus your measurements" : "") + ". Ask me anything, or tell me the details and I'll get it ready to build.";
   };
+  // ---- VOICE (build-set #4, Phase 1): talk TO AL. Built-in phone voice — Web Speech
+  // for STT where available (Android/desktop Chrome) + speechSynthesis TTS readback
+  // (incl. iOS). On iOS Safari (no Web STT) we fall back to the keyboard mic; AL's
+  // text brain (alSend) supplies the understanding either way. Swap to ElevenLabs
+  // later = replace speakAL only. AL reads numbers back before they commit. ----
+  const SpeechRec = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
+  const ttsOK = (typeof window !== "undefined") && !!window.speechSynthesis;
+  const speakAL = (text) => {
+    if (!ttsOK || !text) return;
+    try {
+      const clean = String(text).replace(/[\u{1F000}-\u{1FFFF}←-➿⬀-⯿]/gu, "").replace(/[*_`#>]/g, "").trim();
+      if (!clean) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(clean);
+      u.rate = 1.0; u.pitch = 1.0;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* TTS best-effort */ }
+  };
+  const stopListening = () => { try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
+  const startVoiceInput = () => {
+    if (listening) { stopListening(); return; }
+    // tapping the mic enables the spoken loop so AL reads its reply back
+    if (!voiceMode) { setVoiceMode(true); voiceRef.current = true; }
+    if (!SpeechRec) { flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade."); return; }
+    try {
+      if (ttsOK) window.speechSynthesis.cancel(); // don't transcribe AL's own voice
+      const r = new SpeechRec();
+      r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
+      r.onresult = (ev) => { const t = ev.results[0][0].transcript; setListening(false); if (t && t.trim()) alSend(t.trim()); };
+      r.onerror = () => { setListening(false); };
+      r.onend = () => { setListening(false); };
+      recogRef.current = r; setListening(true); r.start();
+    } catch (e) { setListening(false); flash("Voice input isn't available here — type or use your keyboard mic."); }
+  };
+  const toggleVoice = () => {
+    setVoiceMode((v) => {
+      const next = !v;
+      voiceRef.current = next;
+      if (!next) { try { if (ttsOK) window.speechSynthesis.cancel(); } catch (e) {} stopListening(); }
+      else { flash("Voice on — AL reads replies aloud and confirms numbers back."); }
+      return next;
+    });
+  };
   const alSend = async (textArg) => {
     const text = (textArg != null ? textArg : alInput).trim();
     if (!text || alBusy) return;
@@ -2437,10 +2485,12 @@ function App() {
     setAlMsgs(msgs); setAlInput(""); setAlBusy(true);
     try {
       const history = msgs.map((m) => (m.role === "ai" ? "AL" : "CONTRACTOR") + ": " + m.text).join("\n");
-      const userText = AL_HOUSE_SYS(alContext()) + "\n\nCONVERSATION SO FAR:\n" + history + "\n\nReply now as AL — output ONLY the JSON object, nothing before or after.";
+      const userText = AL_HOUSE_SYS(alContext(), voiceRef.current) + "\n\nCONVERSATION SO FAR:\n" + history + "\n\nReply now as AL — output ONLY the JSON object, nothing before or after.";
       const reply = await callClaude([{ role: "user", content: [{ type: "text", text: userText }] }]);
       let d; try { d = parseJSON(reply); } catch (e) { d = { message: (reply || "").replace(/```json|```/g, "").trim().slice(0, 400) }; }
-      setAlMsgs([...msgs, { role: "ai", text: String(d.message || "Got it.") }]);
+      const alText = String(d.message || "Got it.");
+      setAlMsgs([...msgs, { role: "ai", text: alText }]);
+      if (voiceRef.current) speakAL(alText);
       if (d.dims && String(d.dims).trim()) setWhDims((prev) => (prev ? (prev + "; " + String(d.dims).trim()) : String(d.dims).trim()).slice(0, 600));
       if (d.inputs && typeof d.inputs === "object") {
         Object.keys(d.inputs).forEach((k) => { const f = d.inputs[k]; if (f && typeof f === "object") Object.keys(f).forEach((field) => { const v = f[field]; if (v != null && v !== "") whSet(k, field, typeof v === "number" ? v : num(v)); }); });
@@ -4767,7 +4817,9 @@ function App() {
               {whSpecs ? <HouseVisual view={houseView} selected={houseScope} activeTrade={activeTrade} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
 
               <section className="card">
-                <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div><span className="hint" style={{ marginLeft: "auto" }}>tap a button or just tell me</span></div>
+                <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div>
+                  <button className={"btn " + (voiceMode ? "primary" : "ghost")} style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 13 }} onClick={toggleVoice} title="Talk to AL — he reads replies aloud and confirms numbers back">{voiceMode ? "🔊 Voice on" : "🔈 Voice"}</button>
+                </div>
                 <div className="convmsgs" style={{ maxHeight: 220, overflowY: "auto", marginTop: 6 }}>
                   {alMsgs.length === 0 && (
                     <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">Hey, I'm AL — let's build this estimate. First: are we working outside, inside, or on the systems?</div></div>
@@ -4854,9 +4906,11 @@ function App() {
                 })()}
 
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder="e.g. “west slope is 8/12” or “what do you still need?”" style={{ flex: 1 }} />
+                  <button className={"btn " + (listening ? "primary" : "ghost")} style={{ padding: "0 12px", animation: listening ? "pulse 1s infinite" : "none" }} disabled={alBusy} onClick={startVoiceInput} title={voiceMode ? "Tap and talk" : "Tap and talk (turns on voice)"}>{listening ? "● Listening…" : "🎤"}</button>
+                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder={listening ? "Listening…" : "e.g. “west slope is 8/12” or “what do you still need?”"} style={{ flex: 1 }} />
                   <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
                 </div>
+                {voiceMode && <p className="hint" style={{ marginTop: 4 }}>🔊 AL reads replies aloud and confirms numbers back before they lock. Tap 🎤 to talk; on iPhone use your keyboard mic.</p>}
               </section>
 
               <div style={{ display: "flex", gap: 6 }}>
