@@ -67,6 +67,7 @@ const RATEBOOK_KEY = "cazbid-ratebook-v1";
 const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price book for the deterministic engine
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
+const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -999,6 +1000,29 @@ async function pSet(key, val) {
   try { await window.storage.set(key, JSON.stringify(val)); } catch (e) { /* best effort */ }
 }
 
+// ESTIMATE STORE (build-set #3) — the ONE persistence interface for saved estimates.
+// The UI only ever calls list/get/save/remove; Phase 1 backs them with on-device
+// storage (pGet/pSet). Cloud + JobNimbus later reimplement THESE SAME methods, so
+// migrating storage is one module, not a rebuild. Records are cloud/JobNimbus-shaped
+// from day one: { id, customerName, jobAddress, createdAt, updatedAt, status,
+// jobNimbusId, price, payload }. NOTE: local storage is NOT a backup (cache clear /
+// lost phone = gone); it stops mid-session loss until cloud sync ships.
+const estStore = {
+  async list() { const a = await pGet(ESTIMATES_KEY); return Array.isArray(a) ? a : []; },
+  async get(id) { return (await estStore.list()).find((e) => e.id === id) || null; },
+  async save(rec) {
+    const all = await estStore.list();
+    const now = new Date().toISOString();
+    const idx = all.findIndex((e) => e.id === rec.id);
+    const prev = idx >= 0 ? all[idx] : {};
+    const merged = Object.assign({}, prev, rec, { createdAt: prev.createdAt || rec.createdAt || now, updatedAt: now });
+    if (idx >= 0) all[idx] = merged; else all.unshift(merged);
+    await pSet(ESTIMATES_KEY, all);
+    return { record: merged, all };
+  },
+  async remove(id) { const all = (await estStore.list()).filter((e) => e.id !== id); await pSet(ESTIMATES_KEY, all); return all; },
+};
+
 /* ---------- small components ---------- */
 function Avatar({ user, size, onTap }) {
   const cls = "avatar" + (size === "lg" ? " lg" : "") + (size === "xl" ? " xl" : "");
@@ -1452,6 +1476,13 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  // saved-estimates library (build-set #3)
+  const [estimates, setEstimates] = useState([]);     // the saved list (from estStore)
+  const [estId, setEstId] = useState(null);           // id of the estimate currently open/in-progress
+  const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
+  const [estAddress, setEstAddress] = useState("");   // job address on the current estimate
+  const [estStatus, setEstStatus] = useState("draft");// draft | sent | won | lost
+  const [savedOpen, setSavedOpen] = useState(false);  // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
   // ---- Whole House / Addition (deterministic multi-trade) ----
   const [whSpecs, setWhSpecs] = useState(null);   // trade input schemas from /trade-specs
@@ -1861,6 +1892,8 @@ function App() {
       if (ait && Array.isArray(ait)) setAiTrades(ait);
       const clb = await pGet(CALIB_KEY);
       if (clb && typeof clb === "object") setCalib(clb);
+      const ests = await estStore.list();
+      if (ests && ests.length) setEstimates(ests);
       loaded.current = true;
     })();
   }, []);
@@ -1872,6 +1905,14 @@ function App() {
     clearTimeout(meTimer.current);
     meTimer.current = setTimeout(() => pSet(ME_KEY, me), 500);
   }, [me]);
+  // autosave: the in-progress estimate (build-set #3) — survives close/reopen; never lost mid-session.
+  const estSaveTimer = useRef(null);
+  useEffect(() => {
+    if (!loaded.current) return;
+    if (!estResult || !(estResult.trades && estResult.trades.length)) return;
+    clearTimeout(estSaveTimer.current);
+    estSaveTimer.current = setTimeout(() => { persistCurrent(); }, 600);
+  }, [estResult, estMargin, estCustomer, estAddress, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -2692,6 +2733,60 @@ function App() {
   });
   const estItemDel = (ti, i) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, items: tr.items.filter((_, idx) => idx !== i) } : tr) } : r);
   const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, [field]: val } : tr) } : r);
+  // ---- saved-estimates library (build-set #3) ----
+  const tradeCostOf = (t) => { const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0); const matTax = Math.round(matTotal * (num(t.taxRate) || 0)); const labor = Math.round((num(t.laborHours) || 0) * (num(t.laborRate) || 0)); return labor + matTotal + matTax + (num(t.equipment) || 0); };
+  const combinedCostOf = (trades) => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
+  const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // Build the full reopenable payload from current state.
+  const currentEstPayload = () => ({
+    trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
+    estMargin: estMargin, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
+  });
+  // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
+  const persistCurrent = async (extra) => {
+    if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
+    const id = estId || ("est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+    const price = sellOf(combinedCostOf(estResult.trades), estMargin);
+    const title = (estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades");
+    const rec = Object.assign({
+      id: id, customerName: estCustomer.trim(), jobAddress: estAddress.trim(), status: estStatus,
+      jobNimbusId: null, price: price, title: title, tradeCount: estResult.trades.length, payload: currentEstPayload(),
+    }, extra || {});
+    if (!estId) setEstId(id);
+    const { all } = await estStore.save(rec);
+    setEstimates(all);
+    return id;
+  };
+  // Reopen a saved estimate into the editor (result view).
+  const openSavedEstimate = (rec) => {
+    if (!rec || !rec.payload) return;
+    const p = rec.payload;
+    setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstStatus(rec.status || "draft");
+    setEstMargin(num(p.estMargin) || 30); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
+    setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
+    setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
+    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [] });
+  };
+  const deleteSavedEstimate = async (id) => {
+    const all = await estStore.remove(id); setEstimates(all);
+    if (estId === id) { setEstId(null); }
+    flash("Estimate deleted.");
+  };
+  const renameSavedEstimate = async (rec) => {
+    const name = window.prompt("Customer name", rec.customerName || "");
+    if (name == null) return;
+    const addr = window.prompt("Job address", rec.jobAddress || "");
+    const { all } = await estStore.save({ id: rec.id, customerName: String(name).trim(), jobAddress: String(addr == null ? rec.jobAddress || "" : addr).trim() });
+    setEstimates(all);
+    if (estId === rec.id) { setEstCustomer(String(name).trim()); if (addr != null) setEstAddress(String(addr).trim()); }
+  };
+  // "Start new": SAVE the current one first (never destroy work), then clear to a fresh scope.
+  const startNewEstimate = async () => {
+    await persistCurrent();
+    setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstStatus("draft");
+    setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlMsgs([]);
+    flash("Saved. Starting a fresh estimate.");
+  };
   const addDimRow = (label, unit) => setEstDimRows((d) => [...d, { id: rid(), label: label || "", value: "", unit: unit || "" }]);
   const upDimRow = (id, patch) => setEstDimRows((d) => d.map((x) => x.id === id ? { ...x, ...patch } : x));
   const rmDimRow = (id) => setEstDimRows((d) => d.filter((x) => x.id !== id));
@@ -4644,6 +4739,31 @@ function App() {
             </section>
           ) : !estResult ? (
             <>
+              {/* SAVED ESTIMATES library (build-set #3) */}
+              {estimates.length > 0 && (
+                <section className="card">
+                  <button className="btn ghost full" style={{ justifyContent: "space-between", display: "flex" }} onClick={() => setSavedOpen((o) => !o)}>
+                    <span>📁 Saved estimates</span><span className="hint">{estimates.length} · {savedOpen ? "hide" : "show"}</span>
+                  </button>
+                  {savedOpen && (
+                    <div style={{ marginTop: 8 }}>
+                      {estimates.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).map((rec) => (
+                        <div key={rec.id} className="costrow" style={{ alignItems: "center", gap: 6 }}>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.customerName || "(no name)"}{rec.status && rec.status !== "draft" ? " · " + rec.status : ""}</b>
+                            <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[rec.jobAddress, rec.title, (rec.updatedAt || "").slice(0, 10)].filter(Boolean).join(" · ")}</span>
+                          </span>
+                          <b style={{ whiteSpace: "nowrap" }}>{$0(rec.price || 0)}</b>
+                          <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => openSavedEstimate(rec)}>Open</button>
+                          <button className="btn ghost" style={{ padding: "2px 6px" }} title="Rename" onClick={() => renameSavedEstimate(rec)}>✏️</button>
+                          <button className="btn ghost" style={{ padding: "2px 6px" }} title="Delete" onClick={() => { if (window.confirm("Delete this saved estimate?")) deleteSavedEstimate(rec.id); }}>🗑</button>
+                        </div>
+                      ))}
+                      <p className="hint" style={{ marginTop: 6 }}>Saved on this device only — not a backup yet (cache clear / new phone = gone). Export/PDF anything you send.</p>
+                    </div>
+                  )}
+                </section>
+              )}
               {whSpecs ? <HouseVisual view={houseView} selected={houseScope} activeTrade={activeTrade} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
 
               <section className="card">
@@ -4824,9 +4944,22 @@ function App() {
               return (
                 <>
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    <button className="btn ghost grow1" onClick={() => setEstResult(null)}>← Back to scope</button>
-                    <button className="btn ghost grow1" onClick={() => { setEstResult(null); setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlMsgs([]); }}>Start new estimate</button>
+                    <button className="btn ghost grow1" onClick={() => { persistCurrent(); setEstResult(null); }}>← Back to scope</button>
+                    <button className="btn ghost grow1" onClick={startNewEstimate}>Start new estimate</button>
                   </div>
+                  {/* customer + address — identify the saved estimate (auto-saves) */}
+                  <section className="card" style={{ marginBottom: 4 }}>
+                    <div className="estfields">
+                      <label className="estf"><span>Customer</span><input value={estCustomer} onChange={(e) => setEstCustomer(e.target.value)} placeholder="name" /></label>
+                      <label className="estf"><span>Job address</span><input value={estAddress} onChange={(e) => setEstAddress(e.target.value)} placeholder="address" /></label>
+                      <label className="estf"><span>Status</span>
+                        <select value={estStatus} onChange={(e) => setEstStatus(e.target.value)}>
+                          {["draft", "sent", "won", "lost"].map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <p className="hint" style={{ marginTop: 4 }}>💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.</p>
+                  </section>
                   <div className="h1" style={{ marginBottom: 2 }}>{trades.length === 1 ? trades[0].title : "Combined estimate — " + trades.length + " trades"}</div>
                   {estResult.errors && estResult.errors.length > 0 && <p className="hint">Couldn't build: {estResult.errors.map((e) => e.label).join(", ")} — tap Back to retry.</p>}
 
