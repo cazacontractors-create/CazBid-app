@@ -9836,8 +9836,8 @@ function App() {
         onChange: e => estItemSet(ti, i, "unitPrice", e.target.value)
       })), /*#__PURE__*/React.createElement("b", {
         className: "tolinecost",
-        title: it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? "Priced from your price book" : ""
-      }, it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : "", $0(it.cost)), /*#__PURE__*/React.createElement("button", {
+        title: it.unpriced ? "No price in your cost book — add this material's price" : it.placeholder || it.priceTier === "seed" ? "Placeholder/seed price — not your real cost yet; tune it before this rolls into a sell price" : it.priceTier === "pricebook" ? "Priced from your price book" : it.priceTier === "retail" ? "HD/Lowe's retail — verify" : ""
+      }, it.unpriced ? "⚠️ " : it.placeholder || it.priceTier === "seed" ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : "", $0(it.cost)), /*#__PURE__*/React.createElement("button", {
         className: "todel",
         onClick: () => estItemDel(ti, i)
       }, /*#__PURE__*/React.createElement(X, {

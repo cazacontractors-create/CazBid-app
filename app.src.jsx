@@ -4875,7 +4875,7 @@ function App() {
                               <input className="toqty" type="number" value={it.qty} onChange={(e) => estItemSet(ti, i, "qty", e.target.value)} />
                               <input className="tounit" value={it.unit} onChange={(e) => estItemSet(ti, i, "unit", e.target.value)} placeholder="unit" />
                               <span className="todollar" title="unit price">$<input className="tocost" type="number" value={it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0} onChange={(e) => estItemSet(ti, i, "unitPrice", e.target.value)} /></span>
-                              <b className="tolinecost" title={it.unpriced ? "No price in your cost book — add this material's price" : it.priceTier === "pricebook" ? "Priced from your price book" : ""}>{it.unpriced ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
+                              <b className="tolinecost" title={it.unpriced ? "No price in your cost book — add this material's price" : (it.placeholder || it.priceTier === "seed") ? "Placeholder/seed price — not your real cost yet; tune it before this rolls into a sell price" : it.priceTier === "pricebook" ? "Priced from your price book" : it.priceTier === "retail" ? "HD/Lowe's retail — verify" : ""}>{it.unpriced ? "⚠️ " : (it.placeholder || it.priceTier === "seed") ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
                               <button className="todel" onClick={() => estItemDel(ti, i)}><X size={14} /></button>
                             </div>
                           ))}
