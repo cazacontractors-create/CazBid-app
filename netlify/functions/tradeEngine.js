@@ -68,7 +68,7 @@ SPECS.framing = {
   labor: {
     laborBasis: "area_per_day",
     areaInputs: ["wallAreaSF", "floorAreaSF", "roofAreaSF"], areaUnit: "SF", areaLabel: "framed area",
-    productionRateSFPerDay: 350, hoursPerDay: 8, crewHourlyRate: 40.0, complexityFactor: 1.4,
+    productionRateSFPerDay: 350, hoursPerDay: 8, crewHourlyRate: 50.0, complexityFactor: 1.4,
   },
   complexity: { min: 1.0, max: 1.8, default: 1.4, guide: "1.0 simple box → 1.4 typical → 1.8 cut-up / addition tie-in to existing structure." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -95,7 +95,7 @@ SPECS.drywall = {
   labor: {
     laborBasis: "area_per_day",
     areaInputs: ["boardAreaSF"], areaUnit: "SF", areaLabel: "board area",
-    productionRateSFPerDay: 250, hoursPerDay: 8, crewHourlyRate: 38.0, complexityFactor: 1.3,
+    productionRateSFPerDay: 250, hoursPerDay: 8, crewHourlyRate: 50.0, complexityFactor: 1.3,
   },
   complexity: { min: 1.0, max: 1.6, default: 1.3, guide: "1.0 open walls → 1.6 lots of cuts/soffits/high ceilings." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -124,7 +124,7 @@ SPECS.insulation = {
   labor: {
     laborBasis: "area_per_day",
     areaInputs: ["wallCavityAreaSF", "atticFloorSF", "cathedralAreaSF"], areaUnit: "SF", areaLabel: "insulated area",
-    productionRateSFPerDay: 700, hoursPerDay: 8, crewHourlyRate: 36.0, complexityFactor: 1.2,
+    productionRateSFPerDay: 700, hoursPerDay: 8, crewHourlyRate: 50.0, complexityFactor: 1.2,
   },
   complexity: { min: 1.0, max: 1.6, default: 1.2, guide: "1.0 straight runs → 1.6 cut-up / cold-climate detailing." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -153,7 +153,7 @@ SPECS.trim = {
   labor: {
     laborBasis: "lf_plus_per_opening",
     runningLFInputs: ["roomPerimeterLF", "crownLF"],
-    crewHourlyRate: 42.0, hoursPerLF_running: 0.05, hoursPerDoor: 1.5, hoursPerWindow: 0.75, complexityFactor: 1.2,
+    crewHourlyRate: 50.0, hoursPerLF_running: 0.05, hoursPerDoor: 1.5, hoursPerWindow: 0.75, complexityFactor: 1.2,
   },
   complexity: { min: 1.0, max: 1.6, default: 1.2, guide: "paint-grade 1.0 → stain-grade / fine finish 1.6." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -187,7 +187,7 @@ SPECS.siding = {
   labor: {
     laborBasis: "area_per_day",
     areaInputs: ["wallAreaSF"], areaUnit: "SQ", areaLabel: "wall area",
-    productionRateSQPerDay: 4, hoursPerDay: 8, crewHourlyRate: 40.0, complexityFactor: 1.3,
+    productionRateSQPerDay: 4, hoursPerDay: 8, crewHourlyRate: 55.0, complexityFactor: 1.3,
   },
   complexity: { min: 1.0, max: 1.6, default: 1.3, guide: "1.0 simple walls → 1.6 cut-up / multi-story / dormers." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -225,7 +225,7 @@ SPECS.concrete = {
   labor: {
     laborBasis: "forming_plus_placement",
     placementCYLineIds: ["footing_concrete", "wall_concrete", "slab_concrete"],
-    crewHourlyRate: 40.0, hoursPerFormSF: 0.10, hoursPerCY_place: 1.2, hoursPerSlabSF_finish: 0.015, complexityFactor: 1.3,
+    crewHourlyRate: 55.0, hoursPerFormSF: 0.10, hoursPerCY_place: 1.2, hoursPerSlabSF_finish: 0.015, complexityFactor: 1.3,
   },
   complexity: { min: 1.0, max: 1.8, default: 1.3, guide: "1.0 easy access/broom finish → 1.8 tight access / weather / stamped-exposed." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -254,7 +254,7 @@ SPECS.electrical = {
   ],
   labor: {
     laborBasis: "per_device_per_fixture",
-    crewHourlyRate: 65.0, hoursPerDevice: 1.0, hoursPerFixture: 0.75, hoursPerPanel: 8.0, complexityFactor: 1.25,
+    crewHourlyRate: 70.0, hoursPerDevice: 1.0, hoursPerFixture: 0.75, hoursPerPanel: 8.0, complexityFactor: 1.25,
   },
   complexity: { min: 1.0, max: 2.0, default: 1.25, guide: "1.0 new construction → 2.0 old-work / fishing existing walls." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },
@@ -312,7 +312,7 @@ SPECS.hvac = {
   ],
   labor: {
     laborBasis: "per_system_per_register",
-    crewHourlyRate: 65.0, hoursPerSystem: 24.0, hoursPerRegister: 1.5, complexityFactor: 1.3,
+    crewHourlyRate: 68.0, hoursPerSystem: 24.0, hoursPerRegister: 1.5, complexityFactor: 1.3,
   },
   complexity: { min: 1.0, max: 1.8, default: 1.3, guide: "1.0 simple swap → 1.8 new ducting in existing house / multi-zone." },
   calibration: { laborMultiplier: 1.0, materialMultiplier: 1.0 },

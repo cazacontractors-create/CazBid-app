@@ -699,6 +699,22 @@ function realisticLaborFloor(sqGuess, dims, sysStr, isRoof) {
   return Math.round(sqGuess * perSq);
 }
 
+// Per-trade BURDENED labor-rate FLOOR ($/hr) — a safety net so no trade ever prices
+// labor below a real loaded cost (base wage + comp + payroll taxes + overhead). The
+// per-trade split reflects comp/insurance + skill + height premium; floors are still
+// overridable, and the calibration loop tunes the real rate from logged actuals.
+function burdenedRateFloor(scope, desc) {
+  const s = ((scope || "") + " " + (desc || "")).toLowerCase();
+  if (/standing seam|metal panel|snap.?lock|\blok\b|slate/.test(s)) return 72; // steep/specialty roofing — highest height + skill premium
+  if (/roof|shingle|tpo|epdm|flat roof|membrane/.test(s)) return 65;            // roofing in general
+  if (/electric/.test(s)) return 70;
+  if (/plumb/.test(s)) return 70;
+  if (/hvac|furnace|heat pump|mini.?split|\bduct/.test(s)) return 68;
+  if (/concrete|masonry|foundation|footing|\bslab|stucco/.test(s)) return 55;
+  if (/siding|fiber.?cement|hardie/.test(s)) return 55;
+  return 50; // framing / general carpentry / trim / drywall / paint / deck — base burdened floor
+}
+
 // SYSTEM PURITY (BUG 8): deterministically drop takeoff lines that belong to a
 // DIFFERENT roofing/siding system than the job's, so a shingle roof can't ship
 // metal-panel/standing-seam lines (and vice-versa). Targets system-specific
@@ -2587,7 +2603,10 @@ function App() {
         if (floor > 0 && laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
       }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
-      if (laborRate <= 0) laborRate = 60;
+      // BURDENED RATE FLOOR — never price labor below a real loaded cost for the trade.
+      const __rateFloor = burdenedRateFloor(scope, desc);
+      const __rateFloored = laborRate < __rateFloor; // incl. the laborRate<=0 case
+      if (__rateFloored) laborRate = __rateFloor;
       // Man-hours and days-on-site MUST come from the same number — derive days
       // from the final man-hours + crew so they can never diverge (the 36-MH-but-
       // 13-days bug). If the AI's own day count is bigger, keep it (it implies more MH it knew about).
@@ -2600,6 +2619,7 @@ function App() {
         title: String(d.title || "Estimate"), trade: String(d.trade || "general").toLowerCase(),
         items, primaryOptions, chosenTier: null,
         laborHours: laborHours, laborRate: laborRate, laborSource: laborSrc,
+        rateFloor: __rateFloor, rateFloored: __rateFloored, burdened: true,
         equipment: Math.round(num(d.equipment) || 0), taxRate: num(d.taxRate) || 0.08,
         crew: crewN, days: daysFinal, notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
@@ -4873,7 +4893,8 @@ function App() {
                         <div className="costbox" style={{ marginTop: 12 }}>
                           <div className="costrow"><span>Materials ({t.items.length} lines)</span><b>{$0(c.matTotal)}</b></div>
                           <div className="costrow"><span>Material tax ({(t.taxRate * 100).toFixed(1)}%)</span><b>{$0(c.matTax)}</b></div>
-                          <div className="costrow"><span>Labor — {t.laborHours} hrs @ {$0(t.laborRate)}{t.laborSource === "ratebook" ? <span className="labtag book">rate book</span> : t.laborSource === "engine" ? <span className="labtag book">engine</span> : <span className="labtag est">AI est. · verify</span>}</span><b>{$0(c.labor)}</b></div>
+                          <div className="costrow"><span>Labor — {t.laborHours} hrs @ {$0(t.laborRate)}/hr <span className="labtag book" title="Burdened rate: base wage + comp/insurance + payroll taxes + overhead (not bare wage)">burdened</span>{t.laborSource === "ratebook" ? <span className="labtag book">rate book</span> : t.laborSource === "engine" ? <span className="labtag book">engine</span> : <span className="labtag est">AI est. · verify</span>}</span><b>{$0(c.labor)}</b></div>
+                          {t.rateFloored && <div className="costrow"><span className="hint">↳ raised to the {$0(t.rateFloor)}/hr burdened minimum for this trade — override above if your loaded cost differs</span><b></b></div>}
                           <div className="costrow"><span>Equipment / disposal</span><b>{$0(t.equipment)}</b></div>
                           <div className="costrow total"><span>{(t.label || "Trade")} cost</span><b>{$0(c.cost)}</b></div>
                         </div>
