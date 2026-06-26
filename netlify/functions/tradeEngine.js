@@ -51,6 +51,8 @@ SPECS.framing = {
     { name: "trussSpacingIN", label: "Truss spacing OC", unit: "in", type: "number", default: 24, description: "Truss/rafter on-center spacing in inches (default 24)." },
     { name: "openingCount", label: "Openings (doors + windows)", unit: "", type: "number", required: true, description: "Count of doors + windows (drives header quantity)." },
     { name: "stories", label: "Stories", unit: "", type: "number", default: 1, description: "Number of stories." },
+    { name: "foundationType", label: "Foundation type", unit: "", type: "enum", enumValues: ["slab", "crawl", "basement"], default: "crawl", description: "slab | crawl | basement. SLAB = no floor system (NO floor joists / rim / subfloor); the engine emits PT sill + anchor bolts + uplift ties instead. crawl/basement = framed floor over the foundation." },
+    { name: "roofFraming", label: "Roof framing", unit: "", type: "enum", enumValues: ["truss", "stick"], default: "truss", description: "truss = manufactured roof trusses; stick = site-cut rafters + ridge board." },
   ],
   lineItems: [
     { id: "wall_studs", name: "Wall studs (2x studs)", unit: "EA", takeoff: "(((wallLF * 12) / ocSpacingIN) + 1) * 1.15", rounding: "round up to whole stud", materialUnitCost: 4.25, priceMatch: "2x4 2x6 stud spf" },
@@ -58,10 +60,19 @@ SPECS.framing = {
     { id: "headers", name: "Headers over openings", unit: "BF", takeoff: "openingCount * 12", rounding: "round up to whole board", materialUnitCost: 1.85, priceMatch: "header lvl 2x10 2x12" },
     { id: "wall_sheathing", name: "Wall sheathing (OSB/CDX)", unit: "EA", takeoff: "(wallAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0, priceMatch: "osb cdx sheathing 7/16 4x8" },
     { id: "housewrap", name: "House wrap", unit: "ROLL", takeoff: "(wallAreaSF * 1.10) / rollCoverageSF", rounding: "round up to whole roll", materialUnitCost: 165.0, params: { rollCoverageSF: 1000 }, priceMatch: "housewrap tyvek wrb wrap" },
-    { id: "floor_joists", name: "Floor joists (priced per SF)", unit: "SF", takeoff: "floorAreaSF * 1.05", rounding: "none", materialUnitCost: 2.40, priceMatch: "floor joist 2x10 i-joist" },
-    { id: "rim_joist", name: "Rim / band joist", unit: "LF", takeoff: "floorPerimeterLF", rounding: "round up to whole stock length", materialUnitCost: 2.10, priceMatch: "rim band joist" },
-    { id: "subfloor", name: "Subfloor (3/4 T&G OSB)", unit: "EA", takeoff: "(floorAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 32.0, priceMatch: "3/4 tongue groove osb subfloor 4x8" },
-    { id: "roof_trusses", name: "Roof trusses / rafters", unit: "EA", takeoff: "((buildingLengthLF * 12) / trussSpacingIN) + 1", rounding: "round up to whole truss", materialUnitCost: 145.0, priceMatch: "roof truss rafter" },
+    // FLOOR SYSTEM — only over a crawl/basement; a slab has no framed floor (scope gate).
+    { id: "floor_joists", name: "Floor joists (priced per SF)", unit: "SF", takeoff: "floorAreaSF * 1.05", rounding: "none", materialUnitCost: 2.40, when: "foundationType !== 'slab'", priceMatch: "floor joist 2x10 i-joist" },
+    { id: "rim_joist", name: "Rim / band joist", unit: "LF", takeoff: "floorPerimeterLF", rounding: "round up to whole stock length", materialUnitCost: 2.10, when: "foundationType !== 'slab'", priceMatch: "rim band joist" },
+    { id: "subfloor", name: "Subfloor (3/4 T&G OSB)", unit: "EA", takeoff: "(floorAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 32.0, when: "foundationType !== 'slab'", priceMatch: "3/4 tongue groove osb subfloor 4x8" },
+    // SLAB-on-grade structural connection (in place of a floor system) — slab only.
+    { id: "sill_plate", name: "PT sill plate (slab)", unit: "LF", takeoff: "floorPerimeterLF * 1.05", rounding: "round up to whole stock length", materialUnitCost: 1.65, when: "foundationType === 'slab'", priceMatch: "pressure treated sill plate 2x6 2x4 pt" },
+    { id: "sill_seal", name: "Sill seal / gasket (slab)", unit: "LF", takeoff: "floorPerimeterLF", rounding: "none", materialUnitCost: 0.30, when: "foundationType === 'slab'", priceMatch: "sill seal foam gasket" },
+    { id: "sill_anchors", name: "Anchor bolts (slab sill)", unit: "EA", takeoff: "(floorPerimeterLF / 6) + 1", rounding: "round up", materialUnitCost: 2.75, when: "foundationType === 'slab'", priceMatch: "anchor bolt j-bolt foundation sill" },
+    { id: "uplift_ties", name: "Hurricane / uplift ties (slab)", unit: "EA", takeoff: "((buildingLengthLF * 12) / trussSpacingIN) + 1", rounding: "round up", materialUnitCost: 1.25, when: "foundationType === 'slab'", priceMatch: "hurricane tie uplift clip h2.5 simpson" },
+    // ROOF FRAMING — manufactured trusses OR site-cut rafters + ridge (scope gate).
+    { id: "roof_trusses", name: "Roof trusses (manufactured)", unit: "EA", takeoff: "((buildingLengthLF * 12) / trussSpacingIN) + 1", rounding: "round up to whole truss", materialUnitCost: 145.0, when: "roofFraming === 'truss'", priceMatch: "roof truss" },
+    { id: "roof_rafters", name: "Rafters (site-cut 2x)", unit: "EA", takeoff: "((((buildingLengthLF * 12) / 16) + 1) * 2)", rounding: "round up", materialUnitCost: 14.0, when: "roofFraming === 'stick'", priceMatch: "rafter 2x8 2x10 2x12 spf" },
+    { id: "ridge_board", name: "Ridge board (stick frame)", unit: "LF", takeoff: "buildingLengthLF * 1.05", rounding: "round up to whole stock length", materialUnitCost: 3.20, when: "roofFraming === 'stick'", priceMatch: "ridge board 2x10 2x12" },
     { id: "roof_sheathing", name: "Roof sheathing (OSB/CDX)", unit: "EA", takeoff: "(roofAreaSF * 1.10) / sheetSF", rounding: "round up to whole sheet", materialUnitCost: 18.0, priceMatch: "osb cdx roof sheathing 7/16 4x8" },
     { id: "fasteners", name: "Framing nails / structural screws", unit: "SF", takeoff: "(wallAreaSF + floorAreaSF + roofAreaSF)", rounding: "none", materialUnitCost: 0.12, priceMatch: "framing nails screws fasteners" },
   ],
@@ -629,7 +640,16 @@ function computeTrade(spec, rawInputs, priceBook) {
   const inputs = coerceInputs(spec, rawInputs);
   const cal = spec.calibration;
 
-  const lineItems = spec.lineItems.map((li) => {
+  // SCOPE GATE (#2): a line item with a `when` condition only generates when that
+  // condition holds for these inputs — e.g. floor joists never emit on a slab, and
+  // roof trusses vs. site-cut rafters are mutually exclusive. The engine OWNS the
+  // scope rules so the takeoff can't contradict the declared foundation/roof type.
+  const lineItems = spec.lineItems.filter((li) => {
+    if (!li.when) return true;
+    const scope = Object.assign({}, spec.defaults, inputs, li.params || {});
+    try { return evalFormula("(" + li.when + ") ? 1 : 0", scope) > 0; }
+    catch (e) { return true; } // a bad condition fails open (keep the line) rather than silently dropping scope
+  }).map((li) => {
     const scope = Object.assign({}, spec.defaults, inputs, li.params || {});
     const rawQty = evalFormula(li.takeoff, scope);
     let qty = applyRounding(rawQty, li.rounding, scope);
@@ -646,6 +666,15 @@ function computeTrade(spec, rawInputs, priceBook) {
       priceMatch: pb ? { matchType: pb.matchType, score: pb.matchScore, material: pb.material, source: pb.source } : null,
     };
   });
+
+  // RECONCILIATION GUARD: assert no generated line contradicts the declared scope.
+  // Gating above should already prevent this; this is the defensive safety net the
+  // spec calls for (no floor-system lines on a slab).
+  if (inputs.foundationType === "slab") {
+    for (let i = lineItems.length - 1; i >= 0; i--) {
+      if (/^(floor_joists|rim_joist|subfloor)$/.test(lineItems[i].id)) lineItems.splice(i, 1);
+    }
+  }
 
   const materialSubtotal = lineItems.reduce((s, li) => s + li.lineCost, 0);
   const materialTotal = materialSubtotal * cal.materialMultiplier;
@@ -717,7 +746,9 @@ function formatTradeNumericBlock(spec, result) {
   lines.push("| Item | Unit | Qty | Unit cost | Line cost |");
   lines.push("|---|---|---:|---:|---:|");
   for (const li of result.lineItems) {
-    lines.push(`| ${li.name} | ${li.unit} | ${num(li.qty, 2)} | ${money(li.materialUnitCost)} | ${money(li.lineCost)} |`);
+    const tier = li.priceTier || "seed";
+    const mark = tier === "seed" ? " ⚠️" : tier === "pricebook" ? " 📗" : tier === "retail" ? " 🏷️" : "";
+    lines.push(`| ${li.name} | ${li.unit} | ${num(li.qty, 2)} | ${money(li.materialUnitCost)}${mark} | ${money(li.lineCost)} |`);
   }
   lines.push(`| **Material subtotal** | | | | **${money(result.materialSubtotal)}** |`);
   if (result.materialMultiplier !== 1) {
@@ -835,6 +866,7 @@ function buildEstResult(spec, result, narrative, numericBlock) {
     name: li.name, qty: round2(li.qty), unit: li.unit, cost: round0(li.lineCost),
     unitCost: Math.round((Number(li.materialUnitCost) + Number.EPSILON) * 100) / 100,
     priceTier: li.priceTier || "seed",
+    placeholder: (li.priceTier || "seed") === "seed", // seed unit cost = PLACEHOLDER price, flag it (don't let it roll into a sell price as if real)
     matchType: li.priceMatch ? li.priceMatch.matchType : null,
   }));
   const priceSummary = { pricebook: 0, retail: 0, seed: 0 };
