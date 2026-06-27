@@ -1526,7 +1526,9 @@ function App() {
   const [listening, setListening] = useState(false); // mic is actively capturing
   const recogRef = useRef(null);                     // SpeechRecognition instance
   const voiceRef = useRef(false);                    // mirrors voiceMode for async callbacks (stale-closure-proof)
-  const ttsPrimedRef = useRef(false);                // TTS unlocked by a user gesture (iOS)
+  const ttsPrimedRef = useRef(false);                // browser TTS unlocked by a user gesture (iOS)
+  const alAudioRef = useRef(null);                   // reusable <audio> for ElevenLabs playback
+  const audioUnlockedRef = useRef(false);            // <audio> element unlocked by a gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
@@ -2460,16 +2462,37 @@ function App() {
   // later = replace speakAL only. AL reads numbers back before they commit. ----
   const SpeechRec = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
   const ttsOK = (typeof window !== "undefined") && !!window.speechSynthesis;
-  // Unlock TTS inside a user gesture — iOS Safari stays silent until the first
-  // speak() fires from a tap; this primes it once so later async replies play.
-  const primeTTS = () => {
-    if (!ttsOK || ttsPrimedRef.current) return;
-    try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; window.speechSynthesis.speak(u); ttsPrimedRef.current = true; } catch (e) {}
+  // tiny silent WAV — played inside a tap to UNLOCK the <audio> element on iOS so
+  // ElevenLabs audio (which arrives after an async fetch) can play later.
+  const makeSilentURL = () => {
+    try {
+      const sr = 8000, n = 400, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt ");
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+      v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+      return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+    } catch (e) { return ""; }
   };
-  const speakAL = (text) => {
+  const ensureAudioEl = () => { if (!alAudioRef.current && typeof Audio !== "undefined") { alAudioRef.current = new Audio(); alAudioRef.current.preload = "auto"; } return alAudioRef.current; };
+  // Unlock BOTH paths inside a user gesture (iOS): the <audio> element (ElevenLabs)
+  // and the SpeechSynthesis fallback. Once per session.
+  const primeTTS = () => {
+    const a = ensureAudioEl();
+    if (a && !audioUnlockedRef.current) {
+      try { a.muted = true; a.src = makeSilentURL(); const p = a.play(); if (p && p.then) p.then(() => { try { a.pause(); a.currentTime = 0; a.muted = false; } catch (e) {} }).catch(() => { a.muted = false; }); audioUnlockedRef.current = true; } catch (e) {}
+    }
+    if (ttsOK && !ttsPrimedRef.current) { try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; window.speechSynthesis.speak(u); ttsPrimedRef.current = true; } catch (e) {} }
+  };
+  const stopSpeaking = () => {
+    try { const a = alAudioRef.current; if (a) { a.pause(); } } catch (e) {}
+    try { if (ttsOK) window.speechSynthesis.cancel(); } catch (e) {}
+  };
+  // BROWSER fallback voice (offline / if the ElevenLabs call fails on a back road).
+  const speakBrowser = (text) => {
     if (!ttsOK || !text) return;
     try {
-      // strip emoji/symbols/markdown — they'd be read out literally; keep ASCII speech.
       const clean = String(text).replace(/[*_`#>~]/g, "").replace(/[^\x00-\x7F]+/g, " ").replace(/\s+/g, " ").trim();
       if (!clean) return;
       const synth = window.speechSynthesis;
@@ -2479,9 +2502,29 @@ function App() {
       const vs = (synth.getVoices && synth.getVoices()) || [];
       const en = vs.filter((v) => /^en/i.test(v.lang || ""));
       if (en.length) u.voice = en.find((v) => /en[-_]?us/i.test(v.lang || "")) || en[0];
-      // defer past the cancel() (Chrome drops a speak() fired in the same tick) + nudge resume.
       setTimeout(() => { try { synth.speak(u); setTimeout(() => { try { if (synth.paused) synth.resume(); } catch (e) {} }, 140); } catch (e) {} }, 60);
-    } catch (e) { /* TTS best-effort */ }
+    } catch (e) { /* best-effort */ }
+  };
+  // AL's voice = ElevenLabs (real voice) via the server `speak` function; browser TTS
+  // is the offline fallback so AL never goes mute on a back road.
+  const speakAL = async (text) => {
+    if (!text) return;
+    const clean = String(text).replace(/[*_`#>~]/g, "").replace(/\s+/g, " ").trim();
+    if (!clean) return;
+    const a = ensureAudioEl();
+    if (!a) { speakBrowser(clean); return; }
+    try {
+      stopSpeaking();
+      const res = await fetch("/.netlify/functions/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean }) });
+      if (!res.ok) throw new Error("tts " + res.status);
+      const blob = await res.blob();
+      if (!blob || blob.size < 200) throw new Error("empty audio");
+      const url = URL.createObjectURL(blob);
+      a.src = url; a.muted = false; a.volume = 1.0;
+      a.onended = () => { try { URL.revokeObjectURL(url); } catch (e) {} };
+      const p = a.play();
+      if (p && p.catch) p.catch(() => speakBrowser(clean)); // autoplay blocked → fallback
+    } catch (e) { speakBrowser(clean); }
   };
   const stopListening = () => { try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
   const startVoiceInput = () => {
@@ -2491,7 +2534,7 @@ function App() {
     if (!voiceMode) { setVoiceMode(true); voiceRef.current = true; }
     if (!SpeechRec) { flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade."); return; }
     try {
-      if (ttsOK) window.speechSynthesis.cancel(); // don't transcribe AL's own voice
+      stopSpeaking(); // don't transcribe AL's own voice
       const r = new SpeechRec();
       r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
       r.onresult = (ev) => { const t = ev.results[0][0].transcript; setListening(false); if (t && t.trim()) alSend(t.trim()); };
@@ -2504,7 +2547,7 @@ function App() {
     setVoiceMode((v) => {
       const next = !v;
       voiceRef.current = next;
-      if (!next) { try { if (ttsOK) window.speechSynthesis.cancel(); } catch (e) {} stopListening(); }
+      if (!next) { stopSpeaking(); stopListening(); }
       else { primeTTS(); speakAL("Voice on. What are we working on?"); flash("Voice on — AL reads replies aloud and confirms numbers back."); }
       return next;
     });
