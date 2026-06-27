@@ -1523,8 +1523,12 @@ function App() {
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
-  const [listening, setListening] = useState(false); // mic is actively capturing
-  const recogRef = useRef(null);                     // SpeechRecognition instance
+  const [listening, setListening] = useState(false); // mic is actively recording
+  const [transcribing, setTranscribing] = useState(false); // recorded burst is being transcribed by Scribe
+  const recogRef = useRef(null);                     // SpeechRecognition instance (keyboard-mic fallback only)
+  const mediaRecRef = useRef(null);                  // MediaRecorder for ElevenLabs Scribe capture
+  const mediaChunksRef = useRef([]);                 // recorded audio chunks
+  const mediaStreamRef = useRef(null);               // mic MediaStream (to stop tracks)
   const voiceRef = useRef(false);                    // mirrors voiceMode for async callbacks (stale-closure-proof)
   const ttsPrimedRef = useRef(false);                // browser TTS unlocked by a user gesture (iOS)
   const alAudioRef = useRef(null);                   // reusable <audio> for ElevenLabs playback
@@ -2526,22 +2530,47 @@ function App() {
       if (p && p.catch) p.catch(() => speakBrowser(clean)); // autoplay blocked → fallback
     } catch (e) { speakBrowser(clean); }
   };
-  const stopListening = () => { try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
-  const startVoiceInput = () => {
+  const blobToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(blob); });
+  const mediaOK = (typeof navigator !== "undefined") && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (typeof window !== "undefined") && window.MediaRecorder;
+  const pickMime = () => { for (const c of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg"]) { try { if (window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c; } catch (e) {} } return ""; };
+  const stopListening = () => { try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch (e) {} try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
+  // VOICE-IN (Part B, batch): tap to record a burst → ElevenLabs Scribe transcribes →
+  // the transcript flows into the SAME estimate brain as typed chat → AL reads back.
+  const startVoiceInput = async () => {
     if (listening) { stopListening(); return; }
-    primeTTS(); // this tap is our chance to unlock iOS audio
-    // tapping the mic enables the spoken loop so AL reads its reply back
+    if (transcribing) return;
+    primeTTS(); // this tap is our chance to unlock iOS audio for the readback
     if (!voiceMode) { setVoiceMode(true); voiceRef.current = true; }
-    if (!SpeechRec) { flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade."); return; }
+    stopSpeaking(); // don't record AL's own voice
+    if (!mediaOK) { // no MediaRecorder (older iOS) → keyboard-mic dictation still works
+      flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade.");
+      return;
+    }
     try {
-      stopSpeaking(); // don't transcribe AL's own voice
-      const r = new SpeechRec();
-      r.lang = "en-US"; r.interimResults = false; r.maxAlternatives = 1; r.continuous = false;
-      r.onresult = (ev) => { const t = ev.results[0][0].transcript; setListening(false); if (t && t.trim()) alSend(t.trim()); };
-      r.onerror = () => { setListening(false); };
-      r.onend = () => { setListening(false); };
-      recogRef.current = r; setListening(true); r.start();
-    } catch (e) { setListening(false); flash("Voice input isn't available here — type or use your keyboard mic."); }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const mime = pickMime();
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mediaChunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        try { (mediaStreamRef.current.getTracks() || []).forEach((t) => t.stop()); } catch (e) {}
+        const blob = new Blob(mediaChunksRef.current, { type: (rec.mimeType || mime || "audio/webm") });
+        mediaChunksRef.current = [];
+        if (!blob.size) return;
+        setTranscribing(true);
+        try {
+          const b64 = await blobToB64(blob);
+          const res = await fetch("/.netlify/functions/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audioBase64: b64, mime: blob.type }) });
+          const d = await res.json();
+          setTranscribing(false);
+          const t = String((d && d.text) || "").trim();
+          if (res.ok && t) alSend(t);
+          else flash(d && d.error ? "Didn't catch that — try again." : "Didn't catch that — try again.");
+        } catch (e) { setTranscribing(false); flash("Transcription failed — type it or try again."); }
+      };
+      mediaRecRef.current = rec; rec.start(); setListening(true);
+    } catch (e) { setListening(false); flash("Mic unavailable — allow microphone access, or use your keyboard's 🎤."); }
   };
   const toggleVoice = () => {
     setVoiceMode((v) => {
@@ -4983,11 +5012,11 @@ function App() {
                 })()}
 
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button className={"btn " + (listening ? "primary" : "ghost")} style={{ padding: "0 12px", animation: listening ? "pulse 1s infinite" : "none" }} disabled={alBusy} onClick={startVoiceInput} title={voiceMode ? "Tap and talk" : "Tap and talk (turns on voice)"}>{listening ? "● Listening…" : "🎤"}</button>
-                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder={listening ? "Listening…" : "e.g. “west slope is 8/12” or “what do you still need?”"} style={{ flex: 1 }} />
+                  <button className={"btn " + (listening ? "primary" : "ghost")} style={{ padding: "0 12px", animation: listening ? "pulse 1s infinite" : "none" }} disabled={alBusy || transcribing} onClick={startVoiceInput} title={listening ? "Tap to stop" : "Tap and talk"}>{listening ? "● Stop" : transcribing ? "…" : "🎤"}</button>
+                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder={listening ? "Recording… tap Stop when done" : transcribing ? "Transcribing…" : "e.g. “west slope is 8/12” or “what do you still need?”"} style={{ flex: 1 }} />
                   <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
                 </div>
-                {voiceMode && <p className="hint" style={{ marginTop: 4 }}>🔊 AL reads replies aloud and confirms numbers back before they lock. Tap 🎤 to talk; on iPhone use your keyboard mic.</p>}
+                {voiceMode && <p className="hint" style={{ marginTop: 4 }}>🔊 Tap 🎤, say it (e.g. “standing seam, eight twelve, valley into the dormer”), tap Stop — AL transcribes, fills it in, and reads it back to confirm before it locks.</p>}
               </section>
 
               <div style={{ display: "flex", gap: 6 }}>
