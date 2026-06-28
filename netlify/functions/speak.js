@@ -3,8 +3,10 @@
 // secret key (process.env.ELEVENLABS_API_KEY — NEVER in the front-end bundle) and
 // returns audio/mpeg bytes. Voice + model are locked per the build scope.
 // ----------------------------------------------------------------------------
-const VOICE_ID = "NNl6r8mD7vthiJatiJt1";   // not secret — safe in code (Profile selector comes later)
-const MODEL_ID = "eleven_flash_v2_5";       // ElevenLabs: Flash over Turbo in all cases (~75ms)
+const DEFAULT_VOICE = "NNl6r8mD7vthiJatiJt1"; // AL — default persona; speak uses the selected persona's voiceId
+const MODEL_ID = "eleven_flash_v2_5";        // ElevenLabs: Flash over Turbo in all cases (~75ms)
+// allow-list of persona voice IDs (not secret) so the body can't request arbitrary voices
+const VOICE_IDS = ["NNl6r8mD7vthiJatiJt1", "pqHfZKP75CvOlQylNhV4", "pNInz6obpgDQGcFmaJgB", "IRHApOXLvnW57QJPQH2P", "onwK4e9ZLuTAKqWW03F9", "nPczCjzI2devNBz1zQrb", "iNwc1Lv2YQLywnCvjfn1", "6rOxfAnZpbM3VIEhFaeV", "hpp4J3VqNfWAUOO0d1Us", "cgSgspJ2msm6clMCkdW9"];
 
 const HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -46,9 +48,11 @@ exports.handler = async function (event) {
   try { body = JSON.parse(event.body || "{}"); } catch (e) { return { statusCode: 400, headers: HEADERS, body: "Bad request body" }; }
   const text = normalizeForSpeech(body.text);
   if (!text) return { statusCode: 400, headers: HEADERS, body: "No text to speak" };
+  const reqVoice = String(body.voiceId || "");
+  const voice = VOICE_IDS.indexOf(reqVoice) >= 0 ? reqVoice : DEFAULT_VOICE;
 
   try {
-    const res = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + VOICE_ID + "/stream", {
+    const res = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + voice + "/stream", {
       method: "POST",
       headers: { "xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg" },
       body: JSON.stringify({
