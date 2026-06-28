@@ -69,6 +69,7 @@ const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade defi
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
 const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
+const PERSONA_SPEED_KEY = "cazbid-persona-speeds-v1"; // per-persona TTS speed { name: 0.7..1.2 }
 // Assistant PERSONAS — name + ElevenLabs voiceId + avatar (blank for now → initials fallback).
 // AL is the DEFAULT + home base; others are alternates. Voice IDs are not secret.
 const PERSONAS = [
@@ -1546,6 +1547,10 @@ function App() {
   const personaRef = useRef("AL");              // stale-closure-proof for async speak
   const curPersona = personaByName(persona);
   const personaSet = (name) => { const p = personaByName(name); setPersona(p.name); personaRef.current = p.name; pSet(PERSONA_KEY, p.name); };
+  const [personaSpeeds, setPersonaSpeeds] = useState({}); // per-persona TTS speed (0.7–1.2, default 1.0)
+  const personaSpeedsRef = useRef({});                    // stale-closure-proof for async speak
+  const personaSpeed = (name) => { const v = (personaSpeedsRef.current || {})[name]; return v >= 0.7 && v <= 1.2 ? v : 1; };
+  const personaSpeedSet = (name, v) => { const nv = Math.max(0.7, Math.min(1.2, Math.round((Number(v) || 1) * 100) / 100)); const next = Object.assign({}, personaSpeedsRef.current, { [name]: nv }); personaSpeedsRef.current = next; setPersonaSpeeds(next); pSet(PERSONA_SPEED_KEY, next); };
   // avatar for a persona: image if supplied (AL keeps his photo); else initials circle —
   // never a broken-image icon. Dropping an image into a persona's avatar is the only step later.
   const personaFace = (p, sm) => {
@@ -1960,6 +1965,8 @@ function App() {
       if (ests && ests.length) setEstimates(ests);
       const pna = await pGet(PERSONA_KEY);
       if (pna && personaByName(pna)) { setPersona(personaByName(pna).name); personaRef.current = personaByName(pna).name; }
+      const psp = await pGet(PERSONA_SPEED_KEY);
+      if (psp && typeof psp === "object") { setPersonaSpeeds(psp); personaSpeedsRef.current = psp; }
       loaded.current = true;
     })();
   }, []);
@@ -2560,7 +2567,7 @@ function App() {
   // AL's voice = ElevenLabs (selected persona) via the server `speak` function; browser
   // TTS is the offline fallback. Returns a Promise that RESOLVES WHEN PLAYBACK ENDS so
   // conversation mode can reopen the mic only after AL finishes (no self-capture).
-  const speakAL = (text, voiceOverride) => new Promise((resolve) => {
+  const speakAL = (text, voiceOverride, speedOverride) => new Promise((resolve) => {
     if (!text) return resolve();
     const clean = String(text).replace(/[*_`#>~]/g, "").replace(/\s+/g, " ").trim();
     if (!clean) return resolve();
@@ -2568,10 +2575,11 @@ function App() {
     let done = false; const fin = () => { if (done) return; done = true; resolve(); };
     if (!a) { speakBrowser(clean, fin); return; }
     const voiceId = voiceOverride || personaByName(personaRef.current).voiceId;
+    const speed = speedOverride || personaSpeed(personaRef.current);
     (async () => {
       try {
         stopSpeaking();
-        const res = await fetch("/.netlify/functions/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean, voiceId: voiceId }) });
+        const res = await fetch("/.netlify/functions/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean, voiceId: voiceId, speed: speed }) });
         if (!res.ok) throw new Error("tts " + res.status);
         const blob = await res.blob();
         if (!blob || blob.size < 200) throw new Error("empty audio");
@@ -2590,7 +2598,7 @@ function App() {
     primeTTS();
     const fn = String(profC.name || "").trim().split(/\s+/)[0] || "";
     const line = fn ? ("Good morning " + fn + ", what are we quoting today?") : "Good morning, what are we quoting today?";
-    speakAL(line, p.voiceId);
+    speakAL(line, p.voiceId, personaSpeed(p.name));
   };
   const blobToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(blob); });
   const mediaOK = (typeof navigator !== "undefined") && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (typeof window !== "undefined") && window.MediaRecorder;
@@ -4942,21 +4950,31 @@ function App() {
 
           <section className="card">
             <div className="h2">Assistant voice <span className="hint">who talks &amp; helps you estimate</span></div>
-            <p className="hint" style={{ marginTop: -2 }}>Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, then Use.</p>
+            <p className="hint" style={{ marginTop: -2 }}>Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, set its speed, then Use.</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-              {PERSONAS.map((p) => (
-                <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 10, border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"), background: persona === p.name ? "#f0faf3" : "#fff" }}>
-                  {personaFace(p, true)}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700 }}>{p.name}{p.name === "AL" ? " " : ""}{p.name === "AL" && <span className="hint">· default</span>}</div>
-                    <div className="hint">{p.sex === "f" ? "Female voice" : "Male voice"}</div>
+              {PERSONAS.map((p) => {
+                const spd = personaSpeeds[p.name] || 1;
+                return (
+                <div key={p.name} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px", borderRadius: 10, border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"), background: persona === p.name ? "#f0faf3" : "#fff" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {personaFace(p, true)}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700 }}>{p.name} {p.name === "AL" && <span className="hint">· default</span>}</div>
+                      <div className="hint">{p.sex === "f" ? "Female voice" : "Male voice"}</div>
+                    </div>
+                    <button className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => previewPersona(p)} title={"Hear " + p.name + " at " + spd.toFixed(2) + "×"}>▶</button>
+                    <button className={"btn " + (persona === p.name ? "primary" : "ghost")} style={{ padding: "4px 12px" }} onClick={() => { personaSet(p.name); flash(p.name + " is now your assistant."); }}>{persona === p.name ? "✓ Using" : "Use"}</button>
                   </div>
-                  <button className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => previewPersona(p)} title={"Hear " + p.name}>▶</button>
-                  <button className={"btn " + (persona === p.name ? "primary" : "ghost")} style={{ padding: "4px 12px" }} onClick={() => { personaSet(p.name); flash(p.name + " is now your assistant."); }}>{persona === p.name ? "✓ Using" : "Use"}</button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="hint" style={{ width: 44 }}>Speed</span>
+                    <input type="range" min="0.7" max="1.2" step="0.05" value={spd} style={{ flex: 1 }} onChange={(e) => personaSpeedSet(p.name, e.target.value)} />
+                    <span className="hint" style={{ width: 40, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{spd.toFixed(2)}×</span>
+                  </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
-            <p className="hint" style={{ marginTop: 8 }}>Avatars are coming — names show initials until photos are added.</p>
+            <p className="hint" style={{ marginTop: 8 }}>Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.</p>
           </section>
 
           <section className="card">
