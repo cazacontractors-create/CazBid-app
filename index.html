@@ -585,6 +585,7 @@ const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade defi
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
 const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
+const PERSONA_SPEED_KEY = "cazbid-persona-speeds-v1"; // per-persona TTS speed { name: 0.7..1.2 }
 // Assistant PERSONAS — name + ElevenLabs voiceId + avatar (blank for now → initials fallback).
 // AL is the DEFAULT + home base; others are alternates. Voice IDs are not secret.
 const PERSONAS = [{
@@ -4017,6 +4018,21 @@ function App() {
     personaRef.current = p.name;
     pSet(PERSONA_KEY, p.name);
   };
+  const [personaSpeeds, setPersonaSpeeds] = useState({}); // per-persona TTS speed (0.7–1.2, default 1.0)
+  const personaSpeedsRef = useRef({}); // stale-closure-proof for async speak
+  const personaSpeed = name => {
+    const v = (personaSpeedsRef.current || {})[name];
+    return v >= 0.7 && v <= 1.2 ? v : 1;
+  };
+  const personaSpeedSet = (name, v) => {
+    const nv = Math.max(0.7, Math.min(1.2, Math.round((Number(v) || 1) * 100) / 100));
+    const next = Object.assign({}, personaSpeedsRef.current, {
+      [name]: nv
+    });
+    personaSpeedsRef.current = next;
+    setPersonaSpeeds(next);
+    pSet(PERSONA_SPEED_KEY, next);
+  };
   // avatar for a persona: image if supplied (AL keeps his photo); else initials circle —
   // never a broken-image icon. Dropping an image into a persona's avatar is the only step later.
   const personaFace = (p, sm) => {
@@ -4828,6 +4844,11 @@ function App() {
       if (pna && personaByName(pna)) {
         setPersona(personaByName(pna).name);
         personaRef.current = personaByName(pna).name;
+      }
+      const psp = await pGet(PERSONA_SPEED_KEY);
+      if (psp && typeof psp === "object") {
+        setPersonaSpeeds(psp);
+        personaSpeedsRef.current = psp;
       }
       loaded.current = true;
     })();
@@ -5800,7 +5821,7 @@ function App() {
   // AL's voice = ElevenLabs (selected persona) via the server `speak` function; browser
   // TTS is the offline fallback. Returns a Promise that RESOLVES WHEN PLAYBACK ENDS so
   // conversation mode can reopen the mic only after AL finishes (no self-capture).
-  const speakAL = (text, voiceOverride) => new Promise(resolve => {
+  const speakAL = (text, voiceOverride, speedOverride) => new Promise(resolve => {
     if (!text) return resolve();
     const clean = String(text).replace(/[*_`#>~]/g, "").replace(/\s+/g, " ").trim();
     if (!clean) return resolve();
@@ -5816,6 +5837,7 @@ function App() {
       return;
     }
     const voiceId = voiceOverride || personaByName(personaRef.current).voiceId;
+    const speed = speedOverride || personaSpeed(personaRef.current);
     (async () => {
       try {
         stopSpeaking();
@@ -5826,7 +5848,8 @@ function App() {
           },
           body: JSON.stringify({
             text: clean,
-            voiceId: voiceId
+            voiceId: voiceId,
+            speed: speed
           })
         });
         if (!res.ok) throw new Error("tts " + res.status);
@@ -5861,7 +5884,7 @@ function App() {
     primeTTS();
     const fn = String(profC.name || "").trim().split(/\s+/)[0] || "";
     const line = fn ? "Good morning " + fn + ", what are we quoting today?" : "Good morning, what are we quoting today?";
-    speakAL(line, p.voiceId);
+    speakAL(line, p.voiceId, personaSpeed(p.name));
   };
   const blobToB64 = blob => new Promise((res, rej) => {
     const r = new FileReader();
@@ -9822,59 +9845,96 @@ function App() {
     style: {
       marginTop: -2
     }
-  }, "Pick who reads your estimates back. AL is the default. Tap \u25B6 to hear each one, then Use."), /*#__PURE__*/React.createElement("div", {
+  }, "Pick who reads your estimates back. AL is the default. Tap \u25B6 to hear each one, set its speed, then Use."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
       gap: 6,
       marginTop: 8
     }
-  }, PERSONAS.map(p => /*#__PURE__*/React.createElement("div", {
-    key: p.name,
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      padding: "6px 8px",
-      borderRadius: 10,
-      border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"),
-      background: persona === p.name ? "#f0faf3" : "#fff"
-    }
-  }, personaFace(p, true), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 700
-    }
-  }, p.name, p.name === "AL" ? " " : "", p.name === "AL" && /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "\xB7 default")), /*#__PURE__*/React.createElement("div", {
-    className: "hint"
-  }, p.sex === "f" ? "Female voice" : "Male voice")), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    style: {
-      padding: "4px 10px"
-    },
-    onClick: () => previewPersona(p),
-    title: "Hear " + p.name
-  }, "\u25B6"), /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (persona === p.name ? "primary" : "ghost"),
-    style: {
-      padding: "4px 12px"
-    },
-    onClick: () => {
-      personaSet(p.name);
-      flash(p.name + " is now your assistant.");
-    }
-  }, persona === p.name ? "✓ Using" : "Use")))), /*#__PURE__*/React.createElement("p", {
+  }, PERSONAS.map(p => {
+    const spd = personaSpeeds[p.name] || 1;
+    return /*#__PURE__*/React.createElement("div", {
+      key: p.name,
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "8px",
+        borderRadius: 10,
+        border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"),
+        background: persona === p.name ? "#f0faf3" : "#fff"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }
+    }, personaFace(p, true), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, p.name, " ", p.name === "AL" && /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "\xB7 default")), /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, p.sex === "f" ? "Female voice" : "Male voice")), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "4px 10px"
+      },
+      onClick: () => previewPersona(p),
+      title: "Hear " + p.name + " at " + spd.toFixed(2) + "×"
+    }, "\u25B6"), /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (persona === p.name ? "primary" : "ghost"),
+      style: {
+        padding: "4px 12px"
+      },
+      onClick: () => {
+        personaSet(p.name);
+        flash(p.name + " is now your assistant.");
+      }
+    }, persona === p.name ? "✓ Using" : "Use")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        width: 44
+      }
+    }, "Speed"), /*#__PURE__*/React.createElement("input", {
+      type: "range",
+      min: "0.7",
+      max: "1.2",
+      step: "0.05",
+      value: spd,
+      style: {
+        flex: 1
+      },
+      onChange: e => personaSpeedSet(p.name, e.target.value)
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        width: 40,
+        textAlign: "right",
+        fontVariantNumeric: "tabular-nums"
+      }
+    }, spd.toFixed(2), "\xD7")));
+  })), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
     }
-  }, "Avatars are coming \u2014 names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
+  }, "Speed 0.70\u20131.20\xD7 (1.00 = normal). Avatars are coming \u2014 names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"

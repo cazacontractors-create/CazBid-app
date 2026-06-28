@@ -50,6 +50,9 @@ exports.handler = async function (event) {
   if (!text) return { statusCode: 400, headers: HEADERS, body: "No text to speak" };
   const reqVoice = String(body.voiceId || "");
   const voice = VOICE_IDS.indexOf(reqVoice) >= 0 ? reqVoice : DEFAULT_VOICE;
+  const vs = { stability: 0.5, similarity_boost: 0.75, use_speaker_boost: true };
+  const spd = Number(body.speed); // ElevenLabs supports 0.7–1.2 (1.0 = normal)
+  if (spd >= 0.7 && spd <= 1.2) vs.speed = spd;
 
   try {
     const res = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + voice + "/stream", {
@@ -58,7 +61,7 @@ exports.handler = async function (event) {
       body: JSON.stringify({
         text: text,
         model_id: MODEL_ID,
-        voice_settings: { stability: 0.5, similarity_boost: 0.75, use_speaker_boost: true },
+        voice_settings: vs,
       }),
     });
     if (!res.ok) {
