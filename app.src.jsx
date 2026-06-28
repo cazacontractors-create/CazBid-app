@@ -1189,6 +1189,7 @@ const HOUSE_HOTSPOTS = [
   // EXTERIOR
   { state: "exterior", trade: "roofing", label: "Roofing", x: 14, y: 3, w: 72, h: 26 },
   { state: "exterior", trade: "siding", label: "Siding", x: 14, y: 39, w: 13, h: 30 },
+  { state: "exterior", trade: "framing", label: "Framing", x: 58, y: 33, w: 26, h: 22 },
   { state: "exterior", trade: "windows", label: "Windows", x: 30, y: 44, w: 17, h: 20 },
   { state: "exterior", trade: "doors", label: "Doors", x: 49, y: 46, w: 7, h: 32 },
   { state: "exterior", trade: "garage", label: "Garage Doors", x: 83, y: 52, w: 16, h: 34 },
@@ -1213,9 +1214,10 @@ const HOUSE_HOTSPOTS = [
 ];
 // Map a house trade to a price-book trade key (only the 9 deterministic engine
 // trades have one — others fall back to suggested materials).
-const PB_TRADE_KEY = { siding: "siding", concrete: "concrete", drywall: "drywall", trim: "trim", insulation: "insulation", hvac: "hvac", electrical: "electrical", plumbing: "plumbing" };
+const PB_TRADE_KEY = { framing: "framing", siding: "siding", concrete: "concrete", drywall: "drywall", trim: "trim", insulation: "insulation", hvac: "hvac", electrical: "electrical", plumbing: "plumbing" };
 // Starter material lists (brand + product), most-common first, NO 3-tab shingles.
 const MATERIAL_SUGGESTIONS = {
+  framing: ["2x6 SPF walls", "2x4 SPF walls", "Advanced framing (24\" OC)", "LVL/engineered beams", "Steel stud"],
   roofing: ["GAF Timberline HDZ (architectural)", "Owens Corning Duration", "CertainTeed Landmark", "Standing-seam metal", "Firestone TPO (flat)"],
   siding: ["James Hardie lap (fiber-cement)", "CertainTeed vinyl lap", "LP SmartSide", "Cedar lap", "Board & batten"],
   windows: ["Andersen 400 Series", "Pella 250 Series", "Marvin Elevate", "Vinyl double-hung"],
