@@ -68,6 +68,23 @@ const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price boo
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
+const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
+// Assistant PERSONAS — name + ElevenLabs voiceId + avatar (blank for now → initials fallback).
+// AL is the DEFAULT + home base; others are alternates. Voice IDs are not secret.
+const PERSONAS = [
+  { name: "AL", voiceId: "NNl6r8mD7vthiJatiJt1", avatar: "", sex: "m", note: "default" },
+  { name: "Bill", voiceId: "pqHfZKP75CvOlQylNhV4", avatar: "", sex: "m" },
+  { name: "Adam", voiceId: "pNInz6obpgDQGcFmaJgB", avatar: "", sex: "m" },
+  { name: "Adam 2", voiceId: "IRHApOXLvnW57QJPQH2P", avatar: "", sex: "m" },
+  { name: "Daniel", voiceId: "onwK4e9ZLuTAKqWW03F9", avatar: "", sex: "m" },
+  { name: "Brian", voiceId: "nPczCjzI2devNBz1zQrb", avatar: "", sex: "m" },
+  { name: "Brittney", voiceId: "iNwc1Lv2YQLywnCvjfn1", avatar: "", sex: "f" },
+  { name: "Luna", voiceId: "6rOxfAnZpbM3VIEhFaeV", avatar: "", sex: "f" },
+  { name: "Bella", voiceId: "hpp4J3VqNfWAUOO0d1Us", avatar: "", sex: "f" },
+  { name: "Jessica", voiceId: "cgSgspJ2msm6clMCkdW9", avatar: "", sex: "f" },
+];
+const personaByName = (n) => PERSONAS.find((p) => p.name === n) || PERSONAS[0];
+const personaInitials = (n) => String(n || "AL").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -1523,12 +1540,30 @@ function App() {
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
-  const [listening, setListening] = useState(false); // mic is actively recording
+  const [persona, setPersona] = useState("AL"); // selected assistant persona name (voice + avatar + name)
+  const personaRef = useRef("AL");              // stale-closure-proof for async speak
+  const curPersona = personaByName(persona);
+  const personaSet = (name) => { const p = personaByName(name); setPersona(p.name); personaRef.current = p.name; pSet(PERSONA_KEY, p.name); };
+  // avatar for a persona: image if supplied (AL keeps his photo); else initials circle —
+  // never a broken-image icon. Dropping an image into a persona's avatar is the only step later.
+  const personaFace = (p, sm) => {
+    const img = (p.name === "AL") ? AL_NOTEPAD : p.avatar;
+    const px = sm ? 28 : 44;
+    if (img) return <img src={img} alt={p.name} style={{ width: px, height: px, borderRadius: "50%", objectFit: "cover", flex: "0 0 auto" }} />;
+    return <div style={{ width: px, height: px, borderRadius: "50%", background: "#0a7d36", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: sm ? 11 : 15, flex: "0 0 auto" }}>{personaInitials(p.name)}</div>;
+  };
+  const [listening, setListening] = useState(false); // mic is actively recording this turn
   const [transcribing, setTranscribing] = useState(false); // recorded burst is being transcribed by Scribe
+  const [voiceSession, setVoiceSession] = useState(false); // hands-free conversation session is open
   const recogRef = useRef(null);                     // SpeechRecognition instance (keyboard-mic fallback only)
   const mediaRecRef = useRef(null);                  // MediaRecorder for ElevenLabs Scribe capture
   const mediaChunksRef = useRef([]);                 // recorded audio chunks
   const mediaStreamRef = useRef(null);               // mic MediaStream (to stop tracks)
+  const sessionRef = useRef(false);                  // conversation session active (stale-closure-proof)
+  const micMutedRef = useRef(false);                 // mic held closed while AL reads back (anti self-capture)
+  const audioCtxRef = useRef(null);                  // AudioContext for silence detection (VAD)
+  const analyserRef = useRef(null);                  // AnalyserNode reading mic level
+  const vadTimerRef = useRef(null);                  // VAD poll interval
   const voiceRef = useRef(false);                    // mirrors voiceMode for async callbacks (stale-closure-proof)
   const ttsPrimedRef = useRef(false);                // browser TTS unlocked by a user gesture (iOS)
   const alAudioRef = useRef(null);                   // reusable <audio> for ElevenLabs playback
@@ -1921,6 +1956,8 @@ function App() {
       if (clb && typeof clb === "object") setCalib(clb);
       const ests = await estStore.list();
       if (ests && ests.length) setEstimates(ests);
+      const pna = await pGet(PERSONA_KEY);
+      if (pna && personaByName(pna)) { setPersona(personaByName(pna).name); personaRef.current = personaByName(pna).name; }
       loaded.current = true;
     })();
   }, []);
@@ -2494,11 +2531,13 @@ function App() {
     try { if (ttsOK) window.speechSynthesis.cancel(); } catch (e) {}
   };
   // BROWSER fallback voice (offline / if the ElevenLabs call fails on a back road).
-  const speakBrowser = (text) => {
-    if (!ttsOK || !text) return;
+  // done() resolves the speakAL promise when the synth finishes (drives mic reopen).
+  const speakBrowser = (text, done) => {
+    const fin = () => { try { done && done(); } catch (e) {} };
+    if (!ttsOK || !text) return fin();
     try {
       const clean = String(text).replace(/[*_`#>~]/g, "").replace(/[^\x00-\x7F]+/g, " ").replace(/\s+/g, " ").trim();
-      if (!clean) return;
+      if (!clean) return fin();
       const synth = window.speechSynthesis;
       try { synth.cancel(); } catch (e) {}
       const u = new SpeechSynthesisUtterance(clean);
@@ -2506,78 +2545,138 @@ function App() {
       const vs = (synth.getVoices && synth.getVoices()) || [];
       const en = vs.filter((v) => /^en/i.test(v.lang || ""));
       if (en.length) u.voice = en.find((v) => /en[-_]?us/i.test(v.lang || "")) || en[0];
-      setTimeout(() => { try { synth.speak(u); setTimeout(() => { try { if (synth.paused) synth.resume(); } catch (e) {} }, 140); } catch (e) {} }, 60);
-    } catch (e) { /* best-effort */ }
+      u.onend = fin; u.onerror = fin;
+      setTimeout(() => { try { synth.speak(u); setTimeout(() => { try { if (synth.paused) synth.resume(); } catch (e) {} }, 140); } catch (e) { fin(); } }, 60);
+    } catch (e) { fin(); }
   };
-  // AL's voice = ElevenLabs (real voice) via the server `speak` function; browser TTS
-  // is the offline fallback so AL never goes mute on a back road.
-  const speakAL = async (text) => {
-    if (!text) return;
+  // AL's voice = ElevenLabs (selected persona) via the server `speak` function; browser
+  // TTS is the offline fallback. Returns a Promise that RESOLVES WHEN PLAYBACK ENDS so
+  // conversation mode can reopen the mic only after AL finishes (no self-capture).
+  const speakAL = (text, voiceOverride) => new Promise((resolve) => {
+    if (!text) return resolve();
     const clean = String(text).replace(/[*_`#>~]/g, "").replace(/\s+/g, " ").trim();
-    if (!clean) return;
+    if (!clean) return resolve();
     const a = ensureAudioEl();
-    if (!a) { speakBrowser(clean); return; }
-    try {
-      stopSpeaking();
-      const res = await fetch("/.netlify/functions/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean }) });
-      if (!res.ok) throw new Error("tts " + res.status);
-      const blob = await res.blob();
-      if (!blob || blob.size < 200) throw new Error("empty audio");
-      const url = URL.createObjectURL(blob);
-      a.src = url; a.muted = false; a.volume = 1.0;
-      a.onended = () => { try { URL.revokeObjectURL(url); } catch (e) {} };
-      const p = a.play();
-      if (p && p.catch) p.catch(() => speakBrowser(clean)); // autoplay blocked → fallback
-    } catch (e) { speakBrowser(clean); }
-  };
+    let done = false; const fin = () => { if (done) return; done = true; resolve(); };
+    if (!a) { speakBrowser(clean, fin); return; }
+    const voiceId = voiceOverride || personaByName(personaRef.current).voiceId;
+    (async () => {
+      try {
+        stopSpeaking();
+        const res = await fetch("/.netlify/functions/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: clean, voiceId: voiceId }) });
+        if (!res.ok) throw new Error("tts " + res.status);
+        const blob = await res.blob();
+        if (!blob || blob.size < 200) throw new Error("empty audio");
+        const url = URL.createObjectURL(blob);
+        a.src = url; a.muted = false; a.volume = 1.0;
+        a.onended = () => { try { URL.revokeObjectURL(url); } catch (e) {} fin(); };
+        a.onerror = () => { try { URL.revokeObjectURL(url); } catch (e) {} speakBrowser(clean, fin); };
+        const p = a.play();
+        if (p && p.catch) p.catch(() => speakBrowser(clean, fin)); // autoplay blocked → fallback
+      } catch (e) { speakBrowser(clean, fin); }
+    })();
+  });
+  const previewPersona = (p) => { primeTTS(); speakAL("Hey, I'm " + p.name + ". West slope eight twelve, valley into the dormer — got it?", p.voiceId); };
   const blobToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(blob); });
   const mediaOK = (typeof navigator !== "undefined") && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (typeof window !== "undefined") && window.MediaRecorder;
   const pickMime = () => { for (const c of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg"]) { try { if (window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c; } catch (e) {} } return ""; };
-  const stopListening = () => { try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch (e) {} try { if (recogRef.current) recogRef.current.stop(); } catch (e) {} setListening(false); };
-  // VOICE-IN (Part B, batch): tap to record a burst → ElevenLabs Scribe transcribes →
-  // the transcript flows into the SAME estimate brain as typed chat → AL reads back.
-  const startVoiceInput = async () => {
-    if (listening) { stopListening(); return; }
-    if (transcribing) return;
-    primeTTS(); // this tap is our chance to unlock iOS audio for the readback
-    if (!voiceMode) { setVoiceMode(true); voiceRef.current = true; }
-    stopSpeaking(); // don't record AL's own voice
-    if (!mediaOK) { // no MediaRecorder (older iOS) → keyboard-mic dictation still works
-      flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade.");
-      return;
-    }
+  const transcribeBlob = async (blob) => {
+    try {
+      const b64 = await blobToB64(blob);
+      const res = await fetch("/.netlify/functions/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audioBase64: b64, mime: blob.type }) });
+      const d = await res.json();
+      return res.ok ? String((d && d.text) || "").trim() : "";
+    } catch (e) { return ""; }
+  };
+  // CONVERSATION MODE (hands-free): one tap starts a session; thereafter turns chain on
+  // their own — client-side silence detection auto-sends each utterance, the mic auto-MUTES
+  // while AL reads back (no self-capture) and auto-reopens after. NOT tap-per-turn.
+  const endVoiceSession = () => {
+    sessionRef.current = false; micMutedRef.current = false;
+    try { if (vadTimerRef.current) { clearInterval(vadTimerRef.current); vadTimerRef.current = null; } } catch (e) {}
+    try { if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop(); } catch (e) {}
+    try { (mediaStreamRef.current && mediaStreamRef.current.getTracks() || []).forEach((t) => t.stop()); } catch (e) {}
+    mediaStreamRef.current = null;
+    try { if (audioCtxRef.current && audioCtxRef.current.close) audioCtxRef.current.close(); } catch (e) {}
+    audioCtxRef.current = null; analyserRef.current = null;
+    stopSpeaking();
+    setListening(false); setTranscribing(false); setVoiceSession(false);
+  };
+  // One utterance: record from the live session stream, watch the mic level, and stop on a
+  // pause after speech → transcribe → run the turn. Re-arms itself for the next turn.
+  const recordTurn = () => {
+    if (!sessionRef.current || micMutedRef.current) return;
+    const stream = mediaStreamRef.current; if (!stream) return;
+    const mime = pickMime();
+    let rec; try { rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); } catch (e) { endVoiceSession(); return; }
+    mediaChunksRef.current = [];
+    let speechStarted = false, lastLoud = Date.now(), startedAt = Date.now(), stopped = false;
+    const clearVad = () => { try { if (vadTimerRef.current) { clearInterval(vadTimerRef.current); vadTimerRef.current = null; } } catch (e) {} };
+    const stopTurn = () => { if (stopped) return; stopped = true; clearVad(); try { if (rec.state !== "inactive") rec.stop(); } catch (e) {} };
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunksRef.current.push(e.data); };
+    rec.onstop = async () => {
+      setListening(false);
+      const blob = new Blob(mediaChunksRef.current, { type: (rec.mimeType || mime || "audio/webm") });
+      mediaChunksRef.current = [];
+      if (!sessionRef.current) return; // session ended mid-turn
+      if (!speechStarted || blob.size < 1400) { if (sessionRef.current && !micMutedRef.current) recordTurn(); return; } // nothing said → keep listening
+      setTranscribing(true);
+      const text = await transcribeBlob(blob);
+      setTranscribing(false);
+      if (text) handleTurnText(text);
+      else if (sessionRef.current && !micMutedRef.current) recordTurn(); // didn't catch → listen again
+    };
+    try { rec.start(); } catch (e) { endVoiceSession(); return; }
+    mediaRecRef.current = rec; setListening(true);
+    const an = analyserRef.current; const buf = an ? new Uint8Array(an.fftSize) : null;
+    vadTimerRef.current = setInterval(() => {
+      if (!sessionRef.current) { stopTurn(); return; }
+      let rms = 0;
+      if (an && buf) { an.getByteTimeDomainData(buf); let s = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; s += v * v; } rms = Math.sqrt(s / buf.length); }
+      const now = Date.now();
+      if (rms > 0.028) { speechStarted = true; lastLoud = now; } // tuned a bit hot for cab noise
+      const elapsed = now - startedAt;
+      if (an) { if (speechStarted && (now - lastLoud) > 1100 && elapsed > 600) stopTurn(); else if (elapsed > 25000) stopTurn(); }
+      else if (elapsed > 12000) stopTurn(); // no analyser: fall back to a fixed window
+    }, 80);
+  };
+  // A turn: mute the mic, send the transcript through the SAME brain as typed chat, AL reads
+  // back (awaited), then reopen the mic for the next turn. Readback-before-anything-commits.
+  const handleTurnText = async (text) => {
+    micMutedRef.current = true; setListening(false);
+    try { await alSend(text); } catch (e) {}
+    if (sessionRef.current) { micMutedRef.current = false; recordTurn(); }
+  };
+  const startVoiceSession = async () => {
+    primeTTS(); // this tap unlocks iOS audio for the readbacks
+    setVoiceMode(true); voiceRef.current = true;
+    stopSpeaking();
+    if (!mediaOK) { flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade."); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
-      const mime = pickMime();
-      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      mediaChunksRef.current = [];
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunksRef.current.push(e.data); };
-      rec.onstop = async () => {
-        try { (mediaStreamRef.current.getTracks() || []).forEach((t) => t.stop()); } catch (e) {}
-        const blob = new Blob(mediaChunksRef.current, { type: (rec.mimeType || mime || "audio/webm") });
-        mediaChunksRef.current = [];
-        if (!blob.size) return;
-        setTranscribing(true);
-        try {
-          const b64 = await blobToB64(blob);
-          const res = await fetch("/.netlify/functions/transcribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audioBase64: b64, mime: blob.type }) });
-          const d = await res.json();
-          setTranscribing(false);
-          const t = String((d && d.text) || "").trim();
-          if (res.ok && t) alSend(t);
-          else flash(d && d.error ? "Didn't catch that — try again." : "Didn't catch that — try again.");
-        } catch (e) { setTranscribing(false); flash("Transcription failed — type it or try again."); }
-      };
-      mediaRecRef.current = rec; rec.start(); setListening(true);
-    } catch (e) { setListening(false); flash("Mic unavailable — allow microphone access, or use your keyboard's 🎤."); }
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx(); audioCtxRef.current = ctx;
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser(); an.fftSize = 1024; src.connect(an); analyserRef.current = an;
+        if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+      } catch (e) { analyserRef.current = null; }
+      sessionRef.current = true; micMutedRef.current = true; setVoiceSession(true);
+      await speakAL("Voice on — what are we working on?"); // greeting (mic muted until it ends)
+      if (sessionRef.current) { micMutedRef.current = false; recordTurn(); }
+    } catch (e) { endVoiceSession(); flash("Mic unavailable — allow microphone access, or use your keyboard's 🎤."); }
   };
+  // mic button: one tap toggles the hands-free session on/off
+  const startVoiceInput = () => { if (sessionRef.current) endVoiceSession(); else startVoiceSession(); };
+  const stopListening = () => endVoiceSession();
+  // readback on/off preference (the 🎤 mic button drives the hands-free session itself)
   const toggleVoice = () => {
     setVoiceMode((v) => {
       const next = !v;
       voiceRef.current = next;
-      if (!next) { stopSpeaking(); stopListening(); }
-      else { primeTTS(); speakAL("Voice on. What are we working on?"); flash("Voice on — AL reads replies aloud and confirms numbers back."); }
+      if (!next) { stopSpeaking(); if (sessionRef.current) endVoiceSession(); }
+      else { primeTTS(); flash("Voice on — tap 🎤 to start a hands-free conversation."); }
       return next;
     });
   };
@@ -2593,7 +2692,6 @@ function App() {
       let d; try { d = parseJSON(reply); } catch (e) { d = { message: (reply || "").replace(/```json|```/g, "").trim().slice(0, 400) }; }
       const alText = String(d.message || "Got it.");
       setAlMsgs([...msgs, { role: "ai", text: alText }]);
-      if (voiceRef.current) speakAL(alText);
       if (d.dims && String(d.dims).trim()) setWhDims((prev) => (prev ? (prev + "; " + String(d.dims).trim()) : String(d.dims).trim()).slice(0, 600));
       // material/system change requested in conversation → update the locked scope so the NEXT Build honors it
       if (d.materialChange && typeof d.materialChange === "object" && d.materialChange.trade) {
@@ -2608,6 +2706,9 @@ function App() {
       if (d.inputs && typeof d.inputs === "object") {
         Object.keys(d.inputs).forEach((k) => { const f = d.inputs[k]; if (f && typeof f === "object") Object.keys(f).forEach((field) => { const v = f[field]; if (v != null && v !== "") whSet(k, field, typeof v === "number" ? v : num(v)); }); });
       }
+      setAlBusy(false);
+      if (voiceRef.current) await speakAL(alText); // readback LAST + awaited → conversation mode reopens the mic only after AL finishes
+      return;
     } catch (e) {
       setAlMsgs([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
     }
@@ -4803,6 +4904,25 @@ function App() {
           </section>
 
           <section className="card">
+            <div className="h2">Assistant voice <span className="hint">who talks &amp; helps you estimate</span></div>
+            <p className="hint" style={{ marginTop: -2 }}>Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, then Use.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              {PERSONAS.map((p) => (
+                <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 10, border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"), background: persona === p.name ? "#f0faf3" : "#fff" }}>
+                  {personaFace(p, true)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700 }}>{p.name}{p.name === "AL" ? " " : ""}{p.name === "AL" && <span className="hint">· default</span>}</div>
+                    <div className="hint">{p.sex === "f" ? "Female voice" : "Male voice"}</div>
+                  </div>
+                  <button className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => previewPersona(p)} title={"Hear " + p.name}>▶</button>
+                  <button className={"btn " + (persona === p.name ? "primary" : "ghost")} style={{ padding: "4px 12px" }} onClick={() => { personaSet(p.name); flash(p.name + " is now your assistant."); }}>{persona === p.name ? "✓ Using" : "Use"}</button>
+                </div>
+              ))}
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>Avatars are coming — names show initials until photos are added.</p>
+          </section>
+
+          <section className="card">
             <div className="h2">Your material price list <span className="hint">CSV</span></div>
             <p className="hint" style={{ marginTop: -2 }}>Upload a CSV of your real material costs and your estimates will use YOUR prices instead of estimates. Columns: <b>name, unit, cost</b> (a header row is fine).</p>
             {matCosts.length > 0 ? (
@@ -4933,19 +5053,19 @@ function App() {
                 onAddMore={() => setSelStep("trades")} /> : <section className="card"><p className="hint">Loading the house…</p></section>}
 
               <section className="card">
-                <div className="convhead"><img className="helperimg" src={AL_NOTEPAD} alt="AL" /><div className="h1" style={{ margin: 0 }}>AL</div>
-                  <button className={"btn " + (voiceMode ? "primary" : "ghost")} style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 13 }} onClick={toggleVoice} title="Talk to AL — he reads replies aloud and confirms numbers back">{voiceMode ? "🔊 Voice on" : "🔈 Voice"}</button>
+                <div className="convhead">{personaFace(curPersona)}<div className="h1" style={{ margin: 0 }}>{curPersona.name}</div>
+                  <button className={"btn " + (voiceMode ? "primary" : "ghost")} style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 13 }} onClick={toggleVoice} title={"Talk to " + curPersona.name + " — reads replies aloud and confirms numbers back"}>{voiceMode ? "🔊 Voice on" : "🔈 Voice"}</button>
                 </div>
                 <div className="convmsgs" style={{ maxHeight: 220, overflowY: "auto", marginTop: 6 }}>
                   {alMsgs.length === 0 && (
-                    <div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">Hey, I'm AL — let's build this estimate. First: are we working outside, inside, or on the systems?</div></div>
+                    <div className="convrow ai"><div className="convav">{personaFace(curPersona, true)}</div><div className="convbubble ai">Hey, I'm {curPersona.name} — let's build this estimate. First: are we working outside, inside, or on the systems?</div></div>
                   )}
                   {alMsgs.map((m, i) => (
                     m.role === "ai"
-                      ? <div className="convrow ai" key={i}><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai">{m.text}</div></div>
+                      ? <div className="convrow ai" key={i}><div className="convav">{personaFace(curPersona, true)}</div><div className="convbubble ai">{m.text}</div></div>
                       : <div className="convbubble me" key={i}>{m.text}</div>
                   ))}
-                  {alBusy && (<div className="convrow ai"><div className="convav"><img className="helperimg sm" src={AL_NOTEPAD} alt="" /></div><div className="convbubble ai typing"><span></span><span></span><span></span></div></div>)}
+                  {alBusy && (<div className="convrow ai"><div className="convav">{personaFace(curPersona, true)}</div><div className="convbubble ai typing"><span></span><span></span><span></span></div></div>)}
                 </div>
 
                 {(() => {
@@ -5012,11 +5132,13 @@ function App() {
                 })()}
 
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button className={"btn " + (listening ? "primary" : "ghost")} style={{ padding: "0 12px", animation: listening ? "pulse 1s infinite" : "none" }} disabled={alBusy || transcribing} onClick={startVoiceInput} title={listening ? "Tap to stop" : "Tap and talk"}>{listening ? "● Stop" : transcribing ? "…" : "🎤"}</button>
-                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder={listening ? "Recording… tap Stop when done" : transcribing ? "Transcribing…" : "e.g. “west slope is 8/12” or “what do you still need?”"} style={{ flex: 1 }} />
+                  <button className={"btn " + (voiceSession ? "primary" : "ghost")} style={{ padding: "0 12px", animation: listening ? "pulse 1s infinite" : "none" }} onClick={startVoiceInput} title={voiceSession ? "End hands-free conversation" : "Start a hands-free conversation"}>{voiceSession ? "■ Stop" : "🎤"}</button>
+                  <input value={alInput} onChange={(e) => setAlInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") alSend(); }} placeholder={voiceSession ? (listening ? "Listening… just talk" : transcribing ? "Got it — one sec…" : "AL is talking…") : "e.g. “west slope is 8/12” or “what do you still need?”"} style={{ flex: 1 }} />
                   <button className="btn primary" disabled={alBusy || !alInput.trim()} onClick={() => alSend()}>Send</button>
                 </div>
-                {voiceMode && <p className="hint" style={{ marginTop: 4 }}>🔊 Tap 🎤, say it (e.g. “standing seam, eight twelve, valley into the dormer”), tap Stop — AL transcribes, fills it in, and reads it back to confirm before it locks.</p>}
+                {voiceSession
+                  ? <p className="hint" style={{ marginTop: 4 }}>🎙️ Hands-free — just talk. Pause and {curPersona.name} takes the turn, reads it back, then listens again. No tapping until you hit ■ Stop.</p>
+                  : voiceMode && <p className="hint" style={{ marginTop: 4 }}>🔊 Tap 🎤 once to start a hands-free conversation — say it (e.g. “standing seam, eight twelve, valley into the dormer”), pause, and {curPersona.name} fills it in and reads it back. iPhone needs the one tap to allow the mic.</p>}
               </section>
 
               <div style={{ display: "flex", gap: 6 }}>
