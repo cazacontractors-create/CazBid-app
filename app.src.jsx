@@ -2477,7 +2477,8 @@ function App() {
     if (whPhotos.length) known += whPhotos.length + " jobsite photo(s) attached.\n";
     // deterministic trades still missing a required field
     const gaps = (whSpecs || []).filter((s) => whChecked[s.trade]).map((s) => { const miss = s.inputs.filter((inp) => inp.required && !(whInputs[s.trade] && num(whInputs[s.trade][inp.name]) > 0)).map((inp) => inp.label); return miss.length ? (s.label + ": " + miss.join(", ")) : null; }).filter(Boolean).join("\n");
-    return "SELECTED TRADES:\n" + trades + "\n" + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
+    const who = [estCustomer.trim() ? "Customer: " + estCustomer.trim() : "", estAddress.trim() ? "Address: " + estAddress.trim() : ""].filter(Boolean).join("\n");
+    return "SELECTED TRADES:\n" + trades + "\n" + (who ? who + "\n" : "") + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
   };
   const AL_HOUSE_SYS = (ctx, voice) =>
     "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " +
@@ -2486,8 +2487,10 @@ function App() {
     (voice ? "VOICE MODE — the contractor is talking to you hands-free (often driving). Your reply is READ ALOUD, so: keep it to ONE short spoken sentence; ALWAYS read back any number they just gave before moving on ('West slope eight twelve — got that') so a mis-hear is caught; say numbers like a foreman ('eight twelve' for pitch, 'twenty-two squares'); never read a list of options aloud — ask one thing. No emojis, no symbols, no markdown — it gets spoken literally. " : "") +
     "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " +
     "If the contractor asks to CHANGE or SWITCH a material/system for a selected trade (e.g. 'make the roof shingles instead'), set materialChange to that trade's key= and the new type (use one of that trade's [allowed types] when listed), and CONFIRM it in your message. If a quote is already on screen, tell them to tap Build to refresh it with the new material. " +
+    "CAPTURE the CUSTOMER NAME and JOB ADDRESS whenever the contractor says them (set customer / address). " +
+    "COMMIT FLOW (hands-free save): once every selected trade has enough to bid, read back a SHORT spoken summary — address, each trade + its key numbers — and ask if you should build and save it ('Build and save it?'). Set build=true ONLY in the turn where the contractor then CONFIRMS (yes / build it / save it / send it). Never set build=true before that readback-and-confirm. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
-    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"materialChange\": {\"trade\": the selected trade's key, \"type\": the new material/system} ONLY when they ask to change a material, else null, \"ready\": true only if every selected trade has enough to bid}";
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"materialChange\": {\"trade\": the selected trade's key, \"type\": the new material/system} ONLY when they ask to change a material, else null, \"customer\": customer name if given this turn else \"\", \"address\": job address if given this turn else \"\", \"build\": true ONLY when they confirm to build+save after your readback, else false, \"ready\": true only if every selected trade has enough to bid}";
   const alOpener = () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
@@ -2576,7 +2579,14 @@ function App() {
       } catch (e) { speakBrowser(clean, fin); }
     })();
   });
-  const previewPersona = (p) => { primeTTS(); speakAL("Hey, I'm " + p.name + ". West slope eight twelve, valley into the dormer — got it?", p.voiceId); };
+  // LOCKED preview line (same for every persona → compare voices, not sentences).
+  // {firstName} = first token of the Profile personal name; dropped cleanly if none.
+  const previewPersona = (p) => {
+    primeTTS();
+    const fn = String(profC.name || "").trim().split(/\s+/)[0] || "";
+    const line = fn ? ("Good morning " + fn + ", what are we quoting today?") : "Good morning, what are we quoting today?";
+    speakAL(line, p.voiceId);
+  };
   const blobToB64 = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(blob); });
   const mediaOK = (typeof navigator !== "undefined") && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (typeof window !== "undefined") && window.MediaRecorder;
   const pickMime = () => { for (const c of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg"]) { try { if (window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c; } catch (e) {} } return ""; };
@@ -2706,8 +2716,13 @@ function App() {
       if (d.inputs && typeof d.inputs === "object") {
         Object.keys(d.inputs).forEach((k) => { const f = d.inputs[k]; if (f && typeof f === "object") Object.keys(f).forEach((field) => { const v = f[field]; if (v != null && v !== "") whSet(k, field, typeof v === "number" ? v : num(v)); }); });
       }
+      // hands-free CAPTURE: pull customer/address spoken into the saved-estimate fields
+      if (d.customer && String(d.customer).trim()) setEstCustomer(String(d.customer).trim());
+      if (d.address && String(d.address).trim()) setEstAddress(String(d.address).trim());
       setAlBusy(false);
       if (voiceRef.current) await speakAL(alText); // readback LAST + awaited → conversation mode reopens the mic only after AL finishes
+      // COMMIT on confirm: build the full estimate (auto-save effect persists it to the library)
+      if (d.build === true && Object.keys(houseScope).length && estBusy !== "run") { buildUnifiedEstimate(); }
       return;
     } catch (e) {
       setAlMsgs([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
@@ -2960,8 +2975,10 @@ function App() {
         } catch (e) { results.push({ tradeKey: t, label: label, error: errMsg(e) }); }
       }
       const ok = results.filter((r) => !r.error);
-      if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); return; }
+      if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); if (voiceRef.current) speakAL("That didn't build — let's try again."); return; }
       setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1 });
+      // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
+      if (voiceRef.current) { const price = sellOf(combinedCostOf(ok), estMargin); speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars."); }
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
   };
