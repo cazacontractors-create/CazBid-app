@@ -2480,19 +2480,22 @@ function App() {
     // deterministic trades still missing a required field
     const gaps = (whSpecs || []).filter((s) => whChecked[s.trade]).map((s) => { const miss = s.inputs.filter((inp) => inp.required && !(whInputs[s.trade] && num(whInputs[s.trade][inp.name]) > 0)).map((inp) => inp.label); return miss.length ? (s.label + ": " + miss.join(", ")) : null; }).filter(Boolean).join("\n");
     const who = [estCustomer.trim() ? "Customer: " + estCustomer.trim() : "", estAddress.trim() ? "Address: " + estAddress.trim() : ""].filter(Boolean).join("\n");
-    return "SELECTED TRADES:\n" + trades + "\n" + (who ? who + "\n" : "") + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
+    const savedNote = (estResult && estResult.trades && estResult.trades.length && estId) ? "THIS ESTIMATE IS ALREADY BUILT AND SAVED — do not offer to build/save again; if they want changes, capture them, otherwise you're done.\n" : "";
+    return "SELECTED TRADES:\n" + trades + "\n" + (who ? who + "\n" : "") + savedNote + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
   };
-  const AL_HOUSE_SYS = (ctx, voice) =>
-    "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " +
-    "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " +
-    "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " +
-    (voice ? "VOICE MODE — the contractor is talking to you hands-free (often driving). Your reply is READ ALOUD, so: keep it to ONE short spoken sentence; ALWAYS read back any number they just gave before moving on ('West slope eight twelve — got that') so a mis-hear is caught; say numbers like a foreman ('eight twelve' for pitch, 'twenty-two squares'); never read a list of options aloud — ask one thing. No emojis, no symbols, no markdown — it gets spoken literally. " : "") +
-    "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " +
-    "If the contractor asks to CHANGE or SWITCH a material/system for a selected trade (e.g. 'make the roof shingles instead'), set materialChange to that trade's key= and the new type (use one of that trade's [allowed types] when listed), and CONFIRM it in your message. If a quote is already on screen, tell them to tap Build to refresh it with the new material. " +
-    "CAPTURE the CUSTOMER NAME and JOB ADDRESS whenever the contractor says them (set customer / address). " +
-    "COMMIT FLOW (hands-free save): the MOMENT every selected trade has enough to bid (each one sized), STOP asking for more — give a SHORT readback (each trade + its key numbers, and the address if you have it) and then ask, in these exact words, \"Should I build it?\". Do not keep gathering once each trade is sized; the customer name/address are nice-to-have, not required, so do not withhold the offer over them. Set build=true ONLY in the turn where the contractor then CONFIRMS (yes / build it / go ahead / do it). Never set build=true before you've asked \"Should I build it?\" and gotten a yes. " +
+  const AL_HOUSE_SYS = (ctx, voice) => {
+    const tradeMenu = HOUSE_STATES.map((s) => CAT_LABEL[s.key] + ": " + HOUSE_HOTSPOTS.filter((h) => h.state === s.key).map((h) => h.label + " (key=" + h.trade + ")").join(", ")).join("\n");
+    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " +
+    "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " +
+    "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " +
+    (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") +
+    "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" +
+    "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " +
+    "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " +
+    "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
-    "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"materialChange\": {\"trade\": the selected trade's key, \"type\": the new material/system} ONLY when they ask to change a material, else null, \"customer\": customer name if given this turn else \"\", \"address\": job address if given this turn else \"\", \"build\": true ONLY when they confirm to build+save after your readback, else false, \"ready\": true only if every selected trade has enough to bid}";
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\"}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+  };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
@@ -2704,6 +2707,20 @@ function App() {
       let d; try { d = parseJSON(reply); } catch (e) { d = { message: (reply || "").replace(/```json|```/g, "").trim().slice(0, 400) }; }
       const alText = String(d.message || "Got it.");
       setAlMsgs([...msgs, { role: "ai", text: alText }]);
+      // VOICE-DRIVES-STATE: AL's understood trade selections write the SAME state the buttons set.
+      if (Array.isArray(d.select) && d.select.length) {
+        d.select.forEach((s) => {
+          const want = String((s && (s.trade || s)) || "").toLowerCase().trim();
+          if (!want) return;
+          const h = HOUSE_HOTSPOTS.find((x) => x.trade === want || x.label.toLowerCase() === want || x.label.toLowerCase().indexOf(want) >= 0 || want.indexOf(x.trade) >= 0);
+          const key = h ? h.trade : want;
+          let type = (s && s.type && String(s.type).trim()) ? String(s.type).trim() : true;
+          if (type !== true && HOUSE_TYPES[key]) { const opt = HOUSE_TYPES[key].find((o) => { const lo = o.toLowerCase(), lt = String(type).toLowerCase(); return lo === lt || lo.indexOf(lt) >= 0 || lt.indexOf(lo.split(" ")[0]) >= 0; }); if (opt) type = opt; }
+          houseSelect(key, type); setActiveTrade(key);
+          if (h) setHouseView(h.state);
+        });
+        setSelStep("ready");
+      }
       if (d.dims && String(d.dims).trim()) setWhDims((prev) => (prev ? (prev + "; " + String(d.dims).trim()) : String(d.dims).trim()).slice(0, 600));
       // material/system change requested in conversation → update the locked scope so the NEXT Build honors it
       if (d.materialChange && typeof d.materialChange === "object" && d.materialChange.trade) {
@@ -2723,8 +2740,9 @@ function App() {
       if (d.address && String(d.address).trim()) setEstAddress(String(d.address).trim());
       setAlBusy(false);
       if (voiceRef.current) await speakAL(alText); // readback LAST + awaited → conversation mode reopens the mic only after AL finishes
-      // COMMIT on confirm: build the full estimate (auto-save effect persists it to the library)
-      if (d.build === true && Object.keys(houseScope).length && estBusy !== "run") { buildUnifiedEstimate(); }
+      // COMMIT on confirm: build + save the estimate (auto-save effect persists it). Guard against
+      // re-firing once it's already built (kills the confirm→re-propose loop).
+      if (d.save === true && Object.keys(houseScope).length && estBusy !== "run" && !(estResult && estResult.trades && estResult.trades.length)) { buildUnifiedEstimate(); }
       return;
     } catch (e) {
       setAlMsgs([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
