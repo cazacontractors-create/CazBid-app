@@ -96,6 +96,45 @@ const OC_DURATION_COLORS = [
 ];
 const personaByName = (n) => PERSONAS.find((p) => p.name === n) || PERSONAS[0];
 const personaInitials = (n) => String(n || "AL").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+// Kynar (PVDF) — standing-seam / architectural metal. SMP — exposed-fastener AG panels.
+// CertainTeed — siding. (hex ≈ for the swatch; confirm the live lines when productizing.)
+const KYNAR_COLORS = [
+  { name: "Regal White", hex: "#f2f0e9" }, { name: "Sandstone", hex: "#d8c9a3" }, { name: "Sierra Tan", hex: "#b89c74" },
+  { name: "Ash Gray", hex: "#b6b8b5" }, { name: "Slate Gray", hex: "#6f7479" }, { name: "Charcoal Gray", hex: "#44474a" },
+  { name: "Matte Black", hex: "#2a2a2c" }, { name: "Hartford Green", hex: "#2f4a3a" }, { name: "Colonial Red", hex: "#7c2b25" },
+  { name: "Burgundy", hex: "#5a2230" }, { name: "Medium Bronze", hex: "#5a4a39" }, { name: "Dark Bronze", hex: "#3a3128" },
+  { name: "Mansard Brown", hex: "#4a3b30" }, { name: "Patina Green", hex: "#5e7d6e" }, { name: "Copper Metallic", hex: "#8a5a3b" },
+  { name: "Regal Blue", hex: "#2c3e57" },
+];
+const SMP_COLORS = [
+  { name: "Polar White", hex: "#f4f4f0" }, { name: "Light Stone", hex: "#d9d2c0" }, { name: "Tan", hex: "#c9b48f" },
+  { name: "Clay", hex: "#b79b6e" }, { name: "Burnished Slate", hex: "#5a4636" }, { name: "Brown", hex: "#4b3a2b" },
+  { name: "Charcoal", hex: "#45484b" }, { name: "Black", hex: "#262627" }, { name: "Gray", hex: "#8a8d8f" },
+  { name: "Hunter Green", hex: "#2e4636" }, { name: "Evergreen", hex: "#283a2e" }, { name: "Rustic Red", hex: "#7a2f28" },
+  { name: "Barn Red", hex: "#6e231f" }, { name: "Ocean Blue", hex: "#2f4f6e" }, { name: "Gallery Blue", hex: "#3a5a78" },
+  { name: "Copper Penny", hex: "#9a5a36" },
+];
+const CERTAINTEED_COLORS = [
+  { name: "Snow White", hex: "#f3f3ef" }, { name: "Heritage Cream", hex: "#e6dcc2" }, { name: "Sterling Gray", hex: "#9ea3a4" },
+  { name: "Sandstone Beige", hex: "#cbb89a" }, { name: "Natural Clay", hex: "#cdbfa6" }, { name: "Savannah Wicker", hex: "#c2a878" },
+  { name: "Autumn Red", hex: "#7c3a32" }, { name: "Forest", hex: "#2f4636" }, { name: "Sage", hex: "#8a9a82" },
+  { name: "Charcoal", hex: "#44474a" }, { name: "Granite Gray", hex: "#6f7377" }, { name: "Mountain Cedar", hex: "#6e5640" },
+  { name: "Coastal Blue", hex: "#4a6275" }, { name: "Pacific Blue", hex: "#34566e" }, { name: "Espresso", hex: "#3b2f28" },
+  { name: "Flagstone", hex: "#5a5f63" },
+];
+// Which color line a trade+material uses (null = no color selector for this trade).
+function colorLineFor(tradeKey, mat) {
+  const m = String(mat || "").toLowerCase();
+  if (tradeKey === "roofing") {
+    if (/\bag\b|ag panel|ag-panel|corrugated|exposed.?fastener|r-?panel|u-?panel/.test(m)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
+    if (/standing seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf/.test(m)) return { key: "kynar", label: "Kynar — standing-seam colors", colors: KYNAR_COLORS };
+    if (/tpo|epdm|flat|membrane/.test(m)) return null;
+    if (/metal|steel|panel/.test(m)) return { key: "kynar", label: "Kynar — metal roof colors", colors: KYNAR_COLORS };
+    return { key: "duration", label: "Owens Corning Duration — shingle colors", colors: OC_DURATION_COLORS };
+  }
+  if (tradeKey === "siding") return { key: "certainteed", label: "CertainTeed — siding colors", colors: CERTAINTEED_COLORS };
+  return null;
+}
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
@@ -3188,14 +3227,14 @@ function App() {
     return opts.slice(0, 3).map((o) => ({ tier: o.tier, name: o.name, why: o.why, price: sellOf(combined - primaryLine + num(o.cost), estMargin), warranty: tierWarranty(o.tier), url: o.url }));
   };
   const proposalScopeBullets = () => (estResult && estResult.trades ? estResult.trades.map((t) => { const m = (houseScope[t.tradeKey] && houseScope[t.tradeKey] !== true) ? String(houseScope[t.tradeKey]) : ""; return (t.label || t.title) + (m ? " — " + m : ""); }) : []);
-  const setProposalColor = (name) => setEstResult((r) => r ? { ...r, color: name } : r);
+  const setProposalColor = (tradeKey, name) => setEstResult((r) => r ? { ...r, colors: Object.assign({}, r.colors, { [tradeKey]: name }) } : r);
   const setProposalTier = (tier) => setEstResult((r) => r ? { ...r, proposalTier: tier } : r);
   const openProposal = () => { persistCurrent(); setPropOpen(true); };
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
     estMargin: estMargin, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
-    color: (estResult && estResult.color) || "", proposalTier: (estResult && estResult.proposalTier) || "",
+    colors: (estResult && estResult.colors) || {}, proposalTier: (estResult && estResult.proposalTier) || "",
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async (extra) => {
@@ -3220,7 +3259,7 @@ function App() {
     setEstMargin(num(p.estMargin) || 30); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
-    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], color: p.color || "", proposalTier: p.proposalTier || "" });
+    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "" });
   };
   const deleteSavedEstimate = async (id) => {
     const all = await estStore.remove(id); setEstimates(all);
@@ -5764,13 +5803,19 @@ function App() {
         return (
           <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "#f4f6f8", overflowY: "auto" }}>
             <div style={{ maxWidth: 560, margin: "0 auto", padding: 14, paddingBottom: 40 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {personaFace(curPersona)}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="h1" style={{ margin: 0 }}>Your Roofing Proposal</div>
-                  <div className="hint">Caza Contractors · prepared for {who}{estAddress.trim() ? " · " + estAddress.trim() : ""}</div>
-                </div>
-                <button className="btn ghost" onClick={() => setPropOpen(false)}>✕</button>
+              {/* COMPANY LOGO spot (tap to add/replace — saved to your profile) */}
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -8 }}>
+                <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setPropOpen(false)}>✕</button>
+              </div>
+              <label style={{ display: "block", textAlign: "center", marginBottom: 8, cursor: "pointer" }}>
+                {profC.avatar
+                  ? <img src={profC.avatar} alt="Company logo" style={{ maxHeight: 72, maxWidth: "70%", objectFit: "contain" }} />
+                  : <span style={{ display: "inline-block", padding: "16px 22px", border: "2px dashed #c2c8ce", borderRadius: 12, color: "#8a929a", fontWeight: 700 }}>+ Add your company logo</span>}
+                <input type="file" accept="image/*" style={{ display: "none" }} onChange={async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return; try { const u = await imageToJpeg(f, 600); setProfC((p) => ({ ...p, avatar: u })); flash("Logo saved to your profile."); } catch (err) { flash("Couldn't add that image."); } }} />
+              </label>
+              <div style={{ textAlign: "center", marginBottom: 4 }}>
+                <div className="h1" style={{ margin: 0 }}>Your Roofing Proposal</div>
+                <div className="hint">{(profC.company || "Caza Contractors")} · prepared for {who}{estAddress.trim() ? " · " + estAddress.trim() : ""}</div>
               </div>
 
               {/* INSPECTION PHOTOS — first-class */}
@@ -5808,22 +5853,36 @@ function App() {
                 </div>
               </section>
 
-              {/* COLOR SELECTOR — tap to pick, locks to the proposal */}
-              <section className="card" style={{ marginTop: 10 }}>
-                <div className="h2">Pick your color {estResult.color ? <span className="hint">· {estResult.color}</span> : ""}</div>
-                <p className="hint" style={{ marginTop: -2 }}>Owens Corning Duration. Tap to choose.</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 8 }}>
-                  {OC_DURATION_COLORS.map((c) => {
-                    const on = estResult.color === c.name;
-                    return (
-                      <button key={c.name} onClick={() => setProposalColor(c.name)} style={{ border: on ? "3px solid #0a7d36" : "1px solid #ccd2d8", borderRadius: 10, padding: 0, overflow: "hidden", cursor: "pointer", background: "#fff" }}>
-                        <div style={{ height: 40, background: c.hex }} />
-                        <div style={{ fontSize: 10.5, padding: "3px 2px", fontWeight: on ? 800 : 500 }}>{on ? "✓ " : ""}{c.name}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
+              {/* COLOR SELECTORS — one per trade, palette keyed to the material (Duration/Kynar/SMP/CertainTeed) */}
+              {(() => {
+                const lines = estResult.trades.map((t) => ({ t, line: colorLineFor(t.tradeKey, houseScope[t.tradeKey]) })).filter((x) => x.line);
+                if (!lines.length) return null;
+                const colors = estResult.colors || {};
+                return (
+                  <section className="card" style={{ marginTop: 10 }}>
+                    <div className="h2">Pick your color{lines.length > 1 ? "s" : ""}</div>
+                    {lines.map(({ t, line }, li) => {
+                      const sel = colors[t.tradeKey];
+                      return (
+                        <div key={li} style={{ marginTop: li ? 12 : 4 }}>
+                          <div className="seclabel">{lines.length > 1 ? (t.label || t.title) + " · " : ""}{line.label}{sel ? " · " + sel : ""}</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 6 }}>
+                            {line.colors.map((c) => {
+                              const on = sel === c.name;
+                              return (
+                                <button key={c.name} onClick={() => setProposalColor(t.tradeKey, c.name)} style={{ border: on ? "3px solid #0a7d36" : "1px solid #ccd2d8", borderRadius: 10, padding: 0, overflow: "hidden", cursor: "pointer", background: "#fff" }}>
+                                  <div style={{ height: 40, background: c.hex }} />
+                                  <div style={{ fontSize: 10.5, padding: "3px 2px", fontWeight: on ? 800 : 500 }}>{on ? "✓ " : ""}{c.name}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </section>
+                );
+              })()}
 
               {/* SCOPE — plain language, itemized expandable (no costs) */}
               <section className="card" style={{ marginTop: 10 }}>
@@ -5855,7 +5914,7 @@ function App() {
 
               {/* SIGN — deferred behind the legal-review gate */}
               <div style={{ marginTop: 12, padding: "10px 12px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12" }}>
-                ✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option{estResult.color ? " and color (" + estResult.color + ")" : ""} are saved with the estimate.
+                ✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option{Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : ""} are saved with the estimate.
               </div>
               <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => { persistCurrent(); setPropOpen(false); }}>Done</button>
             </div>
