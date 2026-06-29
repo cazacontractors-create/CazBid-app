@@ -6889,7 +6889,19 @@ function App() {
     };
   });
   const openTimer = () => {
-    if (jobCrew <= 0 && estResult && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
+    // BACKFILL phases so every estimate gets timer rows — older/reopened estimates built
+    // before per-phase bids existed have no .phases, which left the timer empty.
+    setEstResult(r => {
+      if (!r || !r.trades) return r;
+      return {
+        ...r,
+        trades: r.trades.map(t => Array.isArray(t.phases) && t.phases.length ? t : {
+          ...t,
+          phases: allocatePhases(t.tradeKey, t.laborHours)
+        })
+      };
+    });
+    if (estResult && estResult.trades && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
     setTimerView("timer");
   };
   const closeTimer = () => {

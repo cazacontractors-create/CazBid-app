@@ -3091,7 +3091,16 @@ function App() {
   // closeout: approve / correct a phase (nothing saves to the record until approved)
   const phaseApprove = (ti, pi) => updPhase(ti, pi, (ph) => ({ actualMin: phaseLiveMin(ph), running: false, startAt: null, actualManHours: phaseManHours(ph), approved: true }));
   const phaseCorrectMinutes = (ti, pi, totalMin) => updPhase(ti, pi, (ph) => { const m = Math.max(0, num(totalMin) || 0); return { actualMin: m, running: false, startAt: null, actualManHours: Math.round((m / 60) * phaseCrew(ph) * 10) / 10 }; });
-  const openTimer = () => { if (jobCrew <= 0 && estResult && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3); setTimerView("timer"); };
+  const openTimer = () => {
+    // BACKFILL phases so every estimate gets timer rows — older/reopened estimates built
+    // before per-phase bids existed have no .phases, which left the timer empty.
+    setEstResult((r) => {
+      if (!r || !r.trades) return r;
+      return { ...r, trades: r.trades.map((t) => (Array.isArray(t.phases) && t.phases.length) ? t : { ...t, phases: allocatePhases(t.tradeKey, t.laborHours) }) };
+    });
+    if (estResult && estResult.trades && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
+    setTimerView("timer");
+  };
   const closeTimer = () => { commitAllRunning(); setTimerView(""); };
   useEffect(() => {
     if (timerView !== "timer") return;
