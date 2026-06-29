@@ -3077,6 +3077,7 @@ function App() {
   // running → no overnight-phantom from an app close; an in-app overnight timer is what the
   // closeout gate catches). Overlap allowed: each running phase keeps its OWN crew, so summing
   // per-phase man-hours never double-counts the crew.
+  const fmtClock = (min) => { const s = Math.max(0, Math.round((Number(min) || 0) * 60)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0"); };
   const phaseLiveMin = (ph) => (num(ph.actualMin) || 0) + (ph && ph.running && ph.startAt ? Math.max(0, (Date.now() - ph.startAt) / 60000) : 0);
   const phaseCrew = (ph) => (num(ph.crew) > 0 ? num(ph.crew) : jobCrew);
   const phaseManHours = (ph) => Math.round((phaseLiveMin(ph) / 60) * phaseCrew(ph) * 10) / 10;
@@ -5623,25 +5624,43 @@ function App() {
                   <button className={"btn " + (timerRec ? "primary" : "ghost")} style={{ flex: 1, animation: timerRec ? "pulse 1s infinite" : "none" }} onClick={() => timerRecOnce(timerVoiceCommand)}>{timerRec ? "● Listening… tap to send" : "🎤 “starting dry-in, two guys”"}</button>
                   <button className="btn ghost" onClick={() => { commitAllRunning(); flash("Paused all phases."); }}>⏸ Pause all</button>
                 </div>
+                {(() => {
+                  const running = []; let totMh = 0;
+                  estResult.trades.forEach((t) => (t.phases || []).forEach((ph) => { totMh += phaseManHours(ph); if (ph.running) running.push(ph.name + " · " + phaseCrew(ph) + " guys"); }));
+                  totMh = Math.round(totMh * 10) / 10;
+                  return (
+                    <div style={{ marginTop: 8, padding: "8px 11px", borderRadius: 10, background: running.length ? "#eafaf0" : "#f3f4f6", border: "1px solid " + (running.length ? "#36e07a" : "#e6e8ea"), fontWeight: 700 }}>
+                      {running.length
+                        ? <span style={{ color: "#0a7d36" }}>● Running: {running.join("  ·  ")}</span>
+                        : <span className="hint">No phase running — tap ▶ Start on a phase below.</span>}
+                      <span style={{ float: "right" }}>{totMh} mh so far</span>
+                    </div>
+                  );
+                })()}
                 {estResult.trades.map((t, ti) => (
                   <section className="card" key={ti} style={{ marginTop: 10 }}>
                     <div className="seclabel">{t.label || t.title}</div>
                     {(t.phases || []).map((ph, pi) => {
                       const mh = phaseManHours(ph);
                       return (
-                        <div key={pi} style={{ borderTop: pi ? "1px solid #eef0f2" : "none", padding: "8px 0" }}>
+                        <div key={pi} style={{ marginTop: pi ? 6 : 0, padding: "8px", borderRadius: 8, background: ph.running ? "#eafaf0" : "transparent", border: ph.running ? "1px solid #36e07a" : "1px solid #eef0f2" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <button className={"btn " + (ph.running ? "primary" : "ghost")} style={{ padding: "6px 12px", animation: ph.running ? "pulse 1s infinite" : "none" }} onClick={() => ph.running ? phasePause(ti, pi) : phaseStart(ti, pi)}>{ph.running ? "⏸" : "▶"}</button>
+                            <button className={"btn " + (ph.running ? "primary" : "ghost")} style={{ padding: "8px 14px", animation: ph.running ? "pulse 1s infinite" : "none" }} onClick={() => ph.running ? phasePause(ti, pi) : phaseStart(ti, pi)}>{ph.running ? "⏸ Stop" : "▶ Start"}</button>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700 }}>{ph.name}</div>
-                              <div className="hint">bid {ph.bidHours} hr · actual {mh} mh{ph.running ? " · ●running" : ""}</div>
+                              <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{ph.name}{ph.running && <span style={{ fontSize: 10.5, fontWeight: 800, color: "#fff", background: "#e0392b", borderRadius: 6, padding: "1px 7px" }}>● RUNNING</span>}</div>
+                              <div className="hint">bid {ph.bidHours} hr</div>
                             </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                              <span className="hint">crew</span>
-                              <button className="btn ghost" style={{ padding: "2px 7px" }} onClick={() => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)}>−</button>
-                              <b style={{ minWidth: 12, textAlign: "center" }}>{phaseCrew(ph)}</b>
-                              <button className="btn ghost" style={{ padding: "2px 7px" }} onClick={() => phaseSetCrew(ti, pi, phaseCrew(ph) + 1)}>+</button>
-                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800, fontSize: 18, color: ph.running ? "#0a7d36" : "#33414f" }}>⏱ {fmtClock(phaseLiveMin(ph))}</span>
+                            <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <span className="hint">×</span>
+                              <button className="btn ghost" style={{ padding: "2px 9px" }} onClick={() => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)}>−</button>
+                              <b style={{ minWidth: 14, textAlign: "center" }}>{phaseCrew(ph)}</b>
+                              <button className="btn ghost" style={{ padding: "2px 9px" }} onClick={() => phaseSetCrew(ti, pi, phaseCrew(ph) + 1)}>+</button>
+                              <span className="hint">guys</span>
+                            </span>
+                            <span style={{ marginLeft: "auto", fontWeight: 800, fontSize: 16 }}>= {mh} mh</span>
                           </div>
                           {(ph.subs && ph.subs.length > 0) && (<div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>{ph.subs.map((sb, si) => (<span key={si} className="hint" style={{ background: "#eef2f6", borderRadius: 10, padding: "2px 8px" }}>{sb.name} {Math.round(sb.min)}m</span>))}</div>)}
                           <button className="btn ghost" style={{ padding: "2px 8px", fontSize: 12, marginTop: 4 }} onClick={() => { const n = window.prompt("Precise task inside " + ph.name + " (e.g. chimney flashing)"); if (!n) return; const m = window.prompt("Minutes on " + n, "30"); if (m == null) return; phaseAddSub(ti, pi, n, num(m)); }}>+ precise task <span className="hint">slice of this phase</span></button>

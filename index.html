@@ -6827,6 +6827,13 @@ function App() {
   // running → no overnight-phantom from an app close; an in-app overnight timer is what the
   // closeout gate catches). Overlap allowed: each running phase keeps its OWN crew, so summing
   // per-phase man-hours never double-counts the crew.
+  const fmtClock = min => {
+    const s = Math.max(0, Math.round((Number(min) || 0) * 60));
+    const h = Math.floor(s / 3600),
+      m = Math.floor(s % 3600 / 60),
+      ss = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0");
+  };
   const phaseLiveMin = ph => (num(ph.actualMin) || 0) + (ph && ph.running && ph.startAt ? Math.max(0, (Date.now() - ph.startAt) / 60000) : 0);
   const phaseCrew = ph => num(ph.crew) > 0 ? num(ph.crew) : jobCrew;
   const phaseManHours = ph => Math.round(phaseLiveMin(ph) / 60 * phaseCrew(ph) * 10) / 10;
@@ -11625,7 +11632,35 @@ function App() {
       commitAllRunning();
       flash("Paused all phases.");
     }
-  }, "\u23F8 Pause all")), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
+  }, "\u23F8 Pause all")), (() => {
+    const running = [];
+    let totMh = 0;
+    estResult.trades.forEach(t => (t.phases || []).forEach(ph => {
+      totMh += phaseManHours(ph);
+      if (ph.running) running.push(ph.name + " · " + phaseCrew(ph) + " guys");
+    }));
+    totMh = Math.round(totMh * 10) / 10;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        padding: "8px 11px",
+        borderRadius: 10,
+        background: running.length ? "#eafaf0" : "#f3f4f6",
+        border: "1px solid " + (running.length ? "#36e07a" : "#e6e8ea"),
+        fontWeight: 700
+      }
+    }, running.length ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#0a7d36"
+      }
+    }, "\u25CF Running: ", running.join("  ·  ")) : /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "No phase running \u2014 tap \u25B6 Start on a phase below."), /*#__PURE__*/React.createElement("span", {
+      style: {
+        float: "right"
+      }
+    }, totMh, " mh so far"));
+  })(), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
     className: "card",
     key: ti,
     style: {
@@ -11638,8 +11673,11 @@ function App() {
     return /*#__PURE__*/React.createElement("div", {
       key: pi,
       style: {
-        borderTop: pi ? "1px solid #eef0f2" : "none",
-        padding: "8px 0"
+        marginTop: pi ? 6 : 0,
+        padding: "8px",
+        borderRadius: 8,
+        background: ph.running ? "#eafaf0" : "transparent",
+        border: ph.running ? "1px solid #36e07a" : "1px solid #eef0f2"
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -11650,22 +11688,50 @@ function App() {
     }, /*#__PURE__*/React.createElement("button", {
       className: "btn " + (ph.running ? "primary" : "ghost"),
       style: {
-        padding: "6px 12px",
+        padding: "8px 14px",
         animation: ph.running ? "pulse 1s infinite" : "none"
       },
       onClick: () => ph.running ? phasePause(ti, pi) : phaseStart(ti, pi)
-    }, ph.running ? "⏸" : "▶"), /*#__PURE__*/React.createElement("div", {
+    }, ph.running ? "⏸ Stop" : "▶ Start"), /*#__PURE__*/React.createElement("div", {
       style: {
         flex: 1,
         minWidth: 0
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        fontWeight: 700
+        fontWeight: 700,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexWrap: "wrap"
       }
-    }, ph.name), /*#__PURE__*/React.createElement("div", {
+    }, ph.name, ph.running && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: "#fff",
+        background: "#e0392b",
+        borderRadius: 6,
+        padding: "1px 7px"
+      }
+    }, "\u25CF RUNNING")), /*#__PURE__*/React.createElement("div", {
       className: "hint"
-    }, "bid ", ph.bidHours, " hr \xB7 actual ", mh, " mh", ph.running ? " · ●running" : "")), /*#__PURE__*/React.createElement("div", {
+    }, "bid ", ph.bidHours, " hr"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontVariantNumeric: "tabular-nums",
+        fontWeight: 800,
+        fontSize: 18,
+        color: ph.running ? "#0a7d36" : "#33414f"
+      }
+    }, "\u23F1 ", fmtClock(phaseLiveMin(ph))), /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -11673,24 +11739,32 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("span", {
       className: "hint"
-    }, "crew"), /*#__PURE__*/React.createElement("button", {
+    }, "\xD7"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
-        padding: "2px 7px"
+        padding: "2px 9px"
       },
       onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)
     }, "\u2212"), /*#__PURE__*/React.createElement("b", {
       style: {
-        minWidth: 12,
+        minWidth: 14,
         textAlign: "center"
       }
     }, phaseCrew(ph)), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
-        padding: "2px 7px"
+        padding: "2px 9px"
       },
       onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) + 1)
-    }, "+"))), ph.subs && ph.subs.length > 0 && /*#__PURE__*/React.createElement("div", {
+    }, "+"), /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "guys")), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: "auto",
+        fontWeight: 800,
+        fontSize: 16
+      }
+    }, "= ", mh, " mh")), ph.subs && ph.subs.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
         flexWrap: "wrap",
