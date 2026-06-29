@@ -152,12 +152,38 @@ function colorLineForProduct(name, tradeKey, mat) {
   }
   return colorLineFor(tradeKey, mat);
 }
-// Curated Good/Better/Best product options the contractor can preset in Profile (roofing).
-const ROOF_TIER_OPTIONS = {
-  good: ["GAF Timberline HDZ", "Owens Corning Oakridge", "CertainTeed Landmark", "Atlas Pinnacle Pristine", "IKO Cambridge"],
-  better: ["Owens Corning Duration", "CertainTeed Landmark PRO", "GAF Timberline HDZ (upgraded)", "Atlas StormMaster Shake", "Malarkey Highlander"],
-  best: ["GAF Grand Sequoia / Camelot II", "Owens Corning Berkshire", "CertainTeed Grand Manor / Presidential", "DaVinci composite slate", "Standing-seam metal"],
+// Curated Good/Better/Best product options the contractor can preset in Profile, BY CATEGORY
+// (shingle vs standing seam are both roofing but different lines, so they're separate).
+const TIER_OPTIONS = {
+  shingle: {
+    good: ["GAF Timberline HDZ", "Owens Corning Oakridge", "CertainTeed Landmark", "Atlas Pinnacle Pristine", "IKO Cambridge"],
+    better: ["Owens Corning Duration", "CertainTeed Landmark PRO", "GAF Timberline HDZ (upgraded)", "Atlas StormMaster Shake", "Malarkey Highlander"],
+    best: ["GAF Grand Sequoia / Camelot II", "Owens Corning Berkshire", "CertainTeed Grand Manor / Presidential", "DaVinci composite slate", "Brava composite"],
+  },
+  standingseam: {
+    good: ["26ga SMP snap-lock", "ABC SL-16 (SMP)", "McElroy Meridian (SMP)"],
+    better: ["24ga Kynar snap-lock", "Englert S1000 (Kynar)", "Drexel snap-lock (Kynar)"],
+    best: ["24ga Kynar mechanical-lock", "Sheffield / Drexel mech-lock", "Heavy-gauge w/ striations (Kynar)"],
+  },
+  siding: {
+    good: ["CertainTeed MainStreet vinyl", "Mastic Ovation vinyl", "LP SmartSide lap"],
+    better: ["CertainTeed Monogram vinyl", "James Hardie HardiePlank", "Royal Estate vinyl"],
+    best: ["James Hardie Artisan", "CertainTeed Cedar Impressions", "Everlast composite"],
+  },
+  windows: {
+    good: ["Vinyl double-hung (builder)", "Silver Line 2900", "MI V3000"],
+    better: ["Andersen 100/200", "Pella 250", "Simonton 5500"],
+    best: ["Andersen 400 Series", "Pella Lifestyle / Reserve", "Marvin Elevate"],
+  },
 };
+const TIER_CATS = [{ key: "shingle", label: "Shingles" }, { key: "standingseam", label: "Standing seam" }, { key: "siding", label: "Siding" }, { key: "windows", label: "Windows" }];
+// Which tier-pref category a trade+material falls in (null = no presets for it).
+function tierPrefCategory(tradeKey, sys) {
+  if (tradeKey === "roofing") { const t = roofTypeOf(sys || ""); return t === "metal" ? "standingseam" : (t === "shingle" ? "shingle" : null); }
+  if (tradeKey === "siding") return "siding";
+  if (tradeKey === "windows") return "windows";
+  return null;
+}
 // Which color line a trade+material uses (null = no color selector for this trade).
 function colorLineFor(tradeKey, mat) {
   const m = String(mat || "").toLowerCase();
@@ -848,7 +874,7 @@ function stripCrossSystem(items, sysStr) {
   const vinyl = /vinyl (siding|lap)/.test(s);
   const fiber = /fiber.?cement|hardie/.test(s);
   let banned = null;
-  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof/i;
+  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof|kynar|pvdf|metal trim|metal drip|metal rake/i;
   else if (metal) banned = /asphalt|3-tab|architectural shingle|laminate shingle|shingle bundle|starter shingle/i;
   else if (tpo) banned = /shingle|asphalt|standing seam|metal panel|epdm membrane/i;
   else if (epdm) banned = /shingle|asphalt|standing seam|metal panel|tpo membrane/i;
@@ -1636,6 +1662,7 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
   const [propOpen, setPropOpen] = useState(false);  // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
   const [timerView, setTimerView] = useState("");   // "" | "timer" | "closeout" — on-site per-phase time audit
@@ -3023,11 +3050,11 @@ function App() {
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic) {
         const q = computeRoofQuantities(dims, sysStr, num(panelW));
+        const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
             // price it from the cost book (the LLM under-itemizes these → the $295 bug).
-            const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
             items = priceRoofTakeoff(q, books, items).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice, cost: it.cost, unpriced: it.unpriced, priceTier: null, matchType: null }));
           } else {
           const matchers = [
@@ -3042,11 +3069,13 @@ function App() {
             { key: "step", kw: ["step flash"] },
             { key: "pen", kw: ["pipe boot", "penetration", "pipe flash"] },
           ];
+          const matched = {};
           q.forEach((cq) => {
             const mm = matchers.find((x) => x.key === cq.key);
             if (!mm) return;
             const idx = items.findIndex((it) => { const n = (it.name || "").toLowerCase(); return mm.kw.some((k) => n.indexOf(k) >= 0); });
             if (idx >= 0) {
+              matched[cq.key] = true;
               const old = items[idx];
               // derive a per-unit price; if the AI's unit differs from the computed unit, rebuild unit price from cost/computedQty
               let up = num(old.unitPrice);
@@ -3054,6 +3083,16 @@ function App() {
               if (unitChanged && cq.qty > 0) up = old.cost / cq.qty; // keep total cost, restate per computed unit
               items[idx] = Object.assign({}, old, { qty: cq.qty, unit: cq.unit, unitPrice: up, cost: Math.round(up * cq.qty) });
             }
+          });
+          // BACKFILL standard shingle accessory lines the LLM omitted (e.g. drip edge when it
+          // only emitted a metal-trim line that stripCrossSystem just removed). Priced from the
+          // cost book, flagged ⚠️ if unpriced — never silently missing.
+          ["drip", "starter", "ridge", "iw", "valley", "step", "pen"].forEach((key) => {
+            if (matched[key]) return;
+            const cq = q.find((x) => x.key === key);
+            if (!cq) return;
+            const up = priceFromBook(cq.name, books);
+            items.push({ name: cq.name, qty: cq.qty, unit: cq.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * cq.qty) : 0, unpriced: up == null, priceTier: null, matchType: null });
           });
           }
         }
@@ -3129,7 +3168,8 @@ function App() {
         const desc = scope + (type ? " (" + type + ")" : "");
         const aiT = aiTrades.find((x) => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
         try {
-          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (profC.tierPrefs && profC.tierPrefs[t]) || null });
+          const __cat = tierPrefCategory(t, scope + " " + desc);
+          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (__cat && profC.tierPrefs && profC.tierPrefs[__cat]) || null });
           r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
           results.push(Object.assign({ tradeKey: t, label: label }, r));
         } catch (e) { results.push({ tradeKey: t, label: label, error: errMsg(e) }); }
@@ -5182,11 +5222,16 @@ function App() {
               placeholder="e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum" />
 
             <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 12 }}>
-              <div className="seclabel">Roofing good / better / best lines <span className="hint">your tiers — AL uses these in estimates &amp; proposals</span></div>
+              <div className="seclabel">Good / better / best lines <span className="hint">your tiers — AL builds estimates around these</span></div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "6px 0" }}>
+                {TIER_CATS.map((c) => (
+                  <button key={c.key} className={"btn " + (prefCat === c.key ? "primary" : "ghost")} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => setPrefCat(c.key)}>{c.label}</button>
+                ))}
+              </div>
               {["good", "better", "best"].map((tier) => {
-                const cur = (profC.tierPrefs && profC.tierPrefs.roofing && profC.tierPrefs.roofing[tier]) || "";
-                const opts = ROOF_TIER_OPTIONS[tier];
-                const setTier = (val) => setProfC((p) => ({ ...p, tierPrefs: Object.assign({}, p.tierPrefs, { roofing: Object.assign({}, (p.tierPrefs || {}).roofing, { [tier]: val }) }) }));
+                const cur = (profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier]) || "";
+                const opts = TIER_OPTIONS[prefCat][tier];
+                const setTier = (val) => setProfC((p) => ({ ...p, tierPrefs: Object.assign({}, p.tierPrefs, { [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], { [tier]: val }) }) }));
                 return (
                   <div key={tier} style={{ marginTop: 8 }}>
                     <div style={{ fontWeight: 700, textTransform: "capitalize", fontSize: 13 }}>{tier}</div>
@@ -5199,7 +5244,7 @@ function App() {
                   </div>
                 );
               })}
-              <p className="hint" style={{ marginTop: 6 }}>Set these and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.</p>
+              <p className="hint" style={{ marginTop: 6 }}>Set a category's three lines and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.</p>
             </div>
 
             <button className="btn primary full" style={{ marginTop: 12 }} disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
