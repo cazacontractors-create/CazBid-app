@@ -842,6 +842,144 @@ const CERTAINTEED_COLORS = [{
   name: "Flagstone",
   hex: "#5a5f63"
 }];
+// Shingle color lines BY BRAND (so colors follow the tier's actual manufacturer).
+const GAF_HDZ_COLORS = [{
+  name: "Charcoal",
+  hex: "#3b3d40"
+}, {
+  name: "Pewter Gray",
+  hex: "#6f7378"
+}, {
+  name: "Weathered Wood",
+  hex: "#7a6a52"
+}, {
+  name: "Barkwood",
+  hex: "#5b4a39"
+}, {
+  name: "Shakewood",
+  hex: "#a98f6b"
+}, {
+  name: "Slate",
+  hex: "#5a5f64"
+}, {
+  name: "Birchwood",
+  hex: "#b9a781"
+}, {
+  name: "Hickory",
+  hex: "#8a7152"
+}, {
+  name: "Hunter Green",
+  hex: "#2e4636"
+}, {
+  name: "Patriot Red",
+  hex: "#6e2b27"
+}, {
+  name: "Williamsburg Slate",
+  hex: "#54585d"
+}, {
+  name: "Mission Brown",
+  hex: "#4b382a"
+}, {
+  name: "Golden Amber",
+  hex: "#9a7240"
+}, {
+  name: "Biscayne Blue",
+  hex: "#34526a"
+}, {
+  name: "Oyster Gray",
+  hex: "#9a9890"
+}, {
+  name: "Appalachian Sky",
+  hex: "#6b7a86"
+}];
+const CT_LANDMARK_COLORS = [{
+  name: "Moire Black",
+  hex: "#2c2d2f"
+}, {
+  name: "Charcoal Black",
+  hex: "#3a3c3f"
+}, {
+  name: "Georgetown Gray",
+  hex: "#6e7176"
+}, {
+  name: "Pewter",
+  hex: "#8a8d90"
+}, {
+  name: "Cobblestone Gray",
+  hex: "#7c7e80"
+}, {
+  name: "Weathered Wood",
+  hex: "#7a6a52"
+}, {
+  name: "Heather Blend",
+  hex: "#6a5d5a"
+}, {
+  name: "Burnt Sienna",
+  hex: "#7c3f2c"
+}, {
+  name: "Resawn Shake",
+  hex: "#5a4a3b"
+}, {
+  name: "Driftwood",
+  hex: "#9a8b73"
+}, {
+  name: "Colonial Slate",
+  hex: "#6a6e73"
+}, {
+  name: "Hunter Green",
+  hex: "#2e4636"
+}, {
+  name: "Granite Gray",
+  hex: "#6f7377"
+}, {
+  name: "Silver Birch",
+  hex: "#b3ac9c"
+}, {
+  name: "Sunrise Cedar",
+  hex: "#8a5a3b"
+}, {
+  name: "Atlantic Blue",
+  hex: "#34526a"
+}];
+// Color line from the chosen PRODUCT name (tier's brand), falling back to material type.
+function colorLineForProduct(name, tradeKey, mat) {
+  const s = (String(name || "") + " " + String(mat || "")).toLowerCase();
+  if (tradeKey === "roofing") {
+    if (/\bag\b|ag panel|ag-panel|corrugated|exposed.?fastener|r-?panel|u-?panel|\bsmp\b/.test(s)) return {
+      key: "smp",
+      label: "SMP — AG panel colors",
+      colors: SMP_COLORS
+    };
+    if (/standing seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return {
+      key: "kynar",
+      label: "Kynar — metal colors",
+      colors: KYNAR_COLORS
+    };
+    if (/tpo|epdm|flat|membrane/.test(s)) return null;
+    if (/\bgaf\b|timberline|\bhdz\b|grand sequoia|camelot/.test(s)) return {
+      key: "gaf",
+      label: "GAF Timberline colors",
+      colors: GAF_HDZ_COLORS
+    };
+    if (/certainteed|landmark|grand manor|presidential/.test(s)) return {
+      key: "ct",
+      label: "CertainTeed Landmark colors",
+      colors: CT_LANDMARK_COLORS
+    };
+    return {
+      key: "duration",
+      label: "Owens Corning Duration colors",
+      colors: OC_DURATION_COLORS
+    };
+  }
+  return colorLineFor(tradeKey, mat);
+}
+// Curated Good/Better/Best product options the contractor can preset in Profile (roofing).
+const ROOF_TIER_OPTIONS = {
+  good: ["GAF Timberline HDZ", "Owens Corning Oakridge", "CertainTeed Landmark", "Atlas Pinnacle Pristine", "IKO Cambridge"],
+  better: ["Owens Corning Duration", "CertainTeed Landmark PRO", "GAF Timberline HDZ (upgraded)", "Atlas StormMaster Shake", "Malarkey Highlander"],
+  best: ["GAF Grand Sequoia / Camelot II", "Owens Corning Berkshire", "CertainTeed Grand Manor / Presidential", "DaVinci composite slate", "Standing-seam metal"]
+};
 // Which color line a trade+material uses (null = no color selector for this trade).
 function colorLineFor(tradeKey, mat) {
   const m = String(mat || "").toLowerCase();
@@ -4176,7 +4314,8 @@ function App() {
     bio: "",
     prefMaterials: "",
     avatar: "",
-    posts: []
+    posts: [],
+    tierPrefs: {}
   });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
@@ -5190,10 +5329,11 @@ function App() {
         radius: profC.radius,
         bio: profC.bio,
         prefMaterials: profC.prefMaterials,
-        avatar: profC.avatar
+        avatar: profC.avatar,
+        tierPrefs: profC.tierPrefs
       }
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async role => {
@@ -6634,7 +6774,8 @@ function App() {
     dims,
     photos,
     panelW,
-    aiTrade
+    aiTrade,
+    tierPref
   }) => {
     {
       scope = scope || "";
@@ -6647,7 +6788,7 @@ function App() {
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
       const __manualKey = manualTradeKey(scope, desc);
-      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + (tierPref && (tierPref.good || tierPref.better || tierPref.best) ? "THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map(k => tierPref[k] ? k + "=" + tierPref[k] : "").filter(Boolean).join(", ") + ".\n" : "") + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [...photos.slice(0, 3).map(ph => {
         const mt = ph.startsWith("data:") ? ph.substring(5, ph.indexOf(";")) || "image/jpeg" : "image/jpeg";
         return {
@@ -6913,7 +7054,8 @@ function App() {
             dims,
             photos: whPhotos,
             panelW: num(housePanelW[t]) || 0,
-            aiTrade: aiT
+            aiTrade: aiT,
+            tierPref: profC.tierPrefs && profC.tierPrefs[t] || null
           });
           r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
           results.push(Object.assign({
@@ -10419,8 +10561,73 @@ function App() {
       prefMaterials: e.target.value
     }),
     placeholder: "e.g. Roofing: GAF Timberline HDZ \xB7 Siding: James Hardie \xB7 Decking: Trex \xB7 Gutters: 6in seamless aluminum"
-  }), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #eee",
+      paddingTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "Roofing good / better / best lines ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "your tiers \u2014 AL uses these in estimates & proposals")), ["good", "better", "best"].map(tier => {
+    const cur = profC.tierPrefs && profC.tierPrefs.roofing && profC.tierPrefs.roofing[tier] || "";
+    const opts = ROOF_TIER_OPTIONS[tier];
+    const setTier = val => setProfC(p => ({
+      ...p,
+      tierPrefs: Object.assign({}, p.tierPrefs, {
+        roofing: Object.assign({}, (p.tierPrefs || {}).roofing, {
+          [tier]: val
+        })
+      })
+    }));
+    return /*#__PURE__*/React.createElement("div", {
+      key: tier,
+      style: {
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        textTransform: "capitalize",
+        fontSize: 13
+      }
+    }, tier), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, opts.map(o => /*#__PURE__*/React.createElement("button", {
+      key: o,
+      className: "btn " + (cur === o ? "primary" : "ghost"),
+      style: {
+        padding: "4px 9px",
+        fontSize: 12
+      },
+      onClick: () => setTier(cur === o ? "" : o)
+    }, cur === o ? "✓ " : "", o))), /*#__PURE__*/React.createElement("input", {
+      className: "in",
+      style: {
+        marginTop: 4,
+        width: "100%"
+      },
+      value: opts.includes(cur) ? "" : cur,
+      onChange: e => setTier(e.target.value),
+      placeholder: "\u2026or type your own line for this tier"
+    }));
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Set these and AL builds your good/better/best around them \u2014 and the proposal shows that brand's colors when a tier is chosen.")), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full",
+    style: {
+      marginTop: 12
+    },
     disabled: busy === "prof",
     onClick: () => saveProfile("contractor")
   }, busy === "prof" ? "Saving…" : "Save preferences")), /*#__PURE__*/React.createElement("section", {
@@ -12485,10 +12692,15 @@ function App() {
         onClick: () => setProposalTier(tr.tier)
       }, on ? "✓ Selected" : "Choose this"));
     }))), (() => {
-      const lines = estResult.trades.map(t => ({
-        t,
-        line: colorLineFor(t.tradeKey, houseScope[t.tradeKey])
-      })).filter(x => x.line);
+      const lines = estResult.trades.map((t, ti) => {
+        // primary trade uses the picked tier's product name → its manufacturer's colors
+        const chosenTierObj = ti === 0 && chosen ? tiers.find(x => x.tier === chosen) : null;
+        const product = chosenTierObj && chosenTierObj.name || t.items && t.items[0] && t.items[0].name || (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] : "");
+        return {
+          t,
+          line: colorLineForProduct(product, t.tradeKey, houseScope[t.tradeKey])
+        };
+      }).filter(x => x.line);
       if (!lines.length) return null;
       const colors = estResult.colors || {};
       return /*#__PURE__*/React.createElement("section", {
