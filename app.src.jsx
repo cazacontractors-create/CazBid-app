@@ -139,6 +139,21 @@ const CT_LANDMARK_COLORS = [
   { name: "Granite Gray", hex: "#6f7377" }, { name: "Silver Birch", hex: "#b3ac9c" }, { name: "Sunrise Cedar", hex: "#8a5a3b" },
   { name: "Atlantic Blue", hex: "#34526a" },
 ];
+// Composite (synthetic) and natural-slate color lines.
+const COMPOSITE_COLORS = [
+  { name: "Slate Gray", hex: "#5a5f64" }, { name: "Smoke Gray", hex: "#7c7f82" }, { name: "Mountain", hex: "#6a6e6a" },
+  { name: "Weathered Gray", hex: "#8a8a82" }, { name: "Aberdeen", hex: "#5e5a52" }, { name: "Brownstone", hex: "#6e5742" },
+  { name: "Castle Gray", hex: "#676b6e" }, { name: "Tahoe", hex: "#4a5550" }, { name: "Vineyard", hex: "#5a4250" },
+  { name: "Stonewood", hex: "#7a6a55" }, { name: "Charcoal Black", hex: "#33353a" }, { name: "Evergreen", hex: "#2e4636" },
+  { name: "Mulberry", hex: "#5a2f3a" }, { name: "Bark", hex: "#4b3a2b" }, { name: "Sterling", hex: "#9a9d9f" }, { name: "Driftwood", hex: "#9a8b73" },
+];
+const SLATE_COLORS = [
+  { name: "Unfading Black", hex: "#2b2c2e" }, { name: "Gray-Black", hex: "#3c3e41" }, { name: "Unfading Gray", hex: "#6f7377" },
+  { name: "Weathering Gray-Green", hex: "#6a7068" }, { name: "Vermont Green (unfading)", hex: "#3c4a3a" }, { name: "Sea Green", hex: "#5e6e5c" },
+  { name: "Unfading Purple", hex: "#4a3f4f" }, { name: "Mottled Purple/Green", hex: "#4e4a48" }, { name: "Vermont Red", hex: "#6e2f28" },
+  { name: "Semi-Weathering Gray", hex: "#7c7e80" }, { name: "Buckingham Black", hex: "#2f3033" }, { name: "Spanish Gray", hex: "#73767a" },
+  { name: "Strata Gray", hex: "#5f6266" }, { name: "China Black", hex: "#2a2b2d" }, { name: "Mottled Gray/Black", hex: "#4a4c4f" }, { name: "Monson Black", hex: "#303234" },
+];
 // Color line from the chosen PRODUCT name (tier's brand), falling back to material type.
 function colorLineForProduct(name, tradeKey, mat) {
   const s = (String(name || "") + " " + String(mat || "")).toLowerCase();
@@ -146,6 +161,8 @@ function colorLineForProduct(name, tradeKey, mat) {
     if (/ag panel|ag-panel|corrugated|exposed.?fastener|panel rib|rib panel|ribbed|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
     if (/standing.?seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return { key: "kynar", label: "Kynar — metal colors", colors: KYNAR_COLORS };
     if (/tpo|epdm|flat|membrane/.test(s)) return null;
+    if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return { key: "composite", label: "Composite colors", colors: COMPOSITE_COLORS };
+    if (/slate/.test(s)) return { key: "slate", label: "Slate colors", colors: SLATE_COLORS };
     if (/\bgaf\b|timberline|\bhdz\b|grand sequoia|camelot/.test(s)) return { key: "gaf", label: "GAF Timberline colors", colors: GAF_HDZ_COLORS };
     if (/certainteed|landmark|grand manor|presidential/.test(s)) return { key: "ct", label: "CertainTeed Landmark colors", colors: CT_LANDMARK_COLORS };
     return { key: "duration", label: "Owens Corning Duration colors", colors: OC_DURATION_COLORS };
@@ -175,11 +192,27 @@ const TIER_OPTIONS = {
     better: ["Andersen 100/200", "Pella 250", "Simonton 5500"],
     best: ["Andersen 400 Series", "Pella Lifestyle / Reserve", "Marvin Elevate"],
   },
+  composite: {
+    good: ["EcoStar Majestic Slate", "CertainTeed Symphony", "Brava Cedar Shake"],
+    better: ["DaVinci Single-Width Slate", "Brava Slate", "DaVinci Shake"],
+    best: ["DaVinci Multi-Width Slate", "DaVinci Bellaforté Slate", "Inspire Composite Slate"],
+  },
+  slate: {
+    good: ["Greenstone semi-weathering gray", "North Country black", "Vermont gray/black (S1)"],
+    better: ["Vermont unfading gray", "Buckingham Virginia slate", "Vermont unfading green"],
+    best: ["Vermont unfading purple / mottled", "Spanish premium slate", "Monson Maine slate"],
+  },
 };
-const TIER_CATS = [{ key: "shingle", label: "Shingles" }, { key: "standingseam", label: "Standing seam" }, { key: "siding", label: "Siding" }, { key: "windows", label: "Windows" }];
+const TIER_CATS = [{ key: "shingle", label: "Shingles" }, { key: "standingseam", label: "Standing seam" }, { key: "composite", label: "Composite" }, { key: "slate", label: "Slate" }, { key: "siding", label: "Siding" }, { key: "windows", label: "Windows" }];
 // Which tier-pref category a trade+material falls in (null = no presets for it).
 function tierPrefCategory(tradeKey, sys) {
-  if (tradeKey === "roofing") { const t = roofTypeOf(sys || ""); return t === "metal" ? "standingseam" : (t === "shingle" ? "shingle" : null); }
+  if (tradeKey === "roofing") {
+    const s = (sys || "").toLowerCase();
+    if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return "composite";
+    if (/slate/.test(s)) return "slate";
+    const t = roofTypeOf(sys || "");
+    return t === "metal" ? "standingseam" : (t === "shingle" ? "shingle" : null);
+  }
   if (tradeKey === "siding") return "siding";
   if (tradeKey === "windows") return "windows";
   return null;
@@ -1395,7 +1428,7 @@ const MATERIAL_SUGGESTIONS = {
 // front so the takeoff can't mix systems). "Mixed" combines systems and is sized
 // per sub-portion. Trades not listed are single-system (no type picker).
 const HOUSE_TYPES = {
-  roofing: ["Shingle", "Standing-seam metal", "AG panel (exposed fastener)", "Flat (TPO/EPDM)", "Tile", "Mixed"],
+  roofing: ["Shingle", "Standing-seam metal", "AG panel (exposed fastener)", "Composite (synthetic)", "Slate / slate-look", "Flat (TPO/EPDM)", "Tile", "Mixed"],
   siding: ["Vinyl", "Fiber cement", "Steel/Metal", "Wood", "Mixed"],
   flooring: ["Hardwood", "Carpet", "Tile", "LVP / laminate", "Mixed"],
   windows: ["Vinyl", "Wood-clad", "Aluminum", "Mixed"],
