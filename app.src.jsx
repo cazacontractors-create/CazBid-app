@@ -143,8 +143,8 @@ const CT_LANDMARK_COLORS = [
 function colorLineForProduct(name, tradeKey, mat) {
   const s = (String(name || "") + " " + String(mat || "")).toLowerCase();
   if (tradeKey === "roofing") {
-    if (/\bag\b|ag panel|ag-panel|corrugated|exposed.?fastener|r-?panel|u-?panel|\bsmp\b/.test(s)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
-    if (/standing seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return { key: "kynar", label: "Kynar — metal colors", colors: KYNAR_COLORS };
+    if (/ag panel|ag-panel|corrugated|exposed.?fastener|panel rib|rib panel|ribbed|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
+    if (/standing.?seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return { key: "kynar", label: "Kynar — metal colors", colors: KYNAR_COLORS };
     if (/tpo|epdm|flat|membrane/.test(s)) return null;
     if (/\bgaf\b|timberline|\bhdz\b|grand sequoia|camelot/.test(s)) return { key: "gaf", label: "GAF Timberline colors", colors: GAF_HDZ_COLORS };
     if (/certainteed|landmark|grand manor|presidential/.test(s)) return { key: "ct", label: "CertainTeed Landmark colors", colors: CT_LANDMARK_COLORS };
@@ -162,8 +162,8 @@ const ROOF_TIER_OPTIONS = {
 function colorLineFor(tradeKey, mat) {
   const m = String(mat || "").toLowerCase();
   if (tradeKey === "roofing") {
-    if (/\bag\b|ag panel|ag-panel|corrugated|exposed.?fastener|r-?panel|u-?panel/.test(m)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
-    if (/standing seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf/.test(m)) return { key: "kynar", label: "Kynar — standing-seam colors", colors: KYNAR_COLORS };
+    if (/ag panel|ag-panel|corrugated|exposed.?fastener|panel rib|rib panel|ribbed|r-?panel\b|u-?panel\b/.test(m)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
+    if (/standing.?seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf/.test(m)) return { key: "kynar", label: "Kynar — standing-seam colors", colors: KYNAR_COLORS };
     if (/tpo|epdm|flat|membrane/.test(m)) return null;
     if (/metal|steel|panel/.test(m)) return { key: "kynar", label: "Kynar — metal roof colors", colors: KYNAR_COLORS };
     return { key: "duration", label: "Owens Corning Duration — shingle colors", colors: OC_DURATION_COLORS };
@@ -600,7 +600,8 @@ function parseMeas(dims) {
 // Roofing SYSTEM from the type/desc. Drives a DIFFERENT material takeoff per type.
 function roofTypeOf(sys) {
   const s = (sys || "").toLowerCase();
-  if (/standing seam|snap.?lock|\blok\b|metal panel|steel panel|ag panel|metal roof|\d+\s*ga\b|kynar/.test(s)) return "metal";
+  if (/ag panel|ag-panel|exposed.?fastener|panel rib|rib panel|ribbed panel|corrugated|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return "agpanel"; // exposed-fastener / ribbed (NOT standing seam)
+  if (/standing.?seam|snap.?lock|\blok\b|metal panel|steel panel|metal roof|\d+\s*ga\b|kynar/.test(s)) return "metal";
   if (/\btpo\b|\bepdm\b|\bpvc\b|flat roof|single.?ply|membrane|\bbur\b|modified bitumen/.test(s)) return "flat";
   if (/\btile\b|clay tile|concrete tile/.test(s)) return "tile";
   return "shingle";
@@ -672,6 +673,20 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
     out.push({ key: "sealant", name: "Sealant tubes", qty: up(m.area / 600) || 1, unit: "ea" });
     if (m.pens) out.push({ key: "pen", name: "Pipe boots / penetration flashings", qty: m.pens, unit: "ea" });
     out.push({ key: "snow", name: "Snow guards", qty: up(m.eaves), unit: "LF" });
+  } else if (type === "agpanel") {
+    // exposed-fastener / ribbed AG panel — through-fastened, NO concealed clips
+    out.push({ key: "panel", name: "AG / exposed-fastener panels (29ga)", qty: sqr(sq * waste), unit: "SQ" });
+    out.push({ key: "screw", name: "Exposed-fastener panel screws (w/ washer)", qty: up(m.area * 0.8), unit: "ea" });
+    out.push({ key: "iw", name: "Synthetic underlayment", qty: sqr(sq * 1.10), unit: "SQ" });
+    if (ridgeHip) out.push({ key: "ridge", name: "Ridge cap (metal)", qty: up(ridgeHip), unit: "LF" });
+    if (m.eaves) out.push({ key: "drip", name: "Eave trim / drip edge (metal)", qty: up(m.eaves), unit: "LF" });
+    if (m.rakes) out.push({ key: "rake", name: "Rake / gable trim (metal)", qty: up(m.rakes), unit: "LF" });
+    out.push({ key: "closure", name: "Inside / outside foam closures", qty: up(ridgeHip + m.eaves), unit: "LF" });
+    if (m.valleys) out.push({ key: "valley", name: "Valley metal", qty: up(m.valleys), unit: "LF" });
+    if (m.flashing || m.stepflash) out.push({ key: "flash", name: "Sidewall / headwall flashing", qty: up((m.flashing || 0) + (m.stepflash || 0)), unit: "LF" });
+    out.push({ key: "butyl", name: "Butyl sealant tape (laps/closures)", qty: up((ridgeHip + m.eaves + m.rakes) / 50) || 1, unit: "roll" });
+    out.push({ key: "sealant", name: "Sealant tubes", qty: up(m.area / 600) || 1, unit: "ea" });
+    if (m.pens) out.push({ key: "pen", name: "Pipe boots / penetration flashings", qty: m.pens, unit: "ea" });
   } else if (type === "flat") {
     out.push({ key: "field", name: "Membrane (60mil TPO/EPDM)", qty: sqr(sq * 1.10), unit: "SQ" });
     out.push({ key: "iso", name: "Polyiso insulation", qty: sqr(sq), unit: "SQ" });
@@ -1354,7 +1369,7 @@ const MATERIAL_SUGGESTIONS = {
 // front so the takeoff can't mix systems). "Mixed" combines systems and is sized
 // per sub-portion. Trades not listed are single-system (no type picker).
 const HOUSE_TYPES = {
-  roofing: ["Shingle", "Standing-seam metal", "Flat (TPO/EPDM)", "Tile", "Mixed"],
+  roofing: ["Shingle", "Standing-seam metal", "AG panel (exposed fastener)", "Flat (TPO/EPDM)", "Tile", "Mixed"],
   siding: ["Vinyl", "Fiber cement", "Steel/Metal", "Wood", "Mixed"],
   flooring: ["Hardwood", "Carpet", "Tile", "LVP / laminate", "Mixed"],
   windows: ["Vinyl", "Wood-clad", "Aluminum", "Mixed"],
