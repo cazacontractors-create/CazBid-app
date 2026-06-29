@@ -4036,6 +4036,10 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [timerView, setTimerView] = useState(""); // "" | "timer" | "closeout" — on-site per-phase time audit
+  const [jobCrew, setJobCrew] = useState(3); // default crew size; each phase defaults to this
+  const [, setNowTick] = useState(0); // 1s heartbeat to re-render running phase clocks
+  const [tcorr, setTcorr] = useState({}); // closeout correction drafts keyed "ti-pi"
   // saved-estimates library (build-set #3)
   const [estimates, setEstimates] = useState([]); // the saved list (from estStore)
   const [estId, setEstId] = useState(null); // id of the estimate currently open/in-progress
@@ -6817,6 +6821,218 @@ function App() {
       return nt;
     })
   } : r);
+  // ===== PART 1: on-site PER-PHASE TIMER (transition-based, forgiving) =====
+  // Actuals are MAN-HOURS = clock-time × that phase's crew. Each phase carries committed
+  // minutes (actualMin); a RUNNING phase also has startAt (ephemeral, never persisted while
+  // running → no overnight-phantom from an app close; an in-app overnight timer is what the
+  // closeout gate catches). Overlap allowed: each running phase keeps its OWN crew, so summing
+  // per-phase man-hours never double-counts the crew.
+  const phaseLiveMin = ph => (num(ph.actualMin) || 0) + (ph && ph.running && ph.startAt ? Math.max(0, (Date.now() - ph.startAt) / 60000) : 0);
+  const phaseCrew = ph => num(ph.crew) > 0 ? num(ph.crew) : jobCrew;
+  const phaseManHours = ph => Math.round(phaseLiveMin(ph) / 60 * phaseCrew(ph) * 10) / 10;
+  const updPhase = (ti, pi, patch) => setEstResult(r => r ? {
+    ...r,
+    trades: r.trades.map((tr, k) => k !== ti ? tr : {
+      ...tr,
+      phases: (tr.phases || []).map((ph, j) => j !== pi ? ph : Object.assign({}, ph, typeof patch === "function" ? patch(ph) : patch))
+    })
+  } : r);
+  const commitPh = ph => ph && ph.running && ph.startAt ? Object.assign({}, ph, {
+    actualMin: (num(ph.actualMin) || 0) + Math.max(0, (Date.now() - ph.startAt) / 60000),
+    running: false,
+    startAt: null
+  }) : ph;
+  const phaseStart = (ti, pi) => updPhase(ti, pi, ph => ({
+    running: true,
+    startAt: Date.now(),
+    crew: phaseCrew(ph)
+  }));
+  const phasePause = (ti, pi) => updPhase(ti, pi, ph => commitPh(ph));
+  const phaseSetCrew = (ti, pi, n) => updPhase(ti, pi, {
+    crew: Math.max(1, Math.round(num(n) || 1))
+  });
+  const phaseAddSub = (ti, pi, name, min) => updPhase(ti, pi, ph => ({
+    subs: [...(ph.subs || []), {
+      name: String(name || "task"),
+      min: Math.max(0, num(min) || 0)
+    }]
+  }));
+  const commitAllRunning = () => setEstResult(r => r ? {
+    ...r,
+    trades: r.trades.map(tr => ({
+      ...tr,
+      phases: (tr.phases || []).map(commitPh)
+    }))
+  } : r);
+  // closeout: approve / correct a phase (nothing saves to the record until approved)
+  const phaseApprove = (ti, pi) => updPhase(ti, pi, ph => ({
+    actualMin: phaseLiveMin(ph),
+    running: false,
+    startAt: null,
+    actualManHours: phaseManHours(ph),
+    approved: true
+  }));
+  const phaseCorrectMinutes = (ti, pi, totalMin) => updPhase(ti, pi, ph => {
+    const m = Math.max(0, num(totalMin) || 0);
+    return {
+      actualMin: m,
+      running: false,
+      startAt: null,
+      actualManHours: Math.round(m / 60 * phaseCrew(ph) * 10) / 10
+    };
+  });
+  const openTimer = () => {
+    if (jobCrew <= 0 && estResult && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
+    setTimerView("timer");
+  };
+  const closeTimer = () => {
+    commitAllRunning();
+    setTimerView("");
+  };
+  useEffect(() => {
+    if (timerView !== "timer") return;
+    const id = setInterval(() => {
+      if (estResult && estResult.trades.some(t => (t.phases || []).some(p => p.running))) setNowTick(x => x + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [timerView, estResult]);
+  // light voice/keyword control for the timer (hands-free phase switching)
+  const timerVoiceCommand = text => {
+    const s = String(text || "").toLowerCase();
+    if (!s.trim() || !estResult) return;
+    const crewM = s.match(/(\d+|one|two|three|four|five|six)\s*(?:guy|guys|men|man|people|person)/);
+    const w2n = {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+      six: 6
+    };
+    const crewN = crewM ? w2n[crewM[1]] || num(crewM[1]) : 0;
+    if (/\b(pause|lunch|break|hold on|stop for)\b/.test(s) && !/start|begin|moving|switch|resume/.test(s)) {
+      commitAllRunning();
+      flash("Paused all phases.");
+      return;
+    }
+    // find a phase by name match across all trades
+    let best = null;
+    estResult.trades.forEach((tr, ti) => (tr.phases || []).forEach((ph, pi) => {
+      const toks = ph.name.toLowerCase().split(/[^a-z]+/).filter(w => w.length > 2);
+      if (toks.some(w => s.indexOf(w) >= 0)) best = {
+        ti,
+        pi,
+        name: ph.name
+      };
+    }));
+    if (!best) {
+      flash("Didn't catch the phase — say e.g. “starting dry-in, two guys”.");
+      return;
+    }
+    const moving = /\b(moving to|switch to|switching to|now on|on to)\b/.test(s);
+    const stopping = /\b(done with|finished|stop|wrap)\b/.test(s) && !/start|begin/.test(s);
+    if (stopping) {
+      phasePause(best.ti, best.pi);
+      flash("Stopped " + best.name + ".");
+      return;
+    }
+    if (moving) commitAllRunning(); // sequential: moving to a phase stops the others
+    phaseStart(best.ti, best.pi);
+    if (crewN > 0) phaseSetCrew(best.ti, best.pi, crewN);
+    flash((moving ? "Moved to " : "Started ") + best.name + (crewN ? " · " + crewN + " crew" : ""));
+  };
+  // direct correction in MAN-HOURS (back-solves committed minutes from the phase's crew)
+  const phaseCorrectManHours = (ti, pi, mh) => updPhase(ti, pi, ph => {
+    const v = Math.max(0, Math.round((num(mh) || 0) * 10) / 10);
+    const c = phaseCrew(ph);
+    return {
+      actualMin: c > 0 ? v / c * 60 : v * 60,
+      running: false,
+      startAt: null,
+      actualManHours: v
+    };
+  });
+  // closeout natural-language correction → stage a readback draft (tcorr) → Apply confirms
+  const closeoutVoice = text => {
+    const s = String(text || "").toLowerCase();
+    if (!s.trim() || !estResult) return;
+    let best = null;
+    estResult.trades.forEach((tr, ti) => (tr.phases || []).forEach((ph, pi) => {
+      const toks = ph.name.toLowerCase().split(/[^a-z]+/).filter(w => w.length > 2);
+      if (toks.some(w => s.indexOf(w) >= 0)) best = {
+        ti,
+        pi,
+        ph
+      };
+    }));
+    if (!best) {
+      flash("Which phase? e.g. “set details to four hours”.");
+      return;
+    }
+    const cur = best.ph.actualManHours != null ? best.ph.actualManHours : phaseManHours(best.ph);
+    const crew = phaseCrew(best.ph);
+    let target = null,
+      m;
+    if ((m = s.match(/set (?:it |that |the \w+ )?to (\d+(?:\.\d+)?)/)) || (m = s.match(/(?:it'?s|it was|was|actually|really) (\d+(?:\.\d+)?)\s*hours?/)) || (m = s.match(/(?:finished|stopped|ended|done) .*?(\d+(?:\.\d+)?)\s*hours?/))) target = num(m[1]);else if (m = s.match(/(?:subtract|take off|minus|less) (?:an?|(\d+(?:\.\d+)?))/)) target = Math.max(0, cur - (num(m[1]) || 1) * crew);else if (m = s.match(/(?:add|plus) (?:an?|(\d+(?:\.\d+)?))/)) target = cur + (num(m[1]) || 1) * crew;
+    if (target == null) {
+      flash("Say e.g. “set tear-off to eighteen” or “subtract an hour from details”.");
+      return;
+    }
+    target = Math.round(target * 10) / 10;
+    setTcorr({
+      [best.ti + "-" + best.pi]: {
+        mh: target,
+        name: best.ph.name
+      }
+    });
+    if (voiceMode) speakAL("Setting " + best.ph.name + " to " + target + " man hours — tap apply to confirm.");
+  };
+  const [timerRec, setTimerRec] = useState(false); // one-shot recorder on the timer/closeout
+  const timerRecOnce = async onText => {
+    if (timerRec) {
+      try {
+        if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop();
+      } catch (e) {}
+      return;
+    }
+    if (!mediaOK) {
+      flash("Mic not available here — use the buttons/fields.");
+      return;
+    }
+    primeTTS();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true
+      });
+      const mime = pickMime();
+      const rec = mime ? new MediaRecorder(stream, {
+        mimeType: mime
+      }) : new MediaRecorder(stream);
+      mediaChunksRef.current = [];
+      rec.ondataavailable = e => {
+        if (e.data && e.data.size) mediaChunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        try {
+          (stream.getTracks() || []).forEach(t => t.stop());
+        } catch (e) {}
+        setTimerRec(false);
+        const blob = new Blob(mediaChunksRef.current, {
+          type: rec.mimeType || mime || "audio/webm"
+        });
+        mediaChunksRef.current = [];
+        if (!blob.size) return;
+        const t = await transcribeBlob(blob);
+        if (t) onText(t);else flash("Didn't catch that.");
+      };
+      mediaRecRef.current = rec;
+      rec.start();
+      setTimerRec(true);
+    } catch (e) {
+      setTimerRec(false);
+      flash("Mic unavailable.");
+    }
+  };
   // ---- saved-estimates library (build-set #3) ----
   const tradeCostOf = t => {
     const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0);
@@ -10762,7 +10978,18 @@ function App() {
     }, "\u2190 Back to scope"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost grow1",
       onClick: startNewEstimate
-    }, "Start new estimate")), /*#__PURE__*/React.createElement("section", {
+    }, "Start new estimate")), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      style: {
+        marginBottom: 4
+      },
+      onClick: () => {
+        persistCurrent();
+        openTimer();
+      }
+    }, "\u23F1 Track time on this job ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "log actual hours per phase")), /*#__PURE__*/React.createElement("section", {
       className: "card",
       style: {
         marginBottom: 4
@@ -11322,7 +11549,362 @@ function App() {
   }, "\u2713 Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: csvResetImport
-  }, "Cancel")))))), me.role === "contractor" && tab === "work" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }, "Cancel")))))), me.role === "contractor" && tab === "estimator" && timerView && estResult && estResult.trades && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 80,
+      background: "#fff",
+      overflowY: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 560,
+      margin: "0 auto",
+      padding: 14,
+      paddingBottom: 40
+    }
+  }, timerView === "timer" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h1",
+    style: {
+      flex: 1,
+      margin: 0
+    }
+  }, "\u23F1 Time audit", estCustomer.trim() ? " — " + estCustomer.trim() : ""), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: closeTimer
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      margin: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "Job crew"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 10px"
+    },
+    onClick: () => setJobCrew(Math.max(1, jobCrew - 1))
+  }, "\u2212"), /*#__PURE__*/React.createElement("b", {
+    style: {
+      minWidth: 16,
+      textAlign: "center"
+    }
+  }, jobCrew), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 10px"
+    },
+    onClick: () => setJobCrew(jobCrew + 1)
+  }, "+"), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "each phase defaults to this")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn " + (timerRec ? "primary" : "ghost"),
+    style: {
+      flex: 1,
+      animation: timerRec ? "pulse 1s infinite" : "none"
+    },
+    onClick: () => timerRecOnce(timerVoiceCommand)
+  }, timerRec ? "● Listening… tap to send" : "🎤 “starting dry-in, two guys”"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => {
+      commitAllRunning();
+      flash("Paused all phases.");
+    }
+  }, "\u23F8 Pause all")), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
+    className: "card",
+    key: ti,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, t.label || t.title), (t.phases || []).map((ph, pi) => {
+    const mh = phaseManHours(ph);
+    return /*#__PURE__*/React.createElement("div", {
+      key: pi,
+      style: {
+        borderTop: pi ? "1px solid #eef0f2" : "none",
+        padding: "8px 0"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (ph.running ? "primary" : "ghost"),
+      style: {
+        padding: "6px 12px",
+        animation: ph.running ? "pulse 1s infinite" : "none"
+      },
+      onClick: () => ph.running ? phasePause(ti, pi) : phaseStart(ti, pi)
+    }, ph.running ? "⏸" : "▶"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, ph.name), /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "bid ", ph.bidHours, " hr \xB7 actual ", mh, " mh", ph.running ? " · ●running" : "")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "crew"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 7px"
+      },
+      onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)
+    }, "\u2212"), /*#__PURE__*/React.createElement("b", {
+      style: {
+        minWidth: 12,
+        textAlign: "center"
+      }
+    }, phaseCrew(ph)), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 7px"
+      },
+      onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) + 1)
+    }, "+"))), ph.subs && ph.subs.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 4,
+        marginTop: 4
+      }
+    }, ph.subs.map((sb, si) => /*#__PURE__*/React.createElement("span", {
+      key: si,
+      className: "hint",
+      style: {
+        background: "#eef2f6",
+        borderRadius: 10,
+        padding: "2px 8px"
+      }
+    }, sb.name, " ", Math.round(sb.min), "m"))), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px",
+        fontSize: 12,
+        marginTop: 4
+      },
+      onClick: () => {
+        const n = window.prompt("Precise task inside " + ph.name + " (e.g. chimney flashing)");
+        if (!n) return;
+        const m = window.prompt("Minutes on " + n, "30");
+        if (m == null) return;
+        phaseAddSub(ti, pi, n, num(m));
+      }
+    }, "+ precise task ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "slice of this phase")));
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full big",
+    style: {
+      marginTop: 12
+    },
+    onClick: () => {
+      commitAllRunning();
+      setTimerView("closeout");
+    }
+  }, "End & review \u2192"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Actuals are man-hours (clock \xD7 that phase's crew). Overlap is fine \u2014 each phase keeps its own crew so they don't double-count. Time persists across days.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h1",
+    style: {
+      flex: 1,
+      margin: 0
+    }
+  }, "Closeout \u2014 approve each phase"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setTimerView("timer")
+  }, "\u2190 Timer")), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Bid vs actual man-hours. Approve the ones that look right; fix the one that's off. Only approved values save."), (() => {
+    const anyLoud = estResult.trades.some(t => (t.phases || []).some(ph => {
+      const b = ph.bidHours,
+        a = ph.actualManHours != null ? ph.actualManHours : phaseManHours(ph);
+      return b > 0 && Math.abs((a - b) / b * 100) > 75;
+    }));
+    return anyLoud ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "8px 11px",
+        background: "#fde7e7",
+        border: "1px solid #f5a9a3",
+        borderRadius: 10,
+        color: "#b3261e",
+        fontWeight: 700,
+        fontSize: 13,
+        marginBottom: 4
+      }
+    }, "\u26A0\uFE0F A phase is way off the bid \u2014 check it (timer left running?) before saving.") : null;
+  })(), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      margin: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn " + (timerRec ? "primary" : "ghost"),
+    style: {
+      flex: 1,
+      animation: timerRec ? "pulse 1s infinite" : "none"
+    },
+    onClick: () => timerRecOnce(closeoutVoice)
+  }, timerRec ? "● Listening…" : "🎤 Fix by voice (e.g. “set details to four hours”)")), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
+    className: "card",
+    key: ti,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, t.label || t.title), (t.phases || []).map((ph, pi) => {
+    const bid = ph.bidHours;
+    const actual = ph.actualManHours != null ? ph.actualManHours : phaseManHours(ph);
+    const diff = Math.round((actual - bid) * 10) / 10;
+    const pct = bid > 0 ? Math.round(diff / bid * 100) : actual > 0 ? 999 : 0;
+    const loud = Math.abs(pct) > 75;
+    const warn = !loud && Math.abs(pct) > 25;
+    const col = loud ? "#b3261e" : warn ? "#8A5A12" : "#1B7A3D";
+    const bg = loud ? "#fde7e7" : warn ? "#FFF4E6" : "#F0FAF3";
+    const key = ti + "-" + pi;
+    const draft = tcorr[key];
+    return /*#__PURE__*/React.createElement("div", {
+      key: pi,
+      style: {
+        borderTop: pi ? "1px solid #eef0f2" : "none",
+        padding: "8px 0"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, ph.name, " ", ph.approved && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#1B7A3D"
+      }
+    }, "\u2713 saved")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: col,
+        fontWeight: 700,
+        background: bg,
+        display: "inline-block",
+        padding: "1px 8px",
+        borderRadius: 8,
+        marginTop: 2
+      }
+    }, loud ? "⚠️ " : "", "bid ", bid, " \xB7 actual ", actual, " \xB7 ", diff >= 0 ? "+" : "", diff, " (", pct >= 0 ? "+" : "", pct, "%)")), /*#__PURE__*/React.createElement("label", {
+      className: "estf",
+      style: {
+        width: 84
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "Actual mh"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      value: actual,
+      onChange: e => phaseCorrectManHours(ti, pi, num(e.target.value))
+    })), /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (ph.approved ? "ghost" : "primary"),
+      style: {
+        padding: "6px 12px"
+      },
+      onClick: () => phaseApprove(ti, pi)
+    }, ph.approved ? "Approved" : "Approve")), draft && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 6,
+        background: "#FFFBF4",
+        border: "1px solid #F2C98A",
+        borderRadius: 8,
+        padding: "6px 8px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        flex: 1
+      }
+    }, "Set ", /*#__PURE__*/React.createElement("b", null, draft.name), " to ", /*#__PURE__*/React.createElement("b", null, draft.mh), " man-hours?"), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      style: {
+        padding: "2px 10px"
+      },
+      onClick: () => {
+        phaseCorrectManHours(ti, pi, draft.mh);
+        setTcorr({});
+      }
+    }, "Apply"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px"
+      },
+      onClick: () => setTcorr({})
+    }, "\u2715")));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost grow1",
+    onClick: () => setTimerView("timer")
+  }, "\u2190 Back to timer"), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary grow1",
+    onClick: () => {
+      persistCurrent({
+        auditClosedAt: new Date().toISOString()
+      });
+      flash("Saved — approved phases recorded.");
+      setTimerView("");
+    }
+  }, "Save audit"))))), me.role === "contractor" && tab === "work" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
   }, /*#__PURE__*/React.createElement("div", {
     className: "pagetitle"
