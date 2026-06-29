@@ -3373,6 +3373,64 @@ const PB_TRADE_KEY = {
   electrical: "electrical",
   plumbing: "plumbing"
 };
+// PER-PHASE LABOR (time-audit Part 1). Each trade's bid hours allocate across ~4–6 phase
+// buckets by typical proportion (rough now; the calibration loop refines splits later).
+// names + split arrays are index-aligned; splits ~sum to 1.
+const TRADE_PHASES = {
+  roofing: {
+    names: ["Tear-off", "Dry-in", "Field install", "Details & flashing", "Cleanup"],
+    split: [0.20, 0.10, 0.40, 0.22, 0.08]
+  },
+  siding: {
+    names: ["Prep & wrap", "Field install", "Trim & accessories", "Cleanup"],
+    split: [0.20, 0.50, 0.22, 0.08]
+  },
+  framing: {
+    names: ["Layout & plates", "Walls & openings", "Roof/floor structure", "Sheathing", "Cleanup"],
+    split: [0.15, 0.35, 0.30, 0.15, 0.05]
+  },
+  concrete: {
+    names: ["Excavate & form", "Reinforce", "Pour & finish", "Strip & cleanup"],
+    split: [0.30, 0.15, 0.40, 0.15]
+  },
+  drywall: {
+    names: ["Hang", "Tape & mud", "Sand & prep", "Cleanup"],
+    split: [0.30, 0.40, 0.20, 0.10]
+  },
+  flooring: {
+    names: ["Prep & demo", "Underlayment", "Field install", "Trim & cleanup"],
+    split: [0.20, 0.15, 0.50, 0.15]
+  },
+  trim: {
+    names: ["Measure & cut", "Install", "Caulk & finish", "Cleanup"],
+    split: [0.25, 0.45, 0.20, 0.10]
+  },
+  insulation: {
+    names: ["Prep & air-seal", "Install", "Cleanup"],
+    split: [0.25, 0.60, 0.15]
+  },
+  _default: {
+    names: ["Prep", "Install", "Detail", "Cleanup"],
+    split: [0.20, 0.50, 0.20, 0.10]
+  }
+};
+// Allocate bid LABOR HOURS across a trade's phases (man-hours). Remainder lands on the
+// biggest bucket so the per-phase bids sum back to the trade's total.
+function allocatePhases(tradeKey, laborHours) {
+  const spec = TRADE_PHASES[tradeKey] || TRADE_PHASES._default;
+  const total = Math.max(0, Math.round(Number(laborHours) || 0));
+  const raw = spec.names.map((n, i) => ({
+    name: n,
+    bidHours: Math.round(total * (spec.split[i] || 0))
+  }));
+  const diff = total - raw.reduce((s, p) => s + p.bidHours, 0);
+  if (diff !== 0 && raw.length) {
+    let bi = 0;
+    for (let i = 1; i < raw.length; i++) if ((spec.split[i] || 0) > (spec.split[bi] || 0)) bi = i;
+    raw[bi].bidHours = Math.max(0, raw[bi].bidHours + diff);
+  }
+  return raw;
+}
 // Starter material lists (brand + product), most-common first, NO 3-tab shingles.
 const MATERIAL_SUGGESTIONS = {
   framing: ["2x6 SPF walls", "2x4 SPF walls", "Advanced framing (24\" OC)", "LVL/engineered beams", "Steel stud"],
@@ -6618,6 +6676,7 @@ function App() {
             panelW: num(housePanelW[t]) || 0,
             aiTrade: aiT
           });
+          r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
           results.push(Object.assign({
             tradeKey: t,
             label: label
@@ -6748,10 +6807,15 @@ function App() {
   } : r);
   const estTradeField = (ti, field, val) => setEstResult(r => r ? {
     ...r,
-    trades: r.trades.map((tr, k) => k === ti ? {
-      ...tr,
-      [field]: val
-    } : tr)
+    trades: r.trades.map((tr, k) => {
+      if (k !== ti) return tr;
+      const nt = {
+        ...tr,
+        [field]: val
+      };
+      if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val);
+      return nt;
+    })
   } : r);
   // ---- saved-estimates library (build-set #3) ----
   const tradeCostOf = t => {
@@ -10921,7 +10985,32 @@ function App() {
         step: "0.001",
         value: t.taxRate,
         onChange: e => estTradeField(ti, "taxRate", num(e.target.value))
-      }))), /*#__PURE__*/React.createElement("div", {
+      }))), Array.isArray(t.phases) && t.phases.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 10
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "seclabel"
+      }, "Phase bid ", /*#__PURE__*/React.createElement("span", {
+        className: "hint"
+      }, "man-hours per phase \u2014 what the on-site timer compares against")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          marginTop: 4
+        }
+      }, t.phases.map((ph, pi) => /*#__PURE__*/React.createElement("span", {
+        key: pi,
+        style: {
+          fontSize: 12,
+          background: "#eef2f6",
+          color: "#33414f",
+          border: "1px solid #dde3ea",
+          borderRadius: 12,
+          padding: "3px 10px"
+        }
+      }, /*#__PURE__*/React.createElement("b", null, ph.name), " ", ph.bidHours, " hr")))), /*#__PURE__*/React.createElement("div", {
         className: "costbox",
         style: {
           marginTop: 12
