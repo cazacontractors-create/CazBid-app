@@ -84,6 +84,16 @@ const PERSONAS = [
   { name: "Bella", voiceId: "hpp4J3VqNfWAUOO0d1Us", avatar: "", sex: "f" },
   { name: "Jessica", voiceId: "cgSgspJ2msm6clMCkdW9", avatar: "", sex: "f" },
 ];
+// Owens Corning Duration shingle line (homeowner color selector). hex ≈ for the swatch;
+// confirm the live list against OC's current Duration colors when productizing.
+const OC_DURATION_COLORS = [
+  { name: "Desert Rose", hex: "#9c6b5a" }, { name: "Midnight Plum", hex: "#3a2f3a" }, { name: "Peppercorn", hex: "#5b5b57" },
+  { name: "Sand Castle", hex: "#cbb48f" }, { name: "Williamsburg Gray", hex: "#8a8f8a" }, { name: "Brownwood", hex: "#6e5742" },
+  { name: "Chateau Green", hex: "#4f5f4d" }, { name: "Colonial Slate", hex: "#6a6e73" }, { name: "Driftwood", hex: "#9a8b73" },
+  { name: "Estate Gray", hex: "#5a5e62" }, { name: "Harbor Blue", hex: "#4a5a66" }, { name: "Onyx Black", hex: "#2b2b2d" },
+  { name: "Sierra Gray", hex: "#7c7b76" }, { name: "Slatestone Gray", hex: "#5f6266" }, { name: "Teak", hex: "#7b5e3b" },
+  { name: "Terra Cotta", hex: "#9c5a44" },
+];
 const personaByName = (n) => PERSONAS.find((p) => p.name === n) || PERSONAS[0];
 const personaInitials = (n) => String(n || "AL").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const SEED_PRICES = [
@@ -1536,6 +1546,8 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [propOpen, setPropOpen] = useState(false);  // homeowner proposal presentation view
+  const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
   const [timerView, setTimerView] = useState("");   // "" | "timer" | "closeout" — on-site per-phase time audit
   const [jobCrew, setJobCrew] = useState(3);         // default crew size; each phase defaults to this
   const [, setNowTick] = useState(0);                // 1s heartbeat to re-render running phase clocks
@@ -3163,10 +3175,27 @@ function App() {
   const tradeCostOf = (t) => { const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0); const matTax = Math.round(matTotal * (num(t.taxRate) || 0)); const labor = Math.round((num(t.laborHours) || 0) * (num(t.laborRate) || 0)); return labor + matTotal + matTax + (num(t.equipment) || 0); };
   const combinedCostOf = (trades) => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
   const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // ===== PART 2: HOMEOWNER PROPOSAL (presentation only; signing is behind the legal gate) =====
+  const tierWarranty = (tier) => { const t = String(tier || "").toLowerCase(); if (t.indexOf("best") >= 0) return "Lifetime workmanship + full manufacturer system warranty — our longest coverage."; if (t.indexOf("good") >= 0) return "Manufacturer standard shingle warranty + our workmanship guarantee."; return "Extended manufacturer system warranty + our workmanship guarantee."; };
+  // Whole-job good/better/best built from the PRIMARY trade's local options; each tier prices
+  // the WHOLE job with that primary material. Homeowner-facing: price + value only, never the buildup.
+  const proposalTiers = () => {
+    if (!estResult || !estResult.trades || !estResult.trades.length) return [];
+    const trades = estResult.trades, combined = combinedCostOf(trades), primary = trades[0];
+    const opts = (primary.primaryOptions || []).filter((o) => num(o.cost) > 0);
+    if (!opts.length) return [{ tier: "Your price", name: primary.title || "Complete project", why: "", price: sellOf(combined, estMargin), warranty: tierWarranty("better"), url: "" }];
+    const primaryLine = (primary.items && primary.items[0]) ? num(primary.items[0].cost) : 0;
+    return opts.slice(0, 3).map((o) => ({ tier: o.tier, name: o.name, why: o.why, price: sellOf(combined - primaryLine + num(o.cost), estMargin), warranty: tierWarranty(o.tier), url: o.url }));
+  };
+  const proposalScopeBullets = () => (estResult && estResult.trades ? estResult.trades.map((t) => { const m = (houseScope[t.tradeKey] && houseScope[t.tradeKey] !== true) ? String(houseScope[t.tradeKey]) : ""; return (t.label || t.title) + (m ? " — " + m : ""); }) : []);
+  const setProposalColor = (name) => setEstResult((r) => r ? { ...r, color: name } : r);
+  const setProposalTier = (tier) => setEstResult((r) => r ? { ...r, proposalTier: tier } : r);
+  const openProposal = () => { persistCurrent(); setPropOpen(true); };
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
     estMargin: estMargin, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
+    color: (estResult && estResult.color) || "", proposalTier: (estResult && estResult.proposalTier) || "",
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async (extra) => {
@@ -3191,7 +3220,7 @@ function App() {
     setEstMargin(num(p.estMargin) || 30); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
-    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [] });
+    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], color: p.color || "", proposalTier: p.proposalTier || "" });
   };
   const deleteSavedEstimate = async (id) => {
     const all = await estStore.remove(id); setEstimates(all);
@@ -5401,6 +5430,7 @@ function App() {
                     <button className="btn ghost grow1" onClick={() => { persistCurrent(); setEstResult(null); }}>← Back to scope</button>
                     <button className="btn ghost grow1" onClick={startNewEstimate}>Start new estimate</button>
                   </div>
+                  <button className="btn primary full" style={{ marginBottom: 4 }} onClick={openProposal}>📄 Present proposal to homeowner</button>
                   <button className="btn ghost full" style={{ marginBottom: 4 }} onClick={() => { persistCurrent(); openTimer(); }}>⏱ Track time on this job <span className="hint">log actual hours per phase</span></button>
                   {/* customer + address — identify the saved estimate (auto-saves) */}
                   <section className="card" style={{ marginBottom: 4 }}>
@@ -5726,6 +5756,112 @@ function App() {
           </div>
         </div>
       )}
+
+      {me.role === "contractor" && tab === "estimator" && propOpen && estResult && estResult.trades && (() => {
+        const tiers = proposalTiers();
+        const chosen = estResult.proposalTier || (tiers.length === 3 ? tiers[1].tier : (tiers[0] && tiers[0].tier));
+        const who = estCustomer.trim() || "the homeowner";
+        return (
+          <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "#f4f6f8", overflowY: "auto" }}>
+            <div style={{ maxWidth: 560, margin: "0 auto", padding: 14, paddingBottom: 40 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {personaFace(curPersona)}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="h1" style={{ margin: 0 }}>Your Roofing Proposal</div>
+                  <div className="hint">Caza Contractors · prepared for {who}{estAddress.trim() ? " · " + estAddress.trim() : ""}</div>
+                </div>
+                <button className="btn ghost" onClick={() => setPropOpen(false)}>✕</button>
+              </div>
+
+              {/* INSPECTION PHOTOS — first-class */}
+              <section className="card" style={{ marginTop: 10 }}>
+                <div className="h2">What we found on your roof</div>
+                {whPhotos.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
+                    {whPhotos.map((p, i) => (<div key={i}><img src={p} alt={"Inspection " + (i + 1)} style={{ width: "100%", borderRadius: 10, display: "block" }} /></div>))}
+                    <p className="hint">Photos of your actual roof taken at inspection.</p>
+                  </div>
+                ) : <p className="hint">Add inspection photos on the job (📷 Photo) to show the homeowner the real condition.</p>}
+              </section>
+
+              {/* TIERS — big, value + price, middle highlighted */}
+              <section className="card" style={{ marginTop: 10 }}>
+                <div className="h2">Choose your option</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+                  {tiers.map((tr, i) => {
+                    const popular = tiers.length === 3 && i === 1;
+                    const on = chosen === tr.tier;
+                    return (
+                      <div key={i} style={{ border: "2px solid " + (on ? "#0a7d36" : popular ? "#d8b24a" : "#e0e4e8"), borderRadius: 14, padding: 14, background: on ? "#f0faf3" : "#fff", position: "relative" }}>
+                        {popular && <div style={{ position: "absolute", top: -10, left: 14, background: "#d8b24a", color: "#3a2c00", fontSize: 11, fontWeight: 800, padding: "2px 10px", borderRadius: 8 }}>MOST POPULAR</div>}
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".5px", color: "#6a737d" }}>{tr.tier}</div>
+                          <div style={{ marginLeft: "auto", fontSize: 26, fontWeight: 800 }}>{$0(tr.price)}</div>
+                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 16, marginTop: 2 }}>{tr.name}</div>
+                        {tr.why && <div className="hint" style={{ marginTop: 2 }}>{tr.why}</div>}
+                        <div style={{ fontSize: 12.5, color: "#2F4A39", marginTop: 6 }}>🛡 {tr.warranty}</div>
+                        <button className={"btn " + (on ? "primary" : "ghost") + " full"} style={{ marginTop: 10 }} onClick={() => setProposalTier(tr.tier)}>{on ? "✓ Selected" : "Choose this"}</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* COLOR SELECTOR — tap to pick, locks to the proposal */}
+              <section className="card" style={{ marginTop: 10 }}>
+                <div className="h2">Pick your color {estResult.color ? <span className="hint">· {estResult.color}</span> : ""}</div>
+                <p className="hint" style={{ marginTop: -2 }}>Owens Corning Duration. Tap to choose.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 8 }}>
+                  {OC_DURATION_COLORS.map((c) => {
+                    const on = estResult.color === c.name;
+                    return (
+                      <button key={c.name} onClick={() => setProposalColor(c.name)} style={{ border: on ? "3px solid #0a7d36" : "1px solid #ccd2d8", borderRadius: 10, padding: 0, overflow: "hidden", cursor: "pointer", background: "#fff" }}>
+                        <div style={{ height: 40, background: c.hex }} />
+                        <div style={{ fontSize: 10.5, padding: "3px 2px", fontWeight: on ? 800 : 500 }}>{on ? "✓ " : ""}{c.name}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* SCOPE — plain language, itemized expandable (no costs) */}
+              <section className="card" style={{ marginTop: 10 }}>
+                <div className="h2">What's included</div>
+                <ul className="bid-inc" style={{ marginTop: 4 }}>
+                  {proposalScopeBullets().map((b, i) => (<li key={i}>{b}</li>))}
+                  <li>Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep).</li>
+                  <li>Licensed &amp; insured · workmanship guaranteed.</li>
+                </ul>
+                <button className="btn ghost full" onClick={() => setPropScopeOpen((o) => !o)}>{propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"}</button>
+                {propScopeOpen && (
+                  <div style={{ marginTop: 8 }}>
+                    {estResult.trades.map((t, ti) => (
+                      <div key={ti} style={{ marginBottom: 8 }}>
+                        <div className="seclabel">{t.label || t.title}</div>
+                        {(t.items || []).map((it, i) => (<div key={i} className="costrow"><span>{it.name}</span><b className="hint">{it.qty} {it.unit}</b></div>))}
+                      </div>
+                    ))}
+                    <p className="hint">Quantities shown for transparency. Final materials per the selected option.</p>
+                  </div>
+                )}
+              </section>
+
+              {/* TRUST */}
+              <section className="card" style={{ marginTop: 10 }}>
+                <div className="h2">Why Caza Contractors</div>
+                <p className="body" style={{ marginTop: 2 }}>A family roofing business — named for AL, the grandfather who started it. Fully licensed and insured, with a workmanship guarantee behind every job. We use full manufacturer systems (not just shingles) so your warranty actually holds.</p>
+              </section>
+
+              {/* SIGN — deferred behind the legal-review gate */}
+              <div style={{ marginTop: 12, padding: "10px 12px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12" }}>
+                ✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option{estResult.color ? " and color (" + estResult.color + ")" : ""} are saved with the estimate.
+              </div>
+              <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => { persistCurrent(); setPropOpen(false); }}>Done</button>
+            </div>
+          </div>
+        );
+      })()}
 
       {me.role === "contractor" && tab === "work" && !overlay && (
         <main className="page">
