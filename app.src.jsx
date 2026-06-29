@@ -202,8 +202,23 @@ const TIER_OPTIONS = {
     better: ["Vermont unfading gray", "Buckingham Virginia slate", "Vermont unfading green"],
     best: ["Vermont unfading purple / mottled", "Spanish premium slate", "Monson Maine slate"],
   },
+  decking: {
+    good: ["PT pine 5/4", "Pressure-treated SYP", "Cedar decking"],
+    better: ["Trex Enhance", "TimberTech PRO", "Fiberon Good Life"],
+    best: ["Trex Transcend", "TimberTech AZEK", "Fiberon Concordia"],
+  },
+  flooringtile: {
+    good: ["Ceramic tile (builder)", "Porcelain 12x24", "MSI ceramic"],
+    better: ["Porcelain wood-look plank", "Daltile porcelain", "Marazzi porcelain"],
+    best: ["Large-format porcelain", "Natural stone (travertine/marble)", "Porcelain slab"],
+  },
+  flooringlvp: {
+    good: ["LVP 12mil (builder)", "COREtec One", "NuCore"],
+    better: ["LVP 20mil rigid core", "COREtec Pro Plus", "Engineered hardwood 3/8"],
+    best: ["LVP 28mil / SPC premium", "Solid hardwood 3/4 oak", "Engineered wide-plank 5/8"],
+  },
 };
-const TIER_CATS = [{ key: "shingle", label: "Shingles" }, { key: "standingseam", label: "Standing seam" }, { key: "composite", label: "Composite" }, { key: "slate", label: "Slate" }, { key: "siding", label: "Siding" }, { key: "windows", label: "Windows" }];
+const TIER_CATS = [{ key: "shingle", label: "Shingles" }, { key: "standingseam", label: "Standing seam" }, { key: "composite", label: "Composite" }, { key: "slate", label: "Slate" }, { key: "siding", label: "Siding" }, { key: "windows", label: "Windows" }, { key: "decking", label: "Decking" }, { key: "flooringtile", label: "Tile floor" }, { key: "flooringlvp", label: "LVP / wood" }];
 // Which tier-pref category a trade+material falls in (null = no presets for it).
 function tierPrefCategory(tradeKey, sys) {
   if (tradeKey === "roofing") {
@@ -215,6 +230,8 @@ function tierPrefCategory(tradeKey, sys) {
   }
   if (tradeKey === "siding") return "siding";
   if (tradeKey === "windows") return "windows";
+  if (tradeKey === "deck") return "decking";
+  if (tradeKey === "flooring") { const s = (sys || "").toLowerCase(); return /tile|porcelain|ceramic|stone/.test(s) ? "flooringtile" : "flooringlvp"; }
   return null;
 }
 // Which color line a trade+material uses (null = no color selector for this trade).
