@@ -1730,6 +1730,9 @@ function App() {
   const [whPhotos, setWhPhotos] = useState([]);    // jobsite photos (Photo button)
   const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
   const [alMsgs, setAlMsgs] = useState([]);        // house AL chat thread [{role:"ai"|"me", text}]
+  const alMsgsRef = useRef([]);                    // live mirror of alMsgs — the hands-free loop runs in stale closures, so history must come from the ref, not the captured state
+  const setAlThread = (next) => { alMsgsRef.current = next; setAlMsgs(next); };
+  const alSendRef = useRef(null);                  // latest alSend — the loop calls this so each turn reads CURRENT state (scope/dims/context), not the session-start closure
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
@@ -2688,6 +2691,7 @@ function App() {
     (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") +
     "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" +
     "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " +
+    "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " +
     "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " +
     "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
@@ -2857,7 +2861,7 @@ function App() {
   // back (awaited), then reopen the mic for the next turn. Readback-before-anything-commits.
   const handleTurnText = async (text) => {
     micMutedRef.current = true; setListening(false);
-    try { await alSend(text); } catch (e) {}
+    try { await (alSendRef.current || alSend)(text); } catch (e) {} // latest alSend → current scope/dims/history
     if (sessionRef.current) { micMutedRef.current = false; recordTurn(); }
   };
   const startVoiceSession = async () => {
@@ -2896,15 +2900,15 @@ function App() {
   const alSend = async (textArg) => {
     const text = (textArg != null ? textArg : alInput).trim();
     if (!text || alBusy) return;
-    const msgs = [...alMsgs, { role: "me", text: text }];
-    setAlMsgs(msgs); setAlInput(""); setAlBusy(true);
+    const msgs = [...alMsgsRef.current, { role: "me", text: text }]; // ref = live history (loop closures are stale)
+    setAlThread(msgs); setAlInput(""); setAlBusy(true);
     try {
       const history = msgs.map((m) => (m.role === "ai" ? "AL" : "CONTRACTOR") + ": " + m.text).join("\n");
       const userText = AL_HOUSE_SYS(alContext(), voiceRef.current) + "\n\nCONVERSATION SO FAR:\n" + history + "\n\nReply now as AL — output ONLY the JSON object, nothing before or after.";
       const reply = await callClaude([{ role: "user", content: [{ type: "text", text: userText }] }]);
       let d; try { d = parseJSON(reply); } catch (e) { d = { message: (reply || "").replace(/```json|```/g, "").trim().slice(0, 400) }; }
       const alText = String(d.message || "Got it.");
-      setAlMsgs([...msgs, { role: "ai", text: alText }]);
+      setAlThread([...msgs, { role: "ai", text: alText }]);
       // VOICE-DRIVES-STATE: AL's understood trade selections write the SAME state the buttons set.
       if (Array.isArray(d.select) && d.select.length) {
         d.select.forEach((s) => {
@@ -2943,10 +2947,11 @@ function App() {
       if (d.save === true && Object.keys(houseScope).length && estBusy !== "run" && !(estResult && estResult.trades && estResult.trades.length)) { buildUnifiedEstimate(); }
       return;
     } catch (e) {
-      setAlMsgs([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
+      setAlThread([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
     }
     setAlBusy(false);
   };
+  alSendRef.current = alSend; // keep the loop pointed at the freshest alSend (current state)
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" +
     "- Field shingles (squares): (Area sqft x 1.12) / 100, round up to whole square.\n" +
@@ -3403,7 +3408,7 @@ function App() {
   const startNewEstimate = async () => {
     await persistCurrent();
     setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstStatus("draft");
-    setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlMsgs([]);
+    setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
   const addDimRow = (label, unit) => setEstDimRows((d) => [...d, { id: rid(), label: label || "", value: "", unit: unit || "" }]);

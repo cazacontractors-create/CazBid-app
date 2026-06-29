@@ -4687,6 +4687,12 @@ function App() {
   const [whPhotos, setWhPhotos] = useState([]); // jobsite photos (Photo button)
   const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
   const [alMsgs, setAlMsgs] = useState([]); // house AL chat thread [{role:"ai"|"me", text}]
+  const alMsgsRef = useRef([]); // live mirror of alMsgs — the hands-free loop runs in stale closures, so history must come from the ref, not the captured state
+  const setAlThread = next => {
+    alMsgsRef.current = next;
+    setAlMsgs(next);
+  };
+  const alSendRef = useRef(null); // latest alSend — the loop calls this so each turn reads CURRENT state (scope/dims/context), not the session-start closure
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
@@ -6362,7 +6368,7 @@ function App() {
   };
   const AL_HOUSE_SYS = (ctx, voice) => {
     const tradeMenu = HOUSE_STATES.map(s => CAT_LABEL[s.key] + ": " + HOUSE_HOTSPOTS.filter(h => h.state === s.key).map(h => h.label + " (key=" + h.trade + ")").join(", ")).join("\n");
-    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " + "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " + "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " + (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") + "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" + "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " + "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " + "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\"}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " + "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " + "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " + (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") + "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" + "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " + "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " + "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " + "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\"}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
   };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
@@ -6729,8 +6735,8 @@ function App() {
     micMutedRef.current = true;
     setListening(false);
     try {
-      await alSend(text);
-    } catch (e) {}
+      await (alSendRef.current || alSend)(text);
+    } catch (e) {} // latest alSend → current scope/dims/history
     if (sessionRef.current) {
       micMutedRef.current = false;
       recordTurn();
@@ -6799,11 +6805,11 @@ function App() {
   const alSend = async textArg => {
     const text = (textArg != null ? textArg : alInput).trim();
     if (!text || alBusy) return;
-    const msgs = [...alMsgs, {
+    const msgs = [...alMsgsRef.current, {
       role: "me",
       text: text
-    }];
-    setAlMsgs(msgs);
+    }]; // ref = live history (loop closures are stale)
+    setAlThread(msgs);
     setAlInput("");
     setAlBusy(true);
     try {
@@ -6825,7 +6831,7 @@ function App() {
         };
       }
       const alText = String(d.message || "Got it.");
-      setAlMsgs([...msgs, {
+      setAlThread([...msgs, {
         role: "ai",
         text: alText
       }]);
@@ -6891,13 +6897,14 @@ function App() {
       }
       return;
     } catch (e) {
-      setAlMsgs([...msgs, {
+      setAlThread([...msgs, {
         role: "ai",
         text: "Hmm, that one didn't go through — mind trying again?"
       }]);
     }
     setAlBusy(false);
   };
+  alSendRef.current = alSend; // keep the loop pointed at the freshest alSend (current state)
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" + "- Field shingles (squares): (Area sqft x 1.12) / 100, round up to whole square.\n" + "- Starter (bundles): (Eaves LF x 1.10) / 100, round up to bundle.\n" + "- Hip/Ridge caps (bundles): ((Ridges LF + Hips LF) x 1.10) / 30, round up to bundle.\n" + "- Ice & water (rolls): ((Eaves x 2) + Valleys + Flashing + StepFlash) / 66, round up.\n" + "- Drip edge (10ft pieces): (Total eave+rake LF x 1.15) / 10, round up.\n" + "- W-valley 14in (10ft pieces): Valleys LF / 50, round up.\n" + "- Step flashing (bundles/pieces): StepFlash LF / 25, round up.\n";
   // ---- AI trade builder (Feature A) helpers ----
@@ -7858,7 +7865,7 @@ function App() {
     setWhPhotos([]);
     setActiveTrade(null);
     setSelStep("category");
-    setAlMsgs([]);
+    setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
   const addDimRow = (label, unit) => setEstDimRows(d => [...d, {
