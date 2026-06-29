@@ -122,6 +122,42 @@ const CERTAINTEED_COLORS = [
   { name: "Coastal Blue", hex: "#4a6275" }, { name: "Pacific Blue", hex: "#34566e" }, { name: "Espresso", hex: "#3b2f28" },
   { name: "Flagstone", hex: "#5a5f63" },
 ];
+// Shingle color lines BY BRAND (so colors follow the tier's actual manufacturer).
+const GAF_HDZ_COLORS = [
+  { name: "Charcoal", hex: "#3b3d40" }, { name: "Pewter Gray", hex: "#6f7378" }, { name: "Weathered Wood", hex: "#7a6a52" },
+  { name: "Barkwood", hex: "#5b4a39" }, { name: "Shakewood", hex: "#a98f6b" }, { name: "Slate", hex: "#5a5f64" },
+  { name: "Birchwood", hex: "#b9a781" }, { name: "Hickory", hex: "#8a7152" }, { name: "Hunter Green", hex: "#2e4636" },
+  { name: "Patriot Red", hex: "#6e2b27" }, { name: "Williamsburg Slate", hex: "#54585d" }, { name: "Mission Brown", hex: "#4b382a" },
+  { name: "Golden Amber", hex: "#9a7240" }, { name: "Biscayne Blue", hex: "#34526a" }, { name: "Oyster Gray", hex: "#9a9890" },
+  { name: "Appalachian Sky", hex: "#6b7a86" },
+];
+const CT_LANDMARK_COLORS = [
+  { name: "Moire Black", hex: "#2c2d2f" }, { name: "Charcoal Black", hex: "#3a3c3f" }, { name: "Georgetown Gray", hex: "#6e7176" },
+  { name: "Pewter", hex: "#8a8d90" }, { name: "Cobblestone Gray", hex: "#7c7e80" }, { name: "Weathered Wood", hex: "#7a6a52" },
+  { name: "Heather Blend", hex: "#6a5d5a" }, { name: "Burnt Sienna", hex: "#7c3f2c" }, { name: "Resawn Shake", hex: "#5a4a3b" },
+  { name: "Driftwood", hex: "#9a8b73" }, { name: "Colonial Slate", hex: "#6a6e73" }, { name: "Hunter Green", hex: "#2e4636" },
+  { name: "Granite Gray", hex: "#6f7377" }, { name: "Silver Birch", hex: "#b3ac9c" }, { name: "Sunrise Cedar", hex: "#8a5a3b" },
+  { name: "Atlantic Blue", hex: "#34526a" },
+];
+// Color line from the chosen PRODUCT name (tier's brand), falling back to material type.
+function colorLineForProduct(name, tradeKey, mat) {
+  const s = (String(name || "") + " " + String(mat || "")).toLowerCase();
+  if (tradeKey === "roofing") {
+    if (/\bag\b|ag panel|ag-panel|corrugated|exposed.?fastener|r-?panel|u-?panel|\bsmp\b/.test(s)) return { key: "smp", label: "SMP — AG panel colors", colors: SMP_COLORS };
+    if (/standing seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return { key: "kynar", label: "Kynar — metal colors", colors: KYNAR_COLORS };
+    if (/tpo|epdm|flat|membrane/.test(s)) return null;
+    if (/\bgaf\b|timberline|\bhdz\b|grand sequoia|camelot/.test(s)) return { key: "gaf", label: "GAF Timberline colors", colors: GAF_HDZ_COLORS };
+    if (/certainteed|landmark|grand manor|presidential/.test(s)) return { key: "ct", label: "CertainTeed Landmark colors", colors: CT_LANDMARK_COLORS };
+    return { key: "duration", label: "Owens Corning Duration colors", colors: OC_DURATION_COLORS };
+  }
+  return colorLineFor(tradeKey, mat);
+}
+// Curated Good/Better/Best product options the contractor can preset in Profile (roofing).
+const ROOF_TIER_OPTIONS = {
+  good: ["GAF Timberline HDZ", "Owens Corning Oakridge", "CertainTeed Landmark", "Atlas Pinnacle Pristine", "IKO Cambridge"],
+  better: ["Owens Corning Duration", "CertainTeed Landmark PRO", "GAF Timberline HDZ (upgraded)", "Atlas StormMaster Shake", "Malarkey Highlander"],
+  best: ["GAF Grand Sequoia / Camelot II", "Owens Corning Berkshire", "CertainTeed Grand Manor / Presidential", "DaVinci composite slate", "Standing-seam metal"],
+};
 // Which color line a trade+material uses (null = no color selector for this trade).
 function colorLineFor(tradeKey, mat) {
   const m = String(mat || "").toLowerCase();
@@ -1493,7 +1529,7 @@ function HouseVisual({ view, selected, activeTrade, onChipTap, onChipRemove, onA
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
   const [profH, setProfH] = useState({ name: "", contact: "", town: "", address: "", bio: "", avatar: "" });
-  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [] });
+  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [], tierPrefs: {} });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
@@ -2075,9 +2111,9 @@ function App() {
     clearTimeout(profTimer.current);
     profTimer.current = setTimeout(() => pSet(PROFDRAFT_KEY, {
       h: profH,
-      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar },
+      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar, tierPrefs: profC.tierPrefs },
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async (role) => {
@@ -2904,7 +2940,7 @@ function App() {
   // Opus pre-flight + labor + calibration). Pure-ish: takes the scope/desc/dims/
   // photos as params and RETURNS the trade object (no setState) so the unified
   // flow can build one OR many trades into a single combined estimate.
-  const buildOneTrade = async ({ scope, desc, dims, photos, panelW, aiTrade }) => {
+  const buildOneTrade = async ({ scope, desc, dims, photos, panelW, aiTrade, tierPref }) => {
     {
       scope = scope || ""; desc = desc || ""; dims = dims || ""; photos = photos || []; panelW = panelW || 0; aiTrade = aiTrade || null;
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
@@ -2934,6 +2970,7 @@ function App() {
         "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map((m) => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" +
         "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
         "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" +
+        ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
         "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" +
         "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
@@ -3077,7 +3114,7 @@ function App() {
         const desc = scope + (type ? " (" + type + ")" : "");
         const aiT = aiTrades.find((x) => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
         try {
-          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT });
+          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (profC.tierPrefs && profC.tierPrefs[t]) || null });
           r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
           results.push(Object.assign({ tradeKey: t, label: label }, r));
         } catch (e) { results.push({ tradeKey: t, label: label, error: errMsg(e) }); }
@@ -5128,7 +5165,29 @@ function App() {
             <p className="hint" style={{ marginTop: -2 }}>AL leans on these as defaults in your estimates and good/better/best options.</p>
             <textarea className="desc" rows={3} value={profC.prefMaterials} onChange={(e) => setProfC({ ...profC, prefMaterials: e.target.value })}
               placeholder="e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum" />
-            <button className="btn primary full" disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
+
+            <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 12 }}>
+              <div className="seclabel">Roofing good / better / best lines <span className="hint">your tiers — AL uses these in estimates &amp; proposals</span></div>
+              {["good", "better", "best"].map((tier) => {
+                const cur = (profC.tierPrefs && profC.tierPrefs.roofing && profC.tierPrefs.roofing[tier]) || "";
+                const opts = ROOF_TIER_OPTIONS[tier];
+                const setTier = (val) => setProfC((p) => ({ ...p, tierPrefs: Object.assign({}, p.tierPrefs, { roofing: Object.assign({}, (p.tierPrefs || {}).roofing, { [tier]: val }) }) }));
+                return (
+                  <div key={tier} style={{ marginTop: 8 }}>
+                    <div style={{ fontWeight: 700, textTransform: "capitalize", fontSize: 13 }}>{tier}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {opts.map((o) => (
+                        <button key={o} className={"btn " + (cur === o ? "primary" : "ghost")} style={{ padding: "4px 9px", fontSize: 12 }} onClick={() => setTier(cur === o ? "" : o)}>{cur === o ? "✓ " : ""}{o}</button>
+                      ))}
+                    </div>
+                    <input className="in" style={{ marginTop: 4, width: "100%" }} value={opts.includes(cur) ? "" : cur} onChange={(e) => setTier(e.target.value)} placeholder="…or type your own line for this tier" />
+                  </div>
+                );
+              })}
+              <p className="hint" style={{ marginTop: 6 }}>Set these and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.</p>
+            </div>
+
+            <button className="btn primary full" style={{ marginTop: 12 }} disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
               {busy === "prof" ? "Saving…" : "Save preferences"}
             </button>
           </section>
@@ -5853,9 +5912,14 @@ function App() {
                 </div>
               </section>
 
-              {/* COLOR SELECTORS — one per trade, palette keyed to the material (Duration/Kynar/SMP/CertainTeed) */}
+              {/* COLOR SELECTORS — one per trade; palette follows the CHOSEN TIER'S brand/line (Duration/GAF/CertainTeed/Kynar/SMP) */}
               {(() => {
-                const lines = estResult.trades.map((t) => ({ t, line: colorLineFor(t.tradeKey, houseScope[t.tradeKey]) })).filter((x) => x.line);
+                const lines = estResult.trades.map((t, ti) => {
+                  // primary trade uses the picked tier's product name → its manufacturer's colors
+                  const chosenTierObj = (ti === 0 && chosen) ? tiers.find((x) => x.tier === chosen) : null;
+                  const product = (chosenTierObj && chosenTierObj.name) || (t.items && t.items[0] && t.items[0].name) || (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] : "");
+                  return { t, line: colorLineForProduct(product, t.tradeKey, houseScope[t.tradeKey]) };
+                }).filter((x) => x.line);
                 if (!lines.length) return null;
                 const colors = estResult.colors || {};
                 return (
