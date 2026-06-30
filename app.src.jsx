@@ -1638,7 +1638,7 @@ function HouseVisual({ view, selected, activeTrade, onChipTap, onChipRemove, onA
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
   const [profH, setProfH] = useState({ name: "", contact: "", town: "", address: "", bio: "", avatar: "" });
-  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [], tierPrefs: {} });
+  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [], tierPrefs: {}, mobBase: 350, mobTruckPerMi: 0.7 });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
@@ -1730,6 +1730,8 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [estMiles, setEstMiles] = useState(0); // round-trip delivery/mobilization miles (manual entry first)
+  const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
   const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
   const [propOpen, setPropOpen] = useState(false);  // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
@@ -2214,7 +2216,7 @@ function App() {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return;
     clearTimeout(estSaveTimer.current);
     estSaveTimer.current = setTimeout(() => { persistCurrent(); }, 600);
-  }, [estResult, estMargin, estCustomer, estAddress, estEmail, estStatus]);
+  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -2225,9 +2227,9 @@ function App() {
     clearTimeout(profTimer.current);
     profTimer.current = setTimeout(() => pSet(PROFDRAFT_KEY, {
       h: profH,
-      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar, tierPrefs: profC.tierPrefs },
+      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar, tierPrefs: profC.tierPrefs, mobBase: profC.mobBase, mobTruckPerMi: profC.mobTruckPerMi },
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs, profC.mobBase, profC.mobTruckPerMi]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async (role) => {
@@ -3253,7 +3255,7 @@ function App() {
       if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); if (voiceRef.current) speakAL("That didn't build — let's try again."); return; }
       setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1 });
       // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
-      if (voiceRef.current) { const price = sellOf(combinedCostOf(ok), estMargin); speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars."); }
+      if (voiceRef.current) { const price = sellOf(jobCostOf(ok), estMargin); speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars."); }
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
   };
@@ -3381,13 +3383,35 @@ function App() {
   const tradeCostOf = (t) => { const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0); const matTax = Math.round(matTotal * (num(t.taxRate) || 0)); const labor = Math.round((num(t.laborHours) || 0) * (num(t.laborRate) || 0)); return labor + matTotal + matTax + (num(t.equipment) || 0); };
   const combinedCostOf = (trades) => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
   const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // DELIVERY / MOBILIZATION — one job-level cost line (cost-true; gross margin lands on top
+  // like every other cost). base + RT_miles x crew x (burdened $/min) + RT_miles x truck $/mi.
+  // crew = the most workers on any one trade (who travel); burden = labor-weighted burdened
+  // $/hr across all trades (so a single-trade job uses exactly that trade's crew + rate).
+  const mobRates = () => ({
+    base: (profC.mobBase == null || profC.mobBase === "") ? 350 : (num(profC.mobBase) || 0),
+    truck: (profC.mobTruckPerMi == null || profC.mobTruckPerMi === "") ? 0.7 : (num(profC.mobTruckPerMi) || 0),
+  });
+  const mobilizeCostOf = (trades) => {
+    if (!estMobOn) return 0;
+    const list = trades || [];
+    if (!list.length) return 0;
+    const { base, truck } = mobRates();
+    const mi = Math.max(0, num(estMiles) || 0);
+    const crew = list.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
+    const totHrs = list.reduce((a, t) => a + (num(t.laborHours) || 0), 0);
+    const totLab = list.reduce((a, t) => a + (num(t.laborHours) || 0) * (num(t.laborRate) || 0), 0);
+    const burden = totHrs > 0 ? totLab / totHrs : (num(list[0].laborRate) || 0);
+    return Math.round(base + mi * crew * (burden / 60) + mi * truck);
+  };
+  // Full job cost = trades + mobilization. Margin is applied to THIS via sellOf.
+  const jobCostOf = (trades) => combinedCostOf(trades) + mobilizeCostOf(trades);
   // ===== PART 2: HOMEOWNER PROPOSAL (presentation only; signing is behind the legal gate) =====
   const tierWarranty = (tier) => { const t = String(tier || "").toLowerCase(); if (t.indexOf("best") >= 0) return "Lifetime workmanship + full manufacturer system warranty — our longest coverage."; if (t.indexOf("good") >= 0) return "Manufacturer standard shingle warranty + our workmanship guarantee."; return "Extended manufacturer system warranty + our workmanship guarantee."; };
   // Whole-job good/better/best built from the PRIMARY trade's local options; each tier prices
   // the WHOLE job with that primary material. Homeowner-facing: price + value only, never the buildup.
   const proposalTiers = () => {
     if (!estResult || !estResult.trades || !estResult.trades.length) return [];
-    const trades = estResult.trades, combined = combinedCostOf(trades), primary = trades[0];
+    const trades = estResult.trades, combined = jobCostOf(trades), primary = trades[0];
     const opts = (primary.primaryOptions || []).filter((o) => num(o.cost) > 0);
     if (!opts.length) return [{ tier: "Your price", name: primary.title || "Complete project", why: "", price: sellOf(combined, estMargin), warranty: tierWarranty("better"), url: "" }];
     const primaryLine = (primary.items && primary.items[0]) ? num(primary.items[0].cost) : 0;
@@ -3400,14 +3424,14 @@ function App() {
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
-    estMargin: estMargin, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
+    estMargin: estMargin, estMiles: estMiles, estMobOn: estMobOn, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
     colors: (estResult && estResult.colors) || {}, proposalTier: (estResult && estResult.proposalTier) || "",
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async (extra) => {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
     const id = estId || ("est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
-    const price = sellOf(combinedCostOf(estResult.trades), estMargin);
+    const price = sellOf(jobCostOf(estResult.trades), estMargin);
     const title = (estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades");
     const rec = Object.assign({
       id: id, customerName: estCustomer.trim(), jobAddress: estAddress.trim(), customerEmail: estEmail.trim(), status: estStatus,
@@ -3423,7 +3447,7 @@ function App() {
     if (!rec || !rec.payload) return;
     const p = rec.payload;
     setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
-    setEstMargin(num(p.estMargin) || 30); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
+    setEstMargin(num(p.estMargin) || 30); setEstMiles(num(p.estMiles) || 0); setEstMobOn(p.estMobOn === true); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
     setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "" });
@@ -3445,6 +3469,7 @@ function App() {
   const startNewEstimate = async () => {
     await persistCurrent();
     setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
+    setEstMiles(0); setEstMobOn(true);
     setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
@@ -5257,6 +5282,13 @@ function App() {
                 onChange={(e) => setProfC({ ...profC, radius: num(e.target.value) })} />
               <div className="bidends"><span>5 mi</span><span className="hint">how far you'll travel for jobs</span><span>100 mi</span></div>
             </label>
+            {/* COST BOOK — delivery / mobilization rates (used by every estimate's auto charge) */}
+            <div className="seclabel" style={{ marginTop: 6 }}>Delivery / mobilization rates <span className="hint">cost book — your real costs, margin lands on top</span></div>
+            <div className="estfields">
+              <label className="estf"><span>Mobilization base $</span><input type="number" min="0" value={profC.mobBase} onChange={(e) => setProfC({ ...profC, mobBase: num(e.target.value) })} placeholder="350" /></label>
+              <label className="estf"><span>Truck $/mile</span><input type="number" min="0" step="0.05" value={profC.mobTruckPerMi} onChange={(e) => setProfC({ ...profC, mobTruckPerMi: num(e.target.value) })} placeholder="0.70" /></label>
+            </div>
+            <p className="hint" style={{ marginTop: 2 }}>Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate.</p>
             <label className="fld"><span>About your company</span>
               <textarea className="desc" rows={3} value={profC.bio} onChange={(e) => setProfC({ ...profC, bio: e.target.value })}
                 placeholder="e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will." /></label>
@@ -5654,9 +5686,14 @@ function App() {
             (() => {
               const trades = estResult.trades || [];
               const tradeCost = (t) => { const matTotal = t.items.reduce((a, b) => a + (num(b.cost) || 0), 0); const matTax = Math.round(matTotal * t.taxRate); const labor = Math.round(t.laborHours * t.laborRate); return { matTotal, matTax, labor, cost: labor + matTotal + matTax + t.equipment }; };
-              const combined = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+              const tradesCost = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+              const mob = mobilizeCostOf(trades);
+              const combined = tradesCost + mob;
               const sell = Math.round(combined / (1 - estMargin / 100) / 25) * 25;
               const profit = sell - combined;
+              const mr = mobRates();
+              const mobMiles = Math.max(0, num(estMiles) || 0);
+              const mobCrew = trades.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
               return (
                 <>
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
@@ -5774,13 +5811,26 @@ function App() {
                   })}
 
                   <section className="card">
-                    {trades.length > 1 && (
-                      <div className="costbox">
-                        {trades.map((t, ti) => (<div className="costrow" key={ti}><span>{t.label || t.title}</span><b>{$0(tradeCost(t).cost)}</b></div>))}
-                        <div className="costrow total"><span>Combined cost</span><b>{$0(combined)}</b></div>
+                    <div className="costbox">
+                      {trades.length > 1 && trades.map((t, ti) => (<div className="costrow" key={ti}><span>{t.label || t.title}</span><b>{$0(tradeCost(t).cost)}</b></div>))}
+                      {trades.length > 1 && <div className="costrow"><span>Trades subtotal</span><b>{$0(tradesCost)}</b></div>}
+                      {/* Delivery / mobilization — one round trip; cost-true, gross margin lands on top */}
+                      <div className="costrow" style={{ alignItems: "center", flexWrap: "wrap", rowGap: 4 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <input type="checkbox" checked={estMobOn} onChange={(e) => setEstMobOn(e.target.checked)} title="Include the delivery / mobilization charge on this job" />
+                          Delivery / mobilization
+                          <span className="hint" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            · round-trip <input type="number" min="0" value={estMiles} disabled={!estMobOn} onChange={(e) => setEstMiles(num(e.target.value))} style={{ width: 56, padding: "2px 6px", border: "1px solid #dde3ea", borderRadius: 6, opacity: estMobOn ? 1 : 0.5 }} /> mi
+                          </span>
+                        </span>
+                        <b>{$0(mob)}</b>
                       </div>
-                    )}
-                    <div className="marginbox" style={{ marginTop: trades.length > 1 ? 12 : 0 }}>
+                      {estMobOn && (
+                        <div className="costrow"><span className="hint">↳ {$0(mr.base)} base + {mobMiles} mi × {mobCrew} crew drive-time + {mobMiles} mi × ${mr.truck.toFixed(2)}/mi truck · rates in Profile → cost book</span><b></b></div>
+                      )}
+                      <div className="costrow total"><span>{trades.length > 1 ? "Total job cost" : "Job cost"}</span><b>{$0(combined)}</b></div>
+                    </div>
+                    <div className="marginbox" style={{ marginTop: 12 }}>
                       <div className="marginhead"><span>Gross margin</span><span className="marginpct">{estMargin}%</span></div>
                       <input className="bidslider" type="range" min="15" max="50" step="1" value={estMargin} style={{ ["--pct"]: ((estMargin - 15) / 35 * 100) + "%" }} onChange={(e) => setEstMargin(num(e.target.value))} />
                       <div className="bidends"><span>15%</span><span className="hint">profit {$0(profit)}</span><span>50%</span></div>

@@ -584,6 +584,633 @@ const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price boo
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
+const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
+const PERSONA_SPEED_KEY = "cazbid-persona-speeds-v1"; // per-persona TTS speed { name: 0.7..1.2 }
+// Assistant PERSONAS — name + ElevenLabs voiceId + avatar (blank for now → initials fallback).
+// AL is the DEFAULT + home base; others are alternates. Voice IDs are not secret.
+const PERSONAS = [{
+  name: "AL",
+  voiceId: "NNl6r8mD7vthiJatiJt1",
+  avatar: "",
+  sex: "m",
+  note: "default"
+}, {
+  name: "Bill",
+  voiceId: "pqHfZKP75CvOlQylNhV4",
+  avatar: "",
+  sex: "m"
+}, {
+  name: "Adam",
+  voiceId: "pNInz6obpgDQGcFmaJgB",
+  avatar: "",
+  sex: "m"
+}, {
+  name: "Adam 2",
+  voiceId: "IRHApOXLvnW57QJPQH2P",
+  avatar: "",
+  sex: "m"
+}, {
+  name: "Daniel",
+  voiceId: "onwK4e9ZLuTAKqWW03F9",
+  avatar: "",
+  sex: "m"
+}, {
+  name: "Brian",
+  voiceId: "nPczCjzI2devNBz1zQrb",
+  avatar: "",
+  sex: "m"
+}, {
+  name: "Brittney",
+  voiceId: "iNwc1Lv2YQLywnCvjfn1",
+  avatar: "",
+  sex: "f"
+}, {
+  name: "Luna",
+  voiceId: "6rOxfAnZpbM3VIEhFaeV",
+  avatar: "",
+  sex: "f"
+}, {
+  name: "Bella",
+  voiceId: "hpp4J3VqNfWAUOO0d1Us",
+  avatar: "",
+  sex: "f"
+}, {
+  name: "Jessica",
+  voiceId: "cgSgspJ2msm6clMCkdW9",
+  avatar: "",
+  sex: "f"
+}];
+// Owens Corning Duration shingle line (homeowner color selector). hex ≈ for the swatch;
+// confirm the live list against OC's current Duration colors when productizing.
+const OC_DURATION_COLORS = [{
+  name: "Desert Rose",
+  hex: "#9c6b5a"
+}, {
+  name: "Midnight Plum",
+  hex: "#3a2f3a"
+}, {
+  name: "Peppercorn",
+  hex: "#5b5b57"
+}, {
+  name: "Sand Castle",
+  hex: "#cbb48f"
+}, {
+  name: "Williamsburg Gray",
+  hex: "#8a8f8a"
+}, {
+  name: "Brownwood",
+  hex: "#6e5742"
+}, {
+  name: "Chateau Green",
+  hex: "#4f5f4d"
+}, {
+  name: "Colonial Slate",
+  hex: "#6a6e73"
+}, {
+  name: "Driftwood",
+  hex: "#9a8b73"
+}, {
+  name: "Estate Gray",
+  hex: "#5a5e62"
+}, {
+  name: "Harbor Blue",
+  hex: "#4a5a66"
+}, {
+  name: "Onyx Black",
+  hex: "#2b2b2d"
+}, {
+  name: "Sierra Gray",
+  hex: "#7c7b76"
+}, {
+  name: "Slatestone Gray",
+  hex: "#5f6266"
+}, {
+  name: "Teak",
+  hex: "#7b5e3b"
+}, {
+  name: "Terra Cotta",
+  hex: "#9c5a44"
+}];
+const personaByName = n => PERSONAS.find(p => p.name === n) || PERSONAS[0];
+const personaInitials = n => String(n || "AL").trim().split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
+// Kynar (PVDF) — standing-seam / architectural metal. SMP — exposed-fastener AG panels.
+// CertainTeed — siding. (hex ≈ for the swatch; confirm the live lines when productizing.)
+const KYNAR_COLORS = [{
+  name: "Regal White",
+  hex: "#f2f0e9"
+}, {
+  name: "Sandstone",
+  hex: "#d8c9a3"
+}, {
+  name: "Sierra Tan",
+  hex: "#b89c74"
+}, {
+  name: "Ash Gray",
+  hex: "#b6b8b5"
+}, {
+  name: "Slate Gray",
+  hex: "#6f7479"
+}, {
+  name: "Charcoal Gray",
+  hex: "#44474a"
+}, {
+  name: "Matte Black",
+  hex: "#2a2a2c"
+}, {
+  name: "Hartford Green",
+  hex: "#2f4a3a"
+}, {
+  name: "Colonial Red",
+  hex: "#7c2b25"
+}, {
+  name: "Burgundy",
+  hex: "#5a2230"
+}, {
+  name: "Medium Bronze",
+  hex: "#5a4a39"
+}, {
+  name: "Dark Bronze",
+  hex: "#3a3128"
+}, {
+  name: "Mansard Brown",
+  hex: "#4a3b30"
+}, {
+  name: "Patina Green",
+  hex: "#5e7d6e"
+}, {
+  name: "Copper Metallic",
+  hex: "#8a5a3b"
+}, {
+  name: "Regal Blue",
+  hex: "#2c3e57"
+}];
+const SMP_COLORS = [{
+  name: "Polar White",
+  hex: "#f4f4f0"
+}, {
+  name: "Light Stone",
+  hex: "#d9d2c0"
+}, {
+  name: "Tan",
+  hex: "#c9b48f"
+}, {
+  name: "Clay",
+  hex: "#b79b6e"
+}, {
+  name: "Burnished Slate",
+  hex: "#5a4636"
+}, {
+  name: "Brown",
+  hex: "#4b3a2b"
+}, {
+  name: "Charcoal",
+  hex: "#45484b"
+}, {
+  name: "Black",
+  hex: "#262627"
+}, {
+  name: "Gray",
+  hex: "#8a8d8f"
+}, {
+  name: "Hunter Green",
+  hex: "#2e4636"
+}, {
+  name: "Evergreen",
+  hex: "#283a2e"
+}, {
+  name: "Rustic Red",
+  hex: "#7a2f28"
+}, {
+  name: "Barn Red",
+  hex: "#6e231f"
+}, {
+  name: "Ocean Blue",
+  hex: "#2f4f6e"
+}, {
+  name: "Gallery Blue",
+  hex: "#3a5a78"
+}, {
+  name: "Copper Penny",
+  hex: "#9a5a36"
+}];
+const CERTAINTEED_COLORS = [{
+  name: "Snow White",
+  hex: "#f3f3ef"
+}, {
+  name: "Heritage Cream",
+  hex: "#e6dcc2"
+}, {
+  name: "Sterling Gray",
+  hex: "#9ea3a4"
+}, {
+  name: "Sandstone Beige",
+  hex: "#cbb89a"
+}, {
+  name: "Natural Clay",
+  hex: "#cdbfa6"
+}, {
+  name: "Savannah Wicker",
+  hex: "#c2a878"
+}, {
+  name: "Autumn Red",
+  hex: "#7c3a32"
+}, {
+  name: "Forest",
+  hex: "#2f4636"
+}, {
+  name: "Sage",
+  hex: "#8a9a82"
+}, {
+  name: "Charcoal",
+  hex: "#44474a"
+}, {
+  name: "Granite Gray",
+  hex: "#6f7377"
+}, {
+  name: "Mountain Cedar",
+  hex: "#6e5640"
+}, {
+  name: "Coastal Blue",
+  hex: "#4a6275"
+}, {
+  name: "Pacific Blue",
+  hex: "#34566e"
+}, {
+  name: "Espresso",
+  hex: "#3b2f28"
+}, {
+  name: "Flagstone",
+  hex: "#5a5f63"
+}];
+// Shingle color lines BY BRAND (so colors follow the tier's actual manufacturer).
+const GAF_HDZ_COLORS = [{
+  name: "Charcoal",
+  hex: "#3b3d40"
+}, {
+  name: "Pewter Gray",
+  hex: "#6f7378"
+}, {
+  name: "Weathered Wood",
+  hex: "#7a6a52"
+}, {
+  name: "Barkwood",
+  hex: "#5b4a39"
+}, {
+  name: "Shakewood",
+  hex: "#a98f6b"
+}, {
+  name: "Slate",
+  hex: "#5a5f64"
+}, {
+  name: "Birchwood",
+  hex: "#b9a781"
+}, {
+  name: "Hickory",
+  hex: "#8a7152"
+}, {
+  name: "Hunter Green",
+  hex: "#2e4636"
+}, {
+  name: "Patriot Red",
+  hex: "#6e2b27"
+}, {
+  name: "Williamsburg Slate",
+  hex: "#54585d"
+}, {
+  name: "Mission Brown",
+  hex: "#4b382a"
+}, {
+  name: "Golden Amber",
+  hex: "#9a7240"
+}, {
+  name: "Biscayne Blue",
+  hex: "#34526a"
+}, {
+  name: "Oyster Gray",
+  hex: "#9a9890"
+}, {
+  name: "Appalachian Sky",
+  hex: "#6b7a86"
+}];
+const CT_LANDMARK_COLORS = [{
+  name: "Moire Black",
+  hex: "#2c2d2f"
+}, {
+  name: "Charcoal Black",
+  hex: "#3a3c3f"
+}, {
+  name: "Georgetown Gray",
+  hex: "#6e7176"
+}, {
+  name: "Pewter",
+  hex: "#8a8d90"
+}, {
+  name: "Cobblestone Gray",
+  hex: "#7c7e80"
+}, {
+  name: "Weathered Wood",
+  hex: "#7a6a52"
+}, {
+  name: "Heather Blend",
+  hex: "#6a5d5a"
+}, {
+  name: "Burnt Sienna",
+  hex: "#7c3f2c"
+}, {
+  name: "Resawn Shake",
+  hex: "#5a4a3b"
+}, {
+  name: "Driftwood",
+  hex: "#9a8b73"
+}, {
+  name: "Colonial Slate",
+  hex: "#6a6e73"
+}, {
+  name: "Hunter Green",
+  hex: "#2e4636"
+}, {
+  name: "Granite Gray",
+  hex: "#6f7377"
+}, {
+  name: "Silver Birch",
+  hex: "#b3ac9c"
+}, {
+  name: "Sunrise Cedar",
+  hex: "#8a5a3b"
+}, {
+  name: "Atlantic Blue",
+  hex: "#34526a"
+}];
+// Composite (synthetic) and natural-slate color lines.
+const COMPOSITE_COLORS = [{
+  name: "Slate Gray",
+  hex: "#5a5f64"
+}, {
+  name: "Smoke Gray",
+  hex: "#7c7f82"
+}, {
+  name: "Mountain",
+  hex: "#6a6e6a"
+}, {
+  name: "Weathered Gray",
+  hex: "#8a8a82"
+}, {
+  name: "Aberdeen",
+  hex: "#5e5a52"
+}, {
+  name: "Brownstone",
+  hex: "#6e5742"
+}, {
+  name: "Castle Gray",
+  hex: "#676b6e"
+}, {
+  name: "Tahoe",
+  hex: "#4a5550"
+}, {
+  name: "Vineyard",
+  hex: "#5a4250"
+}, {
+  name: "Stonewood",
+  hex: "#7a6a55"
+}, {
+  name: "Charcoal Black",
+  hex: "#33353a"
+}, {
+  name: "Evergreen",
+  hex: "#2e4636"
+}, {
+  name: "Mulberry",
+  hex: "#5a2f3a"
+}, {
+  name: "Bark",
+  hex: "#4b3a2b"
+}, {
+  name: "Sterling",
+  hex: "#9a9d9f"
+}, {
+  name: "Driftwood",
+  hex: "#9a8b73"
+}];
+const SLATE_COLORS = [{
+  name: "Unfading Black",
+  hex: "#2b2c2e"
+}, {
+  name: "Gray-Black",
+  hex: "#3c3e41"
+}, {
+  name: "Unfading Gray",
+  hex: "#6f7377"
+}, {
+  name: "Weathering Gray-Green",
+  hex: "#6a7068"
+}, {
+  name: "Vermont Green (unfading)",
+  hex: "#3c4a3a"
+}, {
+  name: "Sea Green",
+  hex: "#5e6e5c"
+}, {
+  name: "Unfading Purple",
+  hex: "#4a3f4f"
+}, {
+  name: "Mottled Purple/Green",
+  hex: "#4e4a48"
+}, {
+  name: "Vermont Red",
+  hex: "#6e2f28"
+}, {
+  name: "Semi-Weathering Gray",
+  hex: "#7c7e80"
+}, {
+  name: "Buckingham Black",
+  hex: "#2f3033"
+}, {
+  name: "Spanish Gray",
+  hex: "#73767a"
+}, {
+  name: "Strata Gray",
+  hex: "#5f6266"
+}, {
+  name: "China Black",
+  hex: "#2a2b2d"
+}, {
+  name: "Mottled Gray/Black",
+  hex: "#4a4c4f"
+}, {
+  name: "Monson Black",
+  hex: "#303234"
+}];
+// Color line from the chosen PRODUCT name (tier's brand), falling back to material type.
+function colorLineForProduct(name, tradeKey, mat) {
+  const s = (String(name || "") + " " + String(mat || "")).toLowerCase();
+  if (tradeKey === "roofing") {
+    if (/ag panel|ag-panel|corrugated|exposed.?fastener|panel rib|rib panel|ribbed|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return {
+      key: "smp",
+      label: "SMP — AG panel colors",
+      colors: SMP_COLORS
+    };
+    if (/standing.?seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf|metal|steel/.test(s)) return {
+      key: "kynar",
+      label: "Kynar — metal colors",
+      colors: KYNAR_COLORS
+    };
+    if (/tpo|epdm|flat|membrane/.test(s)) return null;
+    if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return {
+      key: "composite",
+      label: "Composite colors",
+      colors: COMPOSITE_COLORS
+    };
+    if (/slate/.test(s)) return {
+      key: "slate",
+      label: "Slate colors",
+      colors: SLATE_COLORS
+    };
+    if (/\bgaf\b|timberline|\bhdz\b|grand sequoia|camelot/.test(s)) return {
+      key: "gaf",
+      label: "GAF Timberline colors",
+      colors: GAF_HDZ_COLORS
+    };
+    if (/certainteed|landmark|grand manor|presidential/.test(s)) return {
+      key: "ct",
+      label: "CertainTeed Landmark colors",
+      colors: CT_LANDMARK_COLORS
+    };
+    return {
+      key: "duration",
+      label: "Owens Corning Duration colors",
+      colors: OC_DURATION_COLORS
+    };
+  }
+  return colorLineFor(tradeKey, mat);
+}
+// Curated Good/Better/Best product options the contractor can preset in Profile, BY CATEGORY
+// (shingle vs standing seam are both roofing but different lines, so they're separate).
+const TIER_OPTIONS = {
+  shingle: {
+    good: ["GAF Timberline HDZ", "Owens Corning Oakridge", "CertainTeed Landmark", "Atlas Pinnacle Pristine", "IKO Cambridge"],
+    better: ["Owens Corning Duration", "CertainTeed Landmark PRO", "GAF Timberline HDZ (upgraded)", "Atlas StormMaster Shake", "Malarkey Highlander"],
+    best: ["GAF Grand Sequoia / Camelot II", "Owens Corning Berkshire", "CertainTeed Grand Manor / Presidential", "DaVinci composite slate", "Brava composite"]
+  },
+  standingseam: {
+    good: ["26ga SMP snap-lock", "ABC SL-16 (SMP)", "McElroy Meridian (SMP)"],
+    better: ["24ga Kynar snap-lock", "Englert S1000 (Kynar)", "Drexel snap-lock (Kynar)"],
+    best: ["24ga Kynar mechanical-lock", "Sheffield / Drexel mech-lock", "Heavy-gauge w/ striations (Kynar)"]
+  },
+  siding: {
+    good: ["CertainTeed MainStreet vinyl", "Mastic Ovation vinyl", "LP SmartSide lap"],
+    better: ["CertainTeed Monogram vinyl", "James Hardie HardiePlank", "Royal Estate vinyl"],
+    best: ["James Hardie Artisan", "CertainTeed Cedar Impressions", "Everlast composite"]
+  },
+  windows: {
+    good: ["Vinyl double-hung (builder)", "Silver Line 2900", "MI V3000"],
+    better: ["Andersen 100/200", "Pella 250", "Simonton 5500"],
+    best: ["Andersen 400 Series", "Pella Lifestyle / Reserve", "Marvin Elevate"]
+  },
+  composite: {
+    good: ["EcoStar Majestic Slate", "CertainTeed Symphony", "Brava Cedar Shake"],
+    better: ["DaVinci Single-Width Slate", "Brava Slate", "DaVinci Shake"],
+    best: ["DaVinci Multi-Width Slate", "DaVinci Bellaforté Slate", "Inspire Composite Slate"]
+  },
+  slate: {
+    good: ["Greenstone semi-weathering gray", "North Country black", "Vermont gray/black (S1)"],
+    better: ["Vermont unfading gray", "Buckingham Virginia slate", "Vermont unfading green"],
+    best: ["Vermont unfading purple / mottled", "Spanish premium slate", "Monson Maine slate"]
+  },
+  decking: {
+    good: ["PT pine 5/4", "Pressure-treated SYP", "Cedar decking"],
+    better: ["Trex Enhance", "TimberTech PRO", "Fiberon Good Life"],
+    best: ["Trex Transcend", "TimberTech AZEK", "Fiberon Concordia"]
+  },
+  flooringtile: {
+    good: ["Ceramic tile (builder)", "Porcelain 12x24", "MSI ceramic"],
+    better: ["Porcelain wood-look plank", "Daltile porcelain", "Marazzi porcelain"],
+    best: ["Large-format porcelain", "Natural stone (travertine/marble)", "Porcelain slab"]
+  },
+  flooringlvp: {
+    good: ["LVP 12mil (builder)", "COREtec One", "NuCore"],
+    better: ["LVP 20mil rigid core", "COREtec Pro Plus", "Engineered hardwood 3/8"],
+    best: ["LVP 28mil / SPC premium", "Solid hardwood 3/4 oak", "Engineered wide-plank 5/8"]
+  }
+};
+const TIER_CATS = [{
+  key: "shingle",
+  label: "Shingles"
+}, {
+  key: "standingseam",
+  label: "Standing seam"
+}, {
+  key: "composite",
+  label: "Composite"
+}, {
+  key: "slate",
+  label: "Slate"
+}, {
+  key: "siding",
+  label: "Siding"
+}, {
+  key: "windows",
+  label: "Windows"
+}, {
+  key: "decking",
+  label: "Decking"
+}, {
+  key: "flooringtile",
+  label: "Tile floor"
+}, {
+  key: "flooringlvp",
+  label: "LVP / wood"
+}];
+// Which tier-pref category a trade+material falls in (null = no presets for it).
+function tierPrefCategory(tradeKey, sys) {
+  if (tradeKey === "roofing") {
+    const s = (sys || "").toLowerCase();
+    if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return "composite";
+    if (/slate/.test(s)) return "slate";
+    const t = roofTypeOf(sys || "");
+    return t === "metal" ? "standingseam" : t === "shingle" ? "shingle" : null;
+  }
+  if (tradeKey === "siding") return "siding";
+  if (tradeKey === "windows") return "windows";
+  if (tradeKey === "deck") return "decking";
+  if (tradeKey === "flooring") {
+    const s = (sys || "").toLowerCase();
+    return /tile|porcelain|ceramic|stone/.test(s) ? "flooringtile" : "flooringlvp";
+  }
+  return null;
+}
+// Which color line a trade+material uses (null = no color selector for this trade).
+function colorLineFor(tradeKey, mat) {
+  const m = String(mat || "").toLowerCase();
+  if (tradeKey === "roofing") {
+    if (/ag panel|ag-panel|corrugated|exposed.?fastener|panel rib|rib panel|ribbed|r-?panel\b|u-?panel\b/.test(m)) return {
+      key: "smp",
+      label: "SMP — AG panel colors",
+      colors: SMP_COLORS
+    };
+    if (/standing.?seam|snap.?lock|\blok\b|nu-?lok|kynar|pvdf/.test(m)) return {
+      key: "kynar",
+      label: "Kynar — standing-seam colors",
+      colors: KYNAR_COLORS
+    };
+    if (/tpo|epdm|flat|membrane/.test(m)) return null;
+    if (/metal|steel|panel/.test(m)) return {
+      key: "kynar",
+      label: "Kynar — metal roof colors",
+      colors: KYNAR_COLORS
+    };
+    return {
+      key: "duration",
+      label: "Owens Corning Duration — shingle colors",
+      colors: OC_DURATION_COLORS
+    };
+  }
+  if (tradeKey === "siding") return {
+    key: "certainteed",
+    label: "CertainTeed — siding colors",
+    colors: CERTAINTEED_COLORS
+  };
+  return null;
+}
 const SEED_PRICES = [{
   id: "pb_acm_aluminum_roll_valley_flashing",
   cat: "Sloped roof",
@@ -1966,7 +2593,8 @@ function parseMeas(dims) {
 // Roofing SYSTEM from the type/desc. Drives a DIFFERENT material takeoff per type.
 function roofTypeOf(sys) {
   const s = (sys || "").toLowerCase();
-  if (/standing seam|snap.?lock|\blok\b|metal panel|steel panel|ag panel|metal roof|\d+\s*ga\b|kynar/.test(s)) return "metal";
+  if (/ag panel|ag-panel|exposed.?fastener|panel rib|rib panel|ribbed panel|corrugated|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return "agpanel"; // exposed-fastener / ribbed (NOT standing seam)
+  if (/standing.?seam|snap.?lock|\blok\b|metal panel|steel panel|metal roof|\d+\s*ga\b|kynar/.test(s)) return "metal";
   if (/\btpo\b|\bepdm\b|\bpvc\b|flat roof|single.?ply|membrane|\bbur\b|modified bitumen/.test(s)) return "flat";
   if (/\btile\b|clay tile|concrete tile/.test(s)) return "tile";
   return "shingle";
@@ -2126,6 +2754,80 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
       name: "Snow guards",
       qty: up(m.eaves),
       unit: "LF"
+    });
+  } else if (type === "agpanel") {
+    // exposed-fastener / ribbed AG panel — through-fastened, NO concealed clips
+    out.push({
+      key: "panel",
+      name: "AG / exposed-fastener panels (29ga)",
+      qty: sqr(sq * waste),
+      unit: "SQ"
+    });
+    out.push({
+      key: "screw",
+      name: "Exposed-fastener panel screws (w/ washer)",
+      qty: up(m.area * 0.8),
+      unit: "ea"
+    });
+    out.push({
+      key: "iw",
+      name: "Synthetic underlayment",
+      qty: sqr(sq * 1.10),
+      unit: "SQ"
+    });
+    if (ridgeHip) out.push({
+      key: "ridge",
+      name: "Ridge cap (metal)",
+      qty: up(ridgeHip),
+      unit: "LF"
+    });
+    if (m.eaves) out.push({
+      key: "drip",
+      name: "Eave trim / drip edge (metal)",
+      qty: up(m.eaves),
+      unit: "LF"
+    });
+    if (m.rakes) out.push({
+      key: "rake",
+      name: "Rake / gable trim (metal)",
+      qty: up(m.rakes),
+      unit: "LF"
+    });
+    out.push({
+      key: "closure",
+      name: "Inside / outside foam closures",
+      qty: up(ridgeHip + m.eaves),
+      unit: "LF"
+    });
+    if (m.valleys) out.push({
+      key: "valley",
+      name: "Valley metal",
+      qty: up(m.valleys),
+      unit: "LF"
+    });
+    if (m.flashing || m.stepflash) out.push({
+      key: "flash",
+      name: "Sidewall / headwall flashing",
+      qty: up((m.flashing || 0) + (m.stepflash || 0)),
+      unit: "LF"
+    });
+    out.push({
+      key: "butyl",
+      name: "Butyl sealant tape (laps/closures)",
+      qty: up((ridgeHip + m.eaves + m.rakes) / 50) || 1,
+      unit: "roll"
+    });
+    out.push({
+      key: "sealant",
+      name: "Sealant tubes",
+      qty: up(m.area / 600) || 1,
+      unit: "ea"
+    });
+    if (m.pens) out.push({
+      key: "pen",
+      name: "Pipe boots / penetration flashings",
+      qty: m.pens,
+      unit: "ea"
     });
   } else if (type === "flat") {
     out.push({
@@ -2440,7 +3142,7 @@ function stripCrossSystem(items, sysStr) {
   const vinyl = /vinyl (siding|lap)/.test(s);
   const fiber = /fiber.?cement|hardie/.test(s);
   let banned = null;
-  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof/i;else if (metal) banned = /asphalt|3-tab|architectural shingle|laminate shingle|shingle bundle|starter shingle/i;else if (tpo) banned = /shingle|asphalt|standing seam|metal panel|epdm membrane/i;else if (epdm) banned = /shingle|asphalt|standing seam|metal panel|tpo membrane/i;else if (vinyl) banned = /fiber.?cement|hardie|cedar lap|steel siding/i;else if (fiber) banned = /vinyl (siding|lap)|steel siding/i;
+  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof|kynar|pvdf|metal trim|metal drip|metal rake/i;else if (metal) banned = /asphalt|3-tab|architectural shingle|laminate shingle|shingle bundle|starter shingle/i;else if (tpo) banned = /shingle|asphalt|standing seam|metal panel|epdm membrane/i;else if (epdm) banned = /shingle|asphalt|standing seam|metal panel|tpo membrane/i;else if (vinyl) banned = /fiber.?cement|hardie|cedar lap|steel siding/i;else if (fiber) banned = /vinyl (siding|lap)|steel siding/i;
   if (!banned) return items;
   return items.filter(it => !banned.test(String(it && it.name || "")));
 }
@@ -3139,6 +3841,14 @@ const HOUSE_HOTSPOTS = [
   h: 30
 }, {
   state: "exterior",
+  trade: "framing",
+  label: "Framing",
+  x: 58,
+  y: 33,
+  w: 26,
+  h: 22
+}, {
+  state: "exterior",
   trade: "windows",
   label: "Windows",
   x: 30,
@@ -3297,6 +4007,7 @@ const HOUSE_HOTSPOTS = [
 // Map a house trade to a price-book trade key (only the 9 deterministic engine
 // trades have one — others fall back to suggested materials).
 const PB_TRADE_KEY = {
+  framing: "framing",
   siding: "siding",
   concrete: "concrete",
   drywall: "drywall",
@@ -3306,8 +4017,106 @@ const PB_TRADE_KEY = {
   electrical: "electrical",
   plumbing: "plumbing"
 };
+// PER-PHASE LABOR (time-audit Part 1). Each trade's bid hours allocate across ~4–6 phase
+// buckets by typical proportion (rough now; the calibration loop refines splits later).
+// names + split arrays are index-aligned; splits ~sum to 1.
+const TRADE_PHASES = {
+  roofing: {
+    names: ["Tear-off", "Dry-in", "Field install", "Details & flashing", "Cleanup"],
+    split: [0.20, 0.10, 0.40, 0.22, 0.08]
+  },
+  siding: {
+    names: ["Prep & wrap", "Field install", "Trim & accessories", "Cleanup"],
+    split: [0.20, 0.50, 0.22, 0.08]
+  },
+  framing: {
+    names: ["Layout & plates", "Walls & openings", "Roof/floor structure", "Sheathing", "Cleanup"],
+    split: [0.15, 0.35, 0.30, 0.15, 0.05]
+  },
+  concrete: {
+    names: ["Excavate & form", "Reinforce", "Pour & finish", "Strip & cleanup"],
+    split: [0.30, 0.15, 0.40, 0.15]
+  },
+  drywall: {
+    names: ["Hang", "Tape & mud", "Sand & prep", "Cleanup"],
+    split: [0.30, 0.40, 0.20, 0.10]
+  },
+  flooring: {
+    names: ["Prep & demo", "Underlayment", "Field install", "Trim & cleanup"],
+    split: [0.20, 0.15, 0.50, 0.15]
+  },
+  trim: {
+    names: ["Measure & cut", "Install", "Caulk & finish", "Cleanup"],
+    split: [0.25, 0.45, 0.20, 0.10]
+  },
+  insulation: {
+    names: ["Prep & air-seal", "Install", "Cleanup"],
+    split: [0.25, 0.60, 0.15]
+  },
+  _default: {
+    names: ["Prep", "Install", "Detail", "Cleanup"],
+    split: [0.20, 0.50, 0.20, 0.10]
+  }
+};
+// Roofing phases are TYPE-SPECIFIC — removal/install differ by system, so actuals land in
+// type-specific buckets and the calibration loop learns per system (not a mushed average).
+const ROOF_PHASES = {
+  shingle: {
+    names: ["Tear-off (shingles)", "Dry-in", "Field install", "Details & flashing", "Cleanup"],
+    split: [0.20, 0.10, 0.40, 0.22, 0.08]
+  },
+  metal: {
+    names: ["Tear-off / strip", "Underlayment", "Panel set (standing seam)", "Trim & flashing", "Cleanup"],
+    split: [0.18, 0.10, 0.42, 0.22, 0.08]
+  },
+  agpanel: {
+    names: ["Tear-off / strip", "Underlayment", "Panel set & screws", "Trim & closures", "Cleanup"],
+    split: [0.18, 0.10, 0.40, 0.24, 0.08]
+  },
+  flat: {
+    names: ["Strip existing roof", "Insulation", "Membrane install", "Details & flashing", "Cleanup"],
+    split: [0.22, 0.15, 0.40, 0.15, 0.08]
+  },
+  tile: {
+    names: ["Tear-off (tile)", "Underlayment & battens", "Tile set", "Hip/ridge & details", "Cleanup"],
+    split: [0.20, 0.15, 0.40, 0.17, 0.08]
+  },
+  composite: {
+    names: ["Tear-off", "Dry-in", "Composite field install", "Details & flashing", "Cleanup"],
+    split: [0.18, 0.10, 0.42, 0.22, 0.08]
+  },
+  slate: {
+    names: ["Tear-off", "Dry-in", "Slate set", "Hip/ridge & details", "Cleanup"],
+    split: [0.18, 0.12, 0.42, 0.20, 0.08]
+  }
+};
+function roofPhaseSpec(sys) {
+  const s = (sys || "").toLowerCase();
+  if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return ROOF_PHASES.composite;
+  if (/slate/.test(s)) return ROOF_PHASES.slate;
+  return ROOF_PHASES[roofTypeOf(s)] || ROOF_PHASES.shingle;
+}
+// Allocate bid LABOR HOURS across a trade's phases (man-hours). Remainder lands on the
+// biggest bucket so the per-phase bids sum back to the trade's total. For roofing the phase
+// set is keyed to the material/system (sys) so removal/install are type-specific.
+function allocatePhases(tradeKey, laborHours, sys) {
+  const spec = tradeKey === "roofing" ? roofPhaseSpec(sys) : TRADE_PHASES[tradeKey] || TRADE_PHASES._default;
+  const total = Math.max(0, Math.round(Number(laborHours) || 0));
+  const raw = spec.names.map((n, i) => ({
+    name: n,
+    bidHours: Math.round(total * (spec.split[i] || 0))
+  }));
+  const diff = total - raw.reduce((s, p) => s + p.bidHours, 0);
+  if (diff !== 0 && raw.length) {
+    let bi = 0;
+    for (let i = 1; i < raw.length; i++) if ((spec.split[i] || 0) > (spec.split[bi] || 0)) bi = i;
+    raw[bi].bidHours = Math.max(0, raw[bi].bidHours + diff);
+  }
+  return raw;
+}
 // Starter material lists (brand + product), most-common first, NO 3-tab shingles.
 const MATERIAL_SUGGESTIONS = {
+  framing: ["2x6 SPF walls", "2x4 SPF walls", "Advanced framing (24\" OC)", "LVL/engineered beams", "Steel stud"],
   roofing: ["GAF Timberline HDZ (architectural)", "Owens Corning Duration", "CertainTeed Landmark", "Standing-seam metal", "Firestone TPO (flat)"],
   siding: ["James Hardie lap (fiber-cement)", "CertainTeed vinyl lap", "LP SmartSide", "Cedar lap", "Board & batten"],
   windows: ["Andersen 400 Series", "Pella 250 Series", "Marvin Elevate", "Vinyl double-hung"],
@@ -3334,7 +4143,7 @@ const MATERIAL_SUGGESTIONS = {
 // front so the takeoff can't mix systems). "Mixed" combines systems and is sized
 // per sub-portion. Trades not listed are single-system (no type picker).
 const HOUSE_TYPES = {
-  roofing: ["Shingle", "Standing-seam metal", "Flat (TPO/EPDM)", "Tile", "Mixed"],
+  roofing: ["Shingle", "Standing-seam metal", "AG panel (exposed fastener)", "Composite (synthetic)", "Slate / slate-look", "Flat (TPO/EPDM)", "Tile", "Mixed"],
   siding: ["Vinyl", "Fiber cement", "Steel/Metal", "Wood", "Mixed"],
   flooring: ["Hardwood", "Carpet", "Tile", "LVP / laminate", "Mixed"],
   windows: ["Vinyl", "Wood-clad", "Aluminum", "Mixed"],
@@ -3817,7 +4626,10 @@ function App() {
     bio: "",
     prefMaterials: "",
     avatar: "",
-    posts: []
+    posts: [],
+    tierPrefs: {},
+    mobBase: 350,
+    mobTruckPerMi: 0.7
   });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
@@ -3910,11 +4722,21 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [estMiles, setEstMiles] = useState(0); // round-trip delivery/mobilization miles (manual entry first)
+  const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
+  const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
+  const [propOpen, setPropOpen] = useState(false); // homeowner proposal presentation view
+  const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
+  const [timerView, setTimerView] = useState(""); // "" | "timer" | "closeout" — on-site per-phase time audit
+  const [jobCrew, setJobCrew] = useState(3); // default crew size; each phase defaults to this
+  const [, setNowTick] = useState(0); // 1s heartbeat to re-render running phase clocks
+  const [tcorr, setTcorr] = useState({}); // closeout correction drafts keyed "ti-pi"
   // saved-estimates library (build-set #3)
   const [estimates, setEstimates] = useState([]); // the saved list (from estStore)
   const [estId, setEstId] = useState(null); // id of the estimate currently open/in-progress
   const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
   const [estAddress, setEstAddress] = useState(""); // job address on the current estimate
+  const [estEmail, setEstEmail] = useState(""); // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
   const [estStatus, setEstStatus] = useState("draft"); // draft | sent | won | lost
   const [savedOpen, setSavedOpen] = useState(false); // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
@@ -3938,15 +4760,83 @@ function App() {
   const [whPhotos, setWhPhotos] = useState([]); // jobsite photos (Photo button)
   const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
   const [alMsgs, setAlMsgs] = useState([]); // house AL chat thread [{role:"ai"|"me", text}]
+  const alMsgsRef = useRef([]); // live mirror of alMsgs — the hands-free loop runs in stale closures, so history must come from the ref, not the captured state
+  const setAlThread = next => {
+    alMsgsRef.current = next;
+    setAlMsgs(next);
+  };
+  const alSendRef = useRef(null); // latest alSend — the loop calls this so each turn reads CURRENT state (scope/dims/context), not the session-start closure
   const [alInput, setAlInput] = useState("");
   const [alBusy, setAlBusy] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false); // talk-to-AL voice loop (build-set #4)
-  const [listening, setListening] = useState(false); // mic is actively recording
+  const [persona, setPersona] = useState("AL"); // selected assistant persona name (voice + avatar + name)
+  const personaRef = useRef("AL"); // stale-closure-proof for async speak
+  const curPersona = personaByName(persona);
+  const personaSet = name => {
+    const p = personaByName(name);
+    setPersona(p.name);
+    personaRef.current = p.name;
+    pSet(PERSONA_KEY, p.name);
+  };
+  const [personaSpeeds, setPersonaSpeeds] = useState({}); // per-persona TTS speed (0.7–1.2, default 1.0)
+  const personaSpeedsRef = useRef({}); // stale-closure-proof for async speak
+  const personaSpeed = name => {
+    const v = (personaSpeedsRef.current || {})[name];
+    return v >= 0.7 && v <= 1.2 ? v : 1;
+  };
+  const personaSpeedSet = (name, v) => {
+    const nv = Math.max(0.7, Math.min(1.2, Math.round((Number(v) || 1) * 100) / 100));
+    const next = Object.assign({}, personaSpeedsRef.current, {
+      [name]: nv
+    });
+    personaSpeedsRef.current = next;
+    setPersonaSpeeds(next);
+    pSet(PERSONA_SPEED_KEY, next);
+  };
+  // avatar for a persona: image if supplied (AL keeps his photo); else initials circle —
+  // never a broken-image icon. Dropping an image into a persona's avatar is the only step later.
+  const personaFace = (p, sm) => {
+    const img = p.name === "AL" ? AL_NOTEPAD : p.avatar;
+    const px = sm ? 28 : 44;
+    if (img) return /*#__PURE__*/React.createElement("img", {
+      src: img,
+      alt: p.name,
+      style: {
+        width: px,
+        height: px,
+        borderRadius: "50%",
+        objectFit: "cover",
+        flex: "0 0 auto"
+      }
+    });
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: px,
+        height: px,
+        borderRadius: "50%",
+        background: "#0a7d36",
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 700,
+        fontSize: sm ? 11 : 15,
+        flex: "0 0 auto"
+      }
+    }, personaInitials(p.name));
+  };
+  const [listening, setListening] = useState(false); // mic is actively recording this turn
   const [transcribing, setTranscribing] = useState(false); // recorded burst is being transcribed by Scribe
+  const [voiceSession, setVoiceSession] = useState(false); // hands-free conversation session is open
   const recogRef = useRef(null); // SpeechRecognition instance (keyboard-mic fallback only)
   const mediaRecRef = useRef(null); // MediaRecorder for ElevenLabs Scribe capture
   const mediaChunksRef = useRef([]); // recorded audio chunks
   const mediaStreamRef = useRef(null); // mic MediaStream (to stop tracks)
+  const sessionRef = useRef(false); // conversation session active (stale-closure-proof)
+  const micMutedRef = useRef(false); // mic held closed while AL reads back (anti self-capture)
+  const audioCtxRef = useRef(null); // AudioContext for silence detection (VAD)
+  const analyserRef = useRef(null); // AnalyserNode reading mic level
+  const vadTimerRef = useRef(null); // VAD poll interval
   const voiceRef = useRef(false); // mirrors voiceMode for async callbacks (stale-closure-proof)
   const ttsPrimedRef = useRef(false); // browser TTS unlocked by a user gesture (iOS)
   const alAudioRef = useRef(null); // reusable <audio> for ElevenLabs playback
@@ -4710,6 +5600,16 @@ function App() {
       if (clb && typeof clb === "object") setCalib(clb);
       const ests = await estStore.list();
       if (ests && ests.length) setEstimates(ests);
+      const pna = await pGet(PERSONA_KEY);
+      if (pna && personaByName(pna)) {
+        setPersona(personaByName(pna).name);
+        personaRef.current = personaByName(pna).name;
+      }
+      const psp = await pGet(PERSONA_SPEED_KEY);
+      if (psp && typeof psp === "object") {
+        setPersonaSpeeds(psp);
+        personaSpeedsRef.current = psp;
+      }
       loaded.current = true;
     })();
   }, []);
@@ -4730,7 +5630,7 @@ function App() {
     estSaveTimer.current = setTimeout(() => {
       persistCurrent();
     }, 600);
-  }, [estResult, estMargin, estCustomer, estAddress, estStatus]);
+  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -4753,10 +5653,13 @@ function App() {
         radius: profC.radius,
         bio: profC.bio,
         prefMaterials: profC.prefMaterials,
-        avatar: profC.avatar
+        avatar: profC.avatar,
+        tierPrefs: profC.tierPrefs,
+        mobBase: profC.mobBase,
+        mobTruckPerMi: profC.mobTruckPerMi
       }
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs, profC.mobBase, profC.mobTruckPerMi]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async role => {
@@ -5534,9 +6437,14 @@ function App() {
       const miss = s.inputs.filter(inp => inp.required && !(whInputs[s.trade] && num(whInputs[s.trade][inp.name]) > 0)).map(inp => inp.label);
       return miss.length ? s.label + ": " + miss.join(", ") : null;
     }).filter(Boolean).join("\n");
-    return "SELECTED TRADES:\n" + trades + "\n" + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
+    const who = [estCustomer.trim() ? "Customer: " + estCustomer.trim() : "", estAddress.trim() ? "Address: " + estAddress.trim() : ""].filter(Boolean).join("\n");
+    const savedNote = estResult && estResult.trades && estResult.trades.length && estId ? "THIS ESTIMATE IS ALREADY BUILT AND SAVED — do not offer to build/save again; if they want changes, capture them, otherwise you're done.\n" : "";
+    return "SELECTED TRADES:\n" + trades + "\n" + (who ? who + "\n" : "") + savedNote + (known || "No measurements, photos, or dimensions captured yet.\n") + (gaps ? "STILL MISSING (ask about these):\n" + gaps + "\n" : "");
   };
-  const AL_HOUSE_SYS = (ctx, voice) => "You are AL, the friendly estimating assistant for a contractor using CazBid. You chat to scope and SIZE a construction bid. " + "Stay strictly in the home-construction estimating lane (roofing, siding, windows, doors, garage, concrete/foundation, decks, landscaping, drywall, flooring, kitchen, bath, trim, paint, lighting, insulation, electrical, plumbing, HVAC, ventilation). If asked something off-topic, gently steer back. " + "Be warm and brief — 1-2 sentences, ONE question at a time. Ask ONLY for info that is still MISSING and needed to bid the SELECTED trades; never re-ask anything already in the context. Confirm values they already gave ('I see 10/12 pitch — good?'). Answer the contractor's own questions about scope or the bid. " + (voice ? "VOICE MODE — the contractor is talking to you hands-free (often driving). Your reply is READ ALOUD, so: keep it to ONE short spoken sentence; ALWAYS read back any number they just gave before moving on ('West slope eight twelve — got that') so a mis-hear is caught; say numbers like a foreman ('eight twelve' for pitch, 'twenty-two squares'); never read a list of options aloud — ask one thing. No emojis, no symbols, no markdown — it gets spoken literally. " : "") + "NEVER tell them they're ready to build while a selected trade still lacks sizing (measurements, photos, or dimensions) — ask for it instead. If no trades are selected, ask them to pick a trade with the category/trade buttons or describe the job. Do NOT tell them to tap or click the house — it's a visual only; selection happens with the buttons. " + "If the contractor asks to CHANGE or SWITCH a material/system for a selected trade (e.g. 'make the roof shingles instead'), set materialChange to that trade's key= and the new type (use one of that trade's [allowed types] when listed), and CONFIRM it in your message. If a quote is already on screen, tell them to tap Build to refresh it with the new material. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your chat reply (1-3 sentences), \"dims\": any NEW measurements/dimensions the contractor just gave, as one compact string (e.g. \"west slope 8/12, main 10/12, 102 sq\"), else \"\", \"inputs\": object mapping a deterministic trade key (one of siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac) to {field:number} ONLY when they gave a concrete dimension for that trade, else {}, \"materialChange\": {\"trade\": the selected trade's key, \"type\": the new material/system} ONLY when they ask to change a material, else null, \"ready\": true only if every selected trade has enough to bid}";
+  const AL_HOUSE_SYS = (ctx, voice) => {
+    const tradeMenu = HOUSE_STATES.map(s => CAT_LABEL[s.key] + ": " + HOUSE_HOTSPOTS.filter(h => h.state === s.key).map(h => h.label + " (key=" + h.trade + ")").join(", ")).join("\n");
+    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " + "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " + "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " + (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") + "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" + "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " + "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " + "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " + "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\"}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+  };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) return "Hey, I'm AL. Use the buttons up top to add what you're bidding — roof, siding, kitchen, whatever — then tell me about it and I'll help you size it.";
@@ -5632,11 +6540,17 @@ function App() {
     } catch (e) {}
   };
   // BROWSER fallback voice (offline / if the ElevenLabs call fails on a back road).
-  const speakBrowser = text => {
-    if (!ttsOK || !text) return;
+  // done() resolves the speakAL promise when the synth finishes (drives mic reopen).
+  const speakBrowser = (text, done) => {
+    const fin = () => {
+      try {
+        done && done();
+      } catch (e) {}
+    };
+    if (!ttsOK || !text) return fin();
     try {
       const clean = String(text).replace(/[*_`#>~]/g, "").replace(/[^\x00-\x7F]+/g, " ").replace(/\s+/g, " ").trim();
-      if (!clean) return;
+      if (!clean) return fin();
       const synth = window.speechSynthesis;
       try {
         synth.cancel();
@@ -5649,6 +6563,8 @@ function App() {
       const vs = synth.getVoices && synth.getVoices() || [];
       const en = vs.filter(v => /^en/i.test(v.lang || ""));
       if (en.length) u.voice = en.find(v => /en[-_]?us/i.test(v.lang || "")) || en[0];
+      u.onend = fin;
+      u.onerror = fin;
       setTimeout(() => {
         try {
           synth.speak(u);
@@ -5657,49 +6573,81 @@ function App() {
               if (synth.paused) synth.resume();
             } catch (e) {}
           }, 140);
-        } catch (e) {}
+        } catch (e) {
+          fin();
+        }
       }, 60);
-    } catch (e) {/* best-effort */}
+    } catch (e) {
+      fin();
+    }
   };
-  // AL's voice = ElevenLabs (real voice) via the server `speak` function; browser TTS
-  // is the offline fallback so AL never goes mute on a back road.
-  const speakAL = async text => {
-    if (!text) return;
+  // AL's voice = ElevenLabs (selected persona) via the server `speak` function; browser
+  // TTS is the offline fallback. Returns a Promise that RESOLVES WHEN PLAYBACK ENDS so
+  // conversation mode can reopen the mic only after AL finishes (no self-capture).
+  const speakAL = (text, voiceOverride, speedOverride) => new Promise(resolve => {
+    if (!text) return resolve();
     const clean = String(text).replace(/[*_`#>~]/g, "").replace(/\s+/g, " ").trim();
-    if (!clean) return;
+    if (!clean) return resolve();
     const a = ensureAudioEl();
+    let done = false;
+    const fin = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
     if (!a) {
-      speakBrowser(clean);
+      speakBrowser(clean, fin);
       return;
     }
-    try {
-      stopSpeaking();
-      const res = await fetch("/.netlify/functions/speak", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          text: clean
-        })
-      });
-      if (!res.ok) throw new Error("tts " + res.status);
-      const blob = await res.blob();
-      if (!blob || blob.size < 200) throw new Error("empty audio");
-      const url = URL.createObjectURL(blob);
-      a.src = url;
-      a.muted = false;
-      a.volume = 1.0;
-      a.onended = () => {
-        try {
-          URL.revokeObjectURL(url);
-        } catch (e) {}
-      };
-      const p = a.play();
-      if (p && p.catch) p.catch(() => speakBrowser(clean)); // autoplay blocked → fallback
-    } catch (e) {
-      speakBrowser(clean);
-    }
+    const voiceId = voiceOverride || personaByName(personaRef.current).voiceId;
+    const speed = speedOverride || personaSpeed(personaRef.current);
+    (async () => {
+      try {
+        stopSpeaking();
+        const res = await fetch("/.netlify/functions/speak", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text: clean,
+            voiceId: voiceId,
+            speed: speed
+          })
+        });
+        if (!res.ok) throw new Error("tts " + res.status);
+        const blob = await res.blob();
+        if (!blob || blob.size < 200) throw new Error("empty audio");
+        const url = URL.createObjectURL(blob);
+        a.src = url;
+        a.muted = false;
+        a.volume = 1.0;
+        a.onended = () => {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) {}
+          fin();
+        };
+        a.onerror = () => {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) {}
+          speakBrowser(clean, fin);
+        };
+        const p = a.play();
+        if (p && p.catch) p.catch(() => speakBrowser(clean, fin)); // autoplay blocked → fallback
+      } catch (e) {
+        speakBrowser(clean, fin);
+      }
+    })();
+  });
+  // LOCKED preview line (same for every persona → compare voices, not sentences).
+  // {firstName} = first token of the Profile personal name; dropped cleanly if none.
+  const previewPersona = p => {
+    primeTTS();
+    const fn = String(profC.name || "").trim().split(/\s+/)[0] || "";
+    const line = fn ? "Good morning " + fn + ", what are we quoting today?" : "Good morning, what are we quoting today?";
+    speakAL(line, p.voiceId, personaSpeed(p.name));
   };
   const blobToB64 = blob => new Promise((res, rej) => {
     const r = new FileReader();
@@ -5716,31 +6664,165 @@ function App() {
     }
     return "";
   };
-  const stopListening = () => {
+  const transcribeBlob = async blob => {
+    try {
+      const b64 = await blobToB64(blob);
+      const res = await fetch("/.netlify/functions/transcribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          audioBase64: b64,
+          mime: blob.type
+        })
+      });
+      const d = await res.json();
+      return res.ok ? String(d && d.text || "").trim() : "";
+    } catch (e) {
+      return "";
+    }
+  };
+  // CONVERSATION MODE (hands-free): one tap starts a session; thereafter turns chain on
+  // their own — client-side silence detection auto-sends each utterance, the mic auto-MUTES
+  // while AL reads back (no self-capture) and auto-reopens after. NOT tap-per-turn.
+  const endVoiceSession = () => {
+    sessionRef.current = false;
+    micMutedRef.current = false;
+    try {
+      if (vadTimerRef.current) {
+        clearInterval(vadTimerRef.current);
+        vadTimerRef.current = null;
+      }
+    } catch (e) {}
     try {
       if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop();
     } catch (e) {}
     try {
-      if (recogRef.current) recogRef.current.stop();
+      (mediaStreamRef.current && mediaStreamRef.current.getTracks() || []).forEach(t => t.stop());
     } catch (e) {}
+    mediaStreamRef.current = null;
+    try {
+      if (audioCtxRef.current && audioCtxRef.current.close) audioCtxRef.current.close();
+    } catch (e) {}
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    stopSpeaking();
     setListening(false);
+    setTranscribing(false);
+    setVoiceSession(false);
   };
-  // VOICE-IN (Part B, batch): tap to record a burst → ElevenLabs Scribe transcribes →
-  // the transcript flows into the SAME estimate brain as typed chat → AL reads back.
-  const startVoiceInput = async () => {
-    if (listening) {
-      stopListening();
+  // One utterance: record from the live session stream, watch the mic level, and stop on a
+  // pause after speech → transcribe → run the turn. Re-arms itself for the next turn.
+  const recordTurn = () => {
+    if (!sessionRef.current || micMutedRef.current) return;
+    const stream = mediaStreamRef.current;
+    if (!stream) return;
+    const mime = pickMime();
+    let rec;
+    try {
+      rec = mime ? new MediaRecorder(stream, {
+        mimeType: mime
+      }) : new MediaRecorder(stream);
+    } catch (e) {
+      endVoiceSession();
       return;
     }
-    if (transcribing) return;
-    primeTTS(); // this tap is our chance to unlock iOS audio for the readback
-    if (!voiceMode) {
-      setVoiceMode(true);
-      voiceRef.current = true;
+    mediaChunksRef.current = [];
+    let speechStarted = false,
+      lastLoud = Date.now(),
+      startedAt = Date.now(),
+      stopped = false;
+    const clearVad = () => {
+      try {
+        if (vadTimerRef.current) {
+          clearInterval(vadTimerRef.current);
+          vadTimerRef.current = null;
+        }
+      } catch (e) {}
+    };
+    const stopTurn = () => {
+      if (stopped) return;
+      stopped = true;
+      clearVad();
+      try {
+        if (rec.state !== "inactive") rec.stop();
+      } catch (e) {}
+    };
+    rec.ondataavailable = e => {
+      if (e.data && e.data.size) mediaChunksRef.current.push(e.data);
+    };
+    rec.onstop = async () => {
+      setListening(false);
+      const blob = new Blob(mediaChunksRef.current, {
+        type: rec.mimeType || mime || "audio/webm"
+      });
+      mediaChunksRef.current = [];
+      if (!sessionRef.current) return; // session ended mid-turn
+      if (!speechStarted || blob.size < 1400) {
+        if (sessionRef.current && !micMutedRef.current) recordTurn();
+        return;
+      } // nothing said → keep listening
+      setTranscribing(true);
+      const text = await transcribeBlob(blob);
+      setTranscribing(false);
+      if (text) handleTurnText(text);else if (sessionRef.current && !micMutedRef.current) recordTurn(); // didn't catch → listen again
+    };
+    try {
+      rec.start();
+    } catch (e) {
+      endVoiceSession();
+      return;
     }
-    stopSpeaking(); // don't record AL's own voice
+    mediaRecRef.current = rec;
+    setListening(true);
+    const an = analyserRef.current;
+    const buf = an ? new Uint8Array(an.fftSize) : null;
+    vadTimerRef.current = setInterval(() => {
+      if (!sessionRef.current) {
+        stopTurn();
+        return;
+      }
+      let rms = 0;
+      if (an && buf) {
+        an.getByteTimeDomainData(buf);
+        let s = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          s += v * v;
+        }
+        rms = Math.sqrt(s / buf.length);
+      }
+      const now = Date.now();
+      if (rms > 0.028) {
+        speechStarted = true;
+        lastLoud = now;
+      } // tuned a bit hot for cab noise
+      const elapsed = now - startedAt;
+      if (an) {
+        if (speechStarted && now - lastLoud > 1100 && elapsed > 600) stopTurn();else if (elapsed > 25000) stopTurn();
+      } else if (elapsed > 12000) stopTurn(); // no analyser: fall back to a fixed window
+    }, 80);
+  };
+  // A turn: mute the mic, send the transcript through the SAME brain as typed chat, AL reads
+  // back (awaited), then reopen the mic for the next turn. Readback-before-anything-commits.
+  const handleTurnText = async text => {
+    micMutedRef.current = true;
+    setListening(false);
+    try {
+      await (alSendRef.current || alSend)(text);
+    } catch (e) {} // latest alSend → current scope/dims/history
+    if (sessionRef.current) {
+      micMutedRef.current = false;
+      recordTurn();
+    }
+  };
+  const startVoiceSession = async () => {
+    primeTTS(); // this tap unlocks iOS audio for the readbacks
+    setVoiceMode(true);
+    voiceRef.current = true;
+    stopSpeaking();
     if (!mediaOK) {
-      // no MediaRecorder (older iOS) → keyboard-mic dictation still works
       flash("Tap the text box, then your keyboard's 🎤 to talk — AL still understands the trade.");
       return;
     }
@@ -5749,64 +6831,48 @@ function App() {
         audio: true
       });
       mediaStreamRef.current = stream;
-      const mime = pickMime();
-      const rec = mime ? new MediaRecorder(stream, {
-        mimeType: mime
-      }) : new MediaRecorder(stream);
-      mediaChunksRef.current = [];
-      rec.ondataavailable = e => {
-        if (e.data && e.data.size) mediaChunksRef.current.push(e.data);
-      };
-      rec.onstop = async () => {
-        try {
-          (mediaStreamRef.current.getTracks() || []).forEach(t => t.stop());
-        } catch (e) {}
-        const blob = new Blob(mediaChunksRef.current, {
-          type: rec.mimeType || mime || "audio/webm"
-        });
-        mediaChunksRef.current = [];
-        if (!blob.size) return;
-        setTranscribing(true);
-        try {
-          const b64 = await blobToB64(blob);
-          const res = await fetch("/.netlify/functions/transcribe", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              audioBase64: b64,
-              mime: blob.type
-            })
-          });
-          const d = await res.json();
-          setTranscribing(false);
-          const t = String(d && d.text || "").trim();
-          if (res.ok && t) alSend(t);else flash(d && d.error ? "Didn't catch that — try again." : "Didn't catch that — try again.");
-        } catch (e) {
-          setTranscribing(false);
-          flash("Transcription failed — type it or try again.");
-        }
-      };
-      mediaRecRef.current = rec;
-      rec.start();
-      setListening(true);
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        audioCtxRef.current = ctx;
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        src.connect(an);
+        analyserRef.current = an;
+        if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+      } catch (e) {
+        analyserRef.current = null;
+      }
+      sessionRef.current = true;
+      micMutedRef.current = true;
+      setVoiceSession(true);
+      await speakAL("Voice on — what are we working on?"); // greeting (mic muted until it ends)
+      if (sessionRef.current) {
+        micMutedRef.current = false;
+        recordTurn();
+      }
     } catch (e) {
-      setListening(false);
+      endVoiceSession();
       flash("Mic unavailable — allow microphone access, or use your keyboard's 🎤.");
     }
   };
+  // mic button: one tap toggles the hands-free session on/off
+  const startVoiceInput = () => {
+    if (sessionRef.current) endVoiceSession();else startVoiceSession();
+  };
+  const stopListening = () => endVoiceSession();
+  // readback on/off preference (the 🎤 mic button drives the hands-free session itself)
   const toggleVoice = () => {
     setVoiceMode(v => {
       const next = !v;
       voiceRef.current = next;
       if (!next) {
         stopSpeaking();
-        stopListening();
+        if (sessionRef.current) endVoiceSession();
       } else {
         primeTTS();
-        speakAL("Voice on. What are we working on?");
-        flash("Voice on — AL reads replies aloud and confirms numbers back.");
+        flash("Voice on — tap 🎤 to start a hands-free conversation.");
       }
       return next;
     });
@@ -5814,11 +6880,11 @@ function App() {
   const alSend = async textArg => {
     const text = (textArg != null ? textArg : alInput).trim();
     if (!text || alBusy) return;
-    const msgs = [...alMsgs, {
+    const msgs = [...alMsgsRef.current, {
       role: "me",
       text: text
-    }];
-    setAlMsgs(msgs);
+    }]; // ref = live history (loop closures are stale)
+    setAlThread(msgs);
     setAlInput("");
     setAlBusy(true);
     try {
@@ -5840,11 +6906,32 @@ function App() {
         };
       }
       const alText = String(d.message || "Got it.");
-      setAlMsgs([...msgs, {
+      setAlThread([...msgs, {
         role: "ai",
         text: alText
       }]);
-      if (voiceRef.current) speakAL(alText);
+      // VOICE-DRIVES-STATE: AL's understood trade selections write the SAME state the buttons set.
+      if (Array.isArray(d.select) && d.select.length) {
+        d.select.forEach(s => {
+          const want = String(s && (s.trade || s) || "").toLowerCase().trim();
+          if (!want) return;
+          const h = HOUSE_HOTSPOTS.find(x => x.trade === want || x.label.toLowerCase() === want || x.label.toLowerCase().indexOf(want) >= 0 || want.indexOf(x.trade) >= 0);
+          const key = h ? h.trade : want;
+          let type = s && s.type && String(s.type).trim() ? String(s.type).trim() : true;
+          if (type !== true && HOUSE_TYPES[key]) {
+            const opt = HOUSE_TYPES[key].find(o => {
+              const lo = o.toLowerCase(),
+                lt = String(type).toLowerCase();
+              return lo === lt || lo.indexOf(lt) >= 0 || lt.indexOf(lo.split(" ")[0]) >= 0;
+            });
+            if (opt) type = opt;
+          }
+          houseSelect(key, type);
+          setActiveTrade(key);
+          if (h) setHouseView(h.state);
+        });
+        setSelStep("ready");
+      }
       if (d.dims && String(d.dims).trim()) setWhDims(prev => (prev ? prev + "; " + String(d.dims).trim() : String(d.dims).trim()).slice(0, 600));
       // material/system change requested in conversation → update the locked scope so the NEXT Build honors it
       if (d.materialChange && typeof d.materialChange === "object" && d.materialChange.trade) {
@@ -5873,14 +6960,26 @@ function App() {
           });
         });
       }
+      // hands-free CAPTURE: pull customer/address spoken into the saved-estimate fields
+      if (d.customer && String(d.customer).trim()) setEstCustomer(String(d.customer).trim());
+      if (d.address && String(d.address).trim()) setEstAddress(String(d.address).trim());
+      setAlBusy(false);
+      if (voiceRef.current) await speakAL(alText); // readback LAST + awaited → conversation mode reopens the mic only after AL finishes
+      // COMMIT on confirm: build + save the estimate (auto-save effect persists it). Guard against
+      // re-firing once it's already built (kills the confirm→re-propose loop).
+      if (d.save === true && Object.keys(houseScope).length && estBusy !== "run" && !(estResult && estResult.trades && estResult.trades.length)) {
+        buildUnifiedEstimate();
+      }
+      return;
     } catch (e) {
-      setAlMsgs([...msgs, {
+      setAlThread([...msgs, {
         role: "ai",
         text: "Hmm, that one didn't go through — mind trying again?"
       }]);
     }
     setAlBusy(false);
   };
+  alSendRef.current = alSend; // keep the loop pointed at the freshest alSend (current state)
   // ---- contractor estimator: full takeoff + costing (reuses the homeowner bottom-up engine) ----
   const EV_FORMULAS = "ROOFING MATERIAL TAKEOFF FORMULAS — if this is a roofing job and you have the measurements, compute quantities with THESE exact formulas (round up as noted), do not guess:\n" + "- Field shingles (squares): (Area sqft x 1.12) / 100, round up to whole square.\n" + "- Starter (bundles): (Eaves LF x 1.10) / 100, round up to bundle.\n" + "- Hip/Ridge caps (bundles): ((Ridges LF + Hips LF) x 1.10) / 30, round up to bundle.\n" + "- Ice & water (rolls): ((Eaves x 2) + Valleys + Flashing + StepFlash) / 66, round up.\n" + "- Drip edge (10ft pieces): (Total eave+rake LF x 1.15) / 10, round up.\n" + "- W-valley 14in (10ft pieces): Valleys LF / 50, round up.\n" + "- Step flashing (bundles/pieces): StepFlash LF / 25, round up.\n";
   // ---- AI trade builder (Feature A) helpers ----
@@ -6002,7 +7101,8 @@ function App() {
     dims,
     photos,
     panelW,
-    aiTrade
+    aiTrade,
+    tierPref
   }) => {
     {
       scope = scope || "";
@@ -6015,7 +7115,7 @@ function App() {
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
       const __manualKey = manualTradeKey(scope, desc);
-      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + (tierPref && (tierPref.good || tierPref.better || tierPref.best) ? "THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map(k => tierPref[k] ? k + "=" + tierPref[k] : "").filter(Boolean).join(", ") + ".\n" : "") + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [...photos.slice(0, 3).map(ph => {
         const mt = ph.startsWith("data:") ? ph.substring(5, ph.indexOf(";")) || "image/jpeg" : "image/jpeg";
         return {
@@ -6089,19 +7189,19 @@ function App() {
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic) {
         const q = computeRoofQuantities(dims, sysStr, num(panelW));
+        const books = [].concat(matCosts || [], (priceBook || []).map(p => ({
+          name: p.name,
+          unit: p.unit,
+          cost: p.price
+        })), (enginePB || []).map(e => ({
+          name: e.material,
+          unit: e.unit,
+          cost: e.unitCost
+        })));
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
             // price it from the cost book (the LLM under-itemizes these → the $295 bug).
-            const books = [].concat(matCosts || [], (priceBook || []).map(p => ({
-              name: p.name,
-              unit: p.unit,
-              cost: p.price
-            })), (enginePB || []).map(e => ({
-              name: e.material,
-              unit: e.unit,
-              cost: e.unitCost
-            })));
             items = priceRoofTakeoff(q, books, items).map(it => ({
               name: it.name,
               qty: it.qty,
@@ -6144,6 +7244,7 @@ function App() {
               key: "pen",
               kw: ["pipe boot", "penetration", "pipe flash"]
             }];
+            const matched = {};
             q.forEach(cq => {
               const mm = matchers.find(x => x.key === cq.key);
               if (!mm) return;
@@ -6152,6 +7253,7 @@ function App() {
                 return mm.kw.some(k => n.indexOf(k) >= 0);
               });
               if (idx >= 0) {
+                matched[cq.key] = true;
                 const old = items[idx];
                 // derive a per-unit price; if the AI's unit differs from the computed unit, rebuild unit price from cost/computedQty
                 let up = num(old.unitPrice);
@@ -6164,6 +7266,25 @@ function App() {
                   cost: Math.round(up * cq.qty)
                 });
               }
+            });
+            // BACKFILL standard shingle accessory lines the LLM omitted (e.g. drip edge when it
+            // only emitted a metal-trim line that stripCrossSystem just removed). Priced from the
+            // cost book, flagged ⚠️ if unpriced — never silently missing.
+            ["drip", "starter", "ridge", "iw", "valley", "step", "pen"].forEach(key => {
+              if (matched[key]) return;
+              const cq = q.find(x => x.key === key);
+              if (!cq) return;
+              const up = priceFromBook(cq.name, books);
+              items.push({
+                name: cq.name,
+                qty: cq.qty,
+                unit: cq.unit,
+                unitPrice: up != null ? up : 0,
+                cost: up != null ? Math.round(up * cq.qty) : 0,
+                unpriced: up == null,
+                priceTier: null,
+                matchType: null
+              });
             });
           }
         }
@@ -6275,14 +7396,18 @@ function App() {
         const desc = scope + (type ? " (" + type + ")" : "");
         const aiT = aiTrades.find(x => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
         try {
+          const __cat = tierPrefCategory(t, scope + " " + desc);
           const r = await buildOneTrade({
             scope,
             desc,
             dims,
             photos: whPhotos,
             panelW: num(housePanelW[t]) || 0,
-            aiTrade: aiT
+            aiTrade: aiT,
+            tierPref: __cat && profC.tierPrefs && profC.tierPrefs[__cat] || null
           });
+          r.phaseSys = scope + " " + desc; // remember the system so phases stay type-specific on edit/reopen
+          r.phases = allocatePhases(t, r.laborHours, r.phaseSys); // per-phase BID hours, keyed to the material/system
           results.push(Object.assign({
             tradeKey: t,
             label: label
@@ -6299,6 +7424,7 @@ function App() {
       if (!ok.length) {
         flash("Estimate failed: " + (results[0] && results[0].error || "tap Build again"));
         setEstBusy("");
+        if (voiceRef.current) speakAL("That didn't build — let's try again.");
         return;
       }
       setEstResult({
@@ -6306,6 +7432,11 @@ function App() {
         errors: results.filter(r => r.error),
         multi: ok.length > 1
       });
+      // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
+      if (voiceRef.current) {
+        const price = sellOf(jobCostOf(ok), estMargin);
+        speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars.");
+      }
     } catch (e) {
       flash("Estimate failed: " + errMsg(e));
     }
@@ -6407,11 +7538,247 @@ function App() {
   } : r);
   const estTradeField = (ti, field, val) => setEstResult(r => r ? {
     ...r,
-    trades: r.trades.map((tr, k) => k === ti ? {
-      ...tr,
-      [field]: val
-    } : tr)
+    trades: r.trades.map((tr, k) => {
+      if (k !== ti) return tr;
+      const nt = {
+        ...tr,
+        [field]: val
+      };
+      if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || "");
+      return nt;
+    })
   } : r);
+  // ===== PART 1: on-site PER-PHASE TIMER (transition-based, forgiving) =====
+  // Actuals are MAN-HOURS = clock-time × that phase's crew. Each phase carries committed
+  // minutes (actualMin); a RUNNING phase also has startAt (ephemeral, never persisted while
+  // running → no overnight-phantom from an app close; an in-app overnight timer is what the
+  // closeout gate catches). Overlap allowed: each running phase keeps its OWN crew, so summing
+  // per-phase man-hours never double-counts the crew.
+  const fmtClock = min => {
+    const s = Math.max(0, Math.round((Number(min) || 0) * 60));
+    const h = Math.floor(s / 3600),
+      m = Math.floor(s % 3600 / 60),
+      ss = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0");
+  };
+  const phaseLiveMin = ph => (num(ph.actualMin) || 0) + (ph && ph.running && ph.startAt ? Math.max(0, (Date.now() - ph.startAt) / 60000) : 0);
+  const phaseCrew = ph => num(ph.crew) > 0 ? num(ph.crew) : jobCrew;
+  const phaseManHours = ph => Math.round(phaseLiveMin(ph) / 60 * phaseCrew(ph) * 10) / 10;
+  const updPhase = (ti, pi, patch) => setEstResult(r => r ? {
+    ...r,
+    trades: r.trades.map((tr, k) => k !== ti ? tr : {
+      ...tr,
+      phases: (tr.phases || []).map((ph, j) => j !== pi ? ph : Object.assign({}, ph, typeof patch === "function" ? patch(ph) : patch))
+    })
+  } : r);
+  const commitPh = ph => ph && ph.running && ph.startAt ? Object.assign({}, ph, {
+    actualMin: (num(ph.actualMin) || 0) + Math.max(0, (Date.now() - ph.startAt) / 60000),
+    running: false,
+    startAt: null
+  }) : ph;
+  const phaseStart = (ti, pi) => updPhase(ti, pi, ph => ({
+    running: true,
+    startAt: Date.now(),
+    crew: phaseCrew(ph)
+  }));
+  const phasePause = (ti, pi) => updPhase(ti, pi, ph => commitPh(ph));
+  const phaseSetCrew = (ti, pi, n) => updPhase(ti, pi, {
+    crew: Math.max(1, Math.round(num(n) || 1))
+  });
+  const phaseAddSub = (ti, pi, name, min) => updPhase(ti, pi, ph => ({
+    subs: [...(ph.subs || []), {
+      name: String(name || "task"),
+      min: Math.max(0, num(min) || 0)
+    }]
+  }));
+  const commitAllRunning = () => setEstResult(r => r ? {
+    ...r,
+    trades: r.trades.map(tr => ({
+      ...tr,
+      phases: (tr.phases || []).map(commitPh)
+    }))
+  } : r);
+  // closeout: approve / correct a phase (nothing saves to the record until approved)
+  const phaseApprove = (ti, pi) => updPhase(ti, pi, ph => ({
+    actualMin: phaseLiveMin(ph),
+    running: false,
+    startAt: null,
+    actualManHours: phaseManHours(ph),
+    approved: true
+  }));
+  const phaseCorrectMinutes = (ti, pi, totalMin) => updPhase(ti, pi, ph => {
+    const m = Math.max(0, num(totalMin) || 0);
+    return {
+      actualMin: m,
+      running: false,
+      startAt: null,
+      actualManHours: Math.round(m / 60 * phaseCrew(ph) * 10) / 10
+    };
+  });
+  const openTimer = () => {
+    // BACKFILL phases so every estimate gets timer rows — older/reopened estimates built
+    // before per-phase bids existed have no .phases, which left the timer empty.
+    setEstResult(r => {
+      if (!r || !r.trades) return r;
+      return {
+        ...r,
+        trades: r.trades.map(t => Array.isArray(t.phases) && t.phases.length ? t : {
+          ...t,
+          phases: allocatePhases(t.tradeKey, t.laborHours, t.phaseSys || (t.label || "") + " " + (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] || "" : ""))
+        })
+      };
+    });
+    if (estResult && estResult.trades && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
+    setTimerView("timer");
+  };
+  const closeTimer = () => {
+    commitAllRunning();
+    setTimerView("");
+  };
+  useEffect(() => {
+    if (timerView !== "timer") return;
+    const id = setInterval(() => {
+      if (estResult && estResult.trades.some(t => (t.phases || []).some(p => p.running))) setNowTick(x => x + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [timerView, estResult]);
+  // light voice/keyword control for the timer (hands-free phase switching)
+  const timerVoiceCommand = text => {
+    const s = String(text || "").toLowerCase();
+    if (!s.trim() || !estResult) return;
+    const crewM = s.match(/(\d+|one|two|three|four|five|six)\s*(?:guy|guys|men|man|people|person)/);
+    const w2n = {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+      six: 6
+    };
+    const crewN = crewM ? w2n[crewM[1]] || num(crewM[1]) : 0;
+    if (/\b(pause|lunch|break|hold on|stop for)\b/.test(s) && !/start|begin|moving|switch|resume/.test(s)) {
+      commitAllRunning();
+      flash("Paused all phases.");
+      return;
+    }
+    // find a phase by name match across all trades
+    let best = null;
+    estResult.trades.forEach((tr, ti) => (tr.phases || []).forEach((ph, pi) => {
+      const toks = ph.name.toLowerCase().split(/[^a-z]+/).filter(w => w.length > 2);
+      if (toks.some(w => s.indexOf(w) >= 0)) best = {
+        ti,
+        pi,
+        name: ph.name
+      };
+    }));
+    if (!best) {
+      flash("Didn't catch the phase — say e.g. “starting dry-in, two guys”.");
+      return;
+    }
+    const moving = /\b(moving to|switch to|switching to|now on|on to)\b/.test(s);
+    const stopping = /\b(done with|finished|stop|wrap)\b/.test(s) && !/start|begin/.test(s);
+    if (stopping) {
+      phasePause(best.ti, best.pi);
+      flash("Stopped " + best.name + ".");
+      return;
+    }
+    if (moving) commitAllRunning(); // sequential: moving to a phase stops the others
+    phaseStart(best.ti, best.pi);
+    if (crewN > 0) phaseSetCrew(best.ti, best.pi, crewN);
+    flash((moving ? "Moved to " : "Started ") + best.name + (crewN ? " · " + crewN + " crew" : ""));
+  };
+  // direct correction in MAN-HOURS (back-solves committed minutes from the phase's crew)
+  const phaseCorrectManHours = (ti, pi, mh) => updPhase(ti, pi, ph => {
+    const v = Math.max(0, Math.round((num(mh) || 0) * 10) / 10);
+    const c = phaseCrew(ph);
+    return {
+      actualMin: c > 0 ? v / c * 60 : v * 60,
+      running: false,
+      startAt: null,
+      actualManHours: v
+    };
+  });
+  // closeout natural-language correction → stage a readback draft (tcorr) → Apply confirms
+  const closeoutVoice = text => {
+    const s = String(text || "").toLowerCase();
+    if (!s.trim() || !estResult) return;
+    let best = null;
+    estResult.trades.forEach((tr, ti) => (tr.phases || []).forEach((ph, pi) => {
+      const toks = ph.name.toLowerCase().split(/[^a-z]+/).filter(w => w.length > 2);
+      if (toks.some(w => s.indexOf(w) >= 0)) best = {
+        ti,
+        pi,
+        ph
+      };
+    }));
+    if (!best) {
+      flash("Which phase? e.g. “set details to four hours”.");
+      return;
+    }
+    const cur = best.ph.actualManHours != null ? best.ph.actualManHours : phaseManHours(best.ph);
+    const crew = phaseCrew(best.ph);
+    let target = null,
+      m;
+    if ((m = s.match(/set (?:it |that |the \w+ )?to (\d+(?:\.\d+)?)/)) || (m = s.match(/(?:it'?s|it was|was|actually|really) (\d+(?:\.\d+)?)\s*hours?/)) || (m = s.match(/(?:finished|stopped|ended|done) .*?(\d+(?:\.\d+)?)\s*hours?/))) target = num(m[1]);else if (m = s.match(/(?:subtract|take off|minus|less) (?:an?|(\d+(?:\.\d+)?))/)) target = Math.max(0, cur - (num(m[1]) || 1) * crew);else if (m = s.match(/(?:add|plus) (?:an?|(\d+(?:\.\d+)?))/)) target = cur + (num(m[1]) || 1) * crew;
+    if (target == null) {
+      flash("Say e.g. “set tear-off to eighteen” or “subtract an hour from details”.");
+      return;
+    }
+    target = Math.round(target * 10) / 10;
+    setTcorr({
+      [best.ti + "-" + best.pi]: {
+        mh: target,
+        name: best.ph.name
+      }
+    });
+    if (voiceMode) speakAL("Setting " + best.ph.name + " to " + target + " man hours — tap apply to confirm.");
+  };
+  const [timerRec, setTimerRec] = useState(false); // one-shot recorder on the timer/closeout
+  const timerRecOnce = async onText => {
+    if (timerRec) {
+      try {
+        if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") mediaRecRef.current.stop();
+      } catch (e) {}
+      return;
+    }
+    if (!mediaOK) {
+      flash("Mic not available here — use the buttons/fields.");
+      return;
+    }
+    primeTTS();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true
+      });
+      const mime = pickMime();
+      const rec = mime ? new MediaRecorder(stream, {
+        mimeType: mime
+      }) : new MediaRecorder(stream);
+      mediaChunksRef.current = [];
+      rec.ondataavailable = e => {
+        if (e.data && e.data.size) mediaChunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        try {
+          (stream.getTracks() || []).forEach(t => t.stop());
+        } catch (e) {}
+        setTimerRec(false);
+        const blob = new Blob(mediaChunksRef.current, {
+          type: rec.mimeType || mime || "audio/webm"
+        });
+        mediaChunksRef.current = [];
+        if (!blob.size) return;
+        const t = await transcribeBlob(blob);
+        if (t) onText(t);else flash("Didn't catch that.");
+      };
+      mediaRecRef.current = rec;
+      rec.start();
+      setTimerRec(true);
+    } catch (e) {
+      setTimerRec(false);
+      flash("Mic unavailable.");
+    }
+  };
   // ---- saved-estimates library (build-set #3) ----
   const tradeCostOf = t => {
     const matTotal = (t.items || []).reduce((a, b) => a + (num(b.cost) || 0), 0);
@@ -6421,28 +7788,109 @@ function App() {
   };
   const combinedCostOf = trades => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
   const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // DELIVERY / MOBILIZATION — one job-level cost line (cost-true; gross margin lands on top
+  // like every other cost). base + RT_miles x crew x (burdened $/min) + RT_miles x truck $/mi.
+  // crew = the most workers on any one trade (who travel); burden = labor-weighted burdened
+  // $/hr across all trades (so a single-trade job uses exactly that trade's crew + rate).
+  const mobRates = () => ({
+    base: profC.mobBase == null || profC.mobBase === "" ? 350 : num(profC.mobBase) || 0,
+    truck: profC.mobTruckPerMi == null || profC.mobTruckPerMi === "" ? 0.7 : num(profC.mobTruckPerMi) || 0
+  });
+  const mobilizeCostOf = trades => {
+    if (!estMobOn) return 0;
+    const list = trades || [];
+    if (!list.length) return 0;
+    const {
+      base,
+      truck
+    } = mobRates();
+    const mi = Math.max(0, num(estMiles) || 0);
+    const crew = list.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
+    const totHrs = list.reduce((a, t) => a + (num(t.laborHours) || 0), 0);
+    const totLab = list.reduce((a, t) => a + (num(t.laborHours) || 0) * (num(t.laborRate) || 0), 0);
+    const burden = totHrs > 0 ? totLab / totHrs : num(list[0].laborRate) || 0;
+    return Math.round(base + mi * crew * (burden / 60) + mi * truck);
+  };
+  // Full job cost = trades + mobilization. Margin is applied to THIS via sellOf.
+  const jobCostOf = trades => combinedCostOf(trades) + mobilizeCostOf(trades);
+  // ===== PART 2: HOMEOWNER PROPOSAL (presentation only; signing is behind the legal gate) =====
+  const tierWarranty = tier => {
+    const t = String(tier || "").toLowerCase();
+    if (t.indexOf("best") >= 0) return "Lifetime workmanship + full manufacturer system warranty — our longest coverage.";
+    if (t.indexOf("good") >= 0) return "Manufacturer standard shingle warranty + our workmanship guarantee.";
+    return "Extended manufacturer system warranty + our workmanship guarantee.";
+  };
+  // Whole-job good/better/best built from the PRIMARY trade's local options; each tier prices
+  // the WHOLE job with that primary material. Homeowner-facing: price + value only, never the buildup.
+  const proposalTiers = () => {
+    if (!estResult || !estResult.trades || !estResult.trades.length) return [];
+    const trades = estResult.trades,
+      combined = jobCostOf(trades),
+      primary = trades[0];
+    const opts = (primary.primaryOptions || []).filter(o => num(o.cost) > 0);
+    if (!opts.length) return [{
+      tier: "Your price",
+      name: primary.title || "Complete project",
+      why: "",
+      price: sellOf(combined, estMargin),
+      warranty: tierWarranty("better"),
+      url: ""
+    }];
+    const primaryLine = primary.items && primary.items[0] ? num(primary.items[0].cost) : 0;
+    return opts.slice(0, 3).map(o => ({
+      tier: o.tier,
+      name: o.name,
+      why: o.why,
+      price: sellOf(combined - primaryLine + num(o.cost), estMargin),
+      warranty: tierWarranty(o.tier),
+      url: o.url
+    }));
+  };
+  const proposalScopeBullets = () => estResult && estResult.trades ? estResult.trades.map(t => {
+    const m = houseScope[t.tradeKey] && houseScope[t.tradeKey] !== true ? String(houseScope[t.tradeKey]) : "";
+    return (t.label || t.title) + (m ? " — " + m : "");
+  }) : [];
+  const setProposalColor = (tradeKey, name) => setEstResult(r => r ? {
+    ...r,
+    colors: Object.assign({}, r.colors, {
+      [tradeKey]: name
+    })
+  } : r);
+  const setProposalTier = tier => setEstResult(r => r ? {
+    ...r,
+    proposalTier: tier
+  } : r);
+  const openProposal = () => {
+    persistCurrent();
+    setPropOpen(true);
+  };
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: estResult && estResult.trades || [],
     multi: !!(estResult && estResult.multi),
     errors: estResult && estResult.errors || [],
     estMargin: estMargin,
+    estMiles: estMiles,
+    estMobOn: estMobOn,
     houseScope: houseScope,
     housePanelW: housePanelW,
     whDims: whDims,
     whPhotos: whPhotos,
-    houseView: houseView
+    houseView: houseView,
+    colors: estResult && estResult.colors || {},
+    proposalTier: estResult && estResult.proposalTier || ""
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async extra => {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
     const id = estId || "est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-    const price = sellOf(combinedCostOf(estResult.trades), estMargin);
+    const price = sellOf(jobCostOf(estResult.trades), estMargin);
     const title = estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades";
     const rec = Object.assign({
       id: id,
       customerName: estCustomer.trim(),
       jobAddress: estAddress.trim(),
+      customerEmail: estEmail.trim(),
       status: estStatus,
       jobNimbusId: null,
       price: price,
@@ -6464,8 +7912,11 @@ function App() {
     setEstId(rec.id);
     setEstCustomer(rec.customerName || "");
     setEstAddress(rec.jobAddress || "");
+    setEstEmail(rec.customerEmail || "");
     setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30);
+    setEstMiles(num(p.estMiles) || 0);
+    setEstMobOn(p.estMobOn === true);
     setHouseScope(p.houseScope || {});
     setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || "");
@@ -6477,7 +7928,9 @@ function App() {
     setEstResult({
       trades: p.trades || [],
       multi: !!p.multi,
-      errors: p.errors || []
+      errors: p.errors || [],
+      colors: p.colors || {},
+      proposalTier: p.proposalTier || ""
     });
   };
   const deleteSavedEstimate = async id => {
@@ -6512,14 +7965,17 @@ function App() {
     setEstId(null);
     setEstCustomer("");
     setEstAddress("");
+    setEstEmail("");
     setEstStatus("draft");
+    setEstMiles(0);
+    setEstMobOn(true);
     setHouseScope({});
     setHousePanelW({});
     setWhDims("");
     setWhPhotos([]);
     setActiveTrade(null);
     setSelStep("category");
-    setAlMsgs([]);
+    setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
   const addDimRow = (label, unit) => setEstDimRows(d => [...d, {
@@ -9400,7 +10856,44 @@ function App() {
     className: "bidends"
   }, /*#__PURE__*/React.createElement("span", null, "5 mi"), /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("label", {
+  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      marginTop: 6
+    }
+  }, "Delivery / mobilization rates ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "cost book — your real costs, margin lands on top")), /*#__PURE__*/React.createElement("div", {
+    className: "estfields"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Mobilization base $"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: profC.mobBase,
+    onChange: e => setProfC({
+      ...profC,
+      mobBase: num(e.target.value)
+    }),
+    placeholder: "350"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Truck $/mile"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    step: "0.05",
+    value: profC.mobTruckPerMi,
+    onChange: e => setProfC({
+      ...profC,
+      mobTruckPerMi: num(e.target.value)
+    }),
+    placeholder: "0.70"
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 2
+    }
+  }, "Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate."), /*#__PURE__*/React.createElement("label", {
     className: "fld"
   }, /*#__PURE__*/React.createElement("span", null, "About your company"), /*#__PURE__*/React.createElement("textarea", {
     className: "desc",
@@ -9489,11 +10982,191 @@ function App() {
       prefMaterials: e.target.value
     }),
     placeholder: "e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum"
-  }), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      borderTop: "1px solid #eee",
+      paddingTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, "Good / better / best lines ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "your tiers — AL builds estimates around these")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      margin: "6px 0"
+    }
+  }, TIER_CATS.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.key,
+    className: "btn " + (prefCat === c.key ? "primary" : "ghost"),
+    style: {
+      padding: "4px 10px",
+      fontSize: 12
+    },
+    onClick: () => setPrefCat(c.key)
+  }, c.label))), ["good", "better", "best"].map(tier => {
+    const cur = profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier] || "";
+    const opts = TIER_OPTIONS[prefCat][tier];
+    const setTier = val => setProfC(p => ({
+      ...p,
+      tierPrefs: Object.assign({}, p.tierPrefs, {
+        [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], {
+          [tier]: val
+        })
+      })
+    }));
+    return /*#__PURE__*/React.createElement("div", {
+      key: tier,
+      style: {
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        textTransform: "capitalize",
+        fontSize: 13
+      }
+    }, tier), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, opts.map(o => /*#__PURE__*/React.createElement("button", {
+      key: o,
+      className: "btn " + (cur === o ? "primary" : "ghost"),
+      style: {
+        padding: "4px 9px",
+        fontSize: 12
+      },
+      onClick: () => setTier(cur === o ? "" : o)
+    }, cur === o ? "✓ " : "", o))), /*#__PURE__*/React.createElement("input", {
+      className: "in",
+      style: {
+        marginTop: 4,
+        width: "100%"
+      },
+      value: opts.includes(cur) ? "" : cur,
+      onChange: e => setTier(e.target.value),
+      placeholder: "…or type your own line for this tier"
+    }));
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Set a category's three lines and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.")), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full",
+    style: {
+      marginTop: 12
+    },
     disabled: busy === "prof",
     onClick: () => saveProfile("contractor")
   }, busy === "prof" ? "Saving…" : "Save preferences")), /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2"
+  }, "Assistant voice ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "who talks & helps you estimate")), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: -2
+    }
+  }, "Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, set its speed, then Use."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      marginTop: 8
+    }
+  }, PERSONAS.map(p => {
+    const spd = personaSpeeds[p.name] || 1;
+    return /*#__PURE__*/React.createElement("div", {
+      key: p.name,
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "8px",
+        borderRadius: 10,
+        border: "1px solid " + (persona === p.name ? "#0a7d36" : "#e6e8ea"),
+        background: persona === p.name ? "#f0faf3" : "#fff"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10
+      }
+    }, personaFace(p, true), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, p.name, " ", p.name === "AL" && /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "· default")), /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, p.sex === "f" ? "Female voice" : "Male voice")), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "4px 10px"
+      },
+      onClick: () => previewPersona(p),
+      title: "Hear " + p.name + " at " + spd.toFixed(2) + "×"
+    }, "▶"), /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (persona === p.name ? "primary" : "ghost"),
+      style: {
+        padding: "4px 12px"
+      },
+      onClick: () => {
+        personaSet(p.name);
+        flash(p.name + " is now your assistant.");
+      }
+    }, persona === p.name ? "✓ Using" : "Use")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        width: 44
+      }
+    }, "Speed"), /*#__PURE__*/React.createElement("input", {
+      type: "range",
+      min: "0.7",
+      max: "1.2",
+      step: "0.05",
+      value: spd,
+      style: {
+        flex: 1
+      },
+      onChange: e => personaSpeedSet(p.name, e.target.value)
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        width: 40,
+        textAlign: "right",
+        fontVariantNumeric: "tabular-nums"
+      }
+    }, spd.toFixed(2), "×")));
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 8
+    }
+  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -9794,16 +11467,12 @@ function App() {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convhead"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg",
-    src: AL_NOTEPAD,
-    alt: "AL"
-  }), /*#__PURE__*/React.createElement("div", {
+  }, personaFace(curPersona), /*#__PURE__*/React.createElement("div", {
     className: "h1",
     style: {
       margin: 0
     }
-  }, "AL"), /*#__PURE__*/React.createElement("button", {
+  }, curPersona.name), /*#__PURE__*/React.createElement("button", {
     className: "btn " + (voiceMode ? "primary" : "ghost"),
     style: {
       marginLeft: "auto",
@@ -9811,7 +11480,7 @@ function App() {
       fontSize: 13
     },
     onClick: toggleVoice,
-    title: "Talk to AL — he reads replies aloud and confirms numbers back"
+    title: "Talk to " + curPersona.name + " — reads replies aloud and confirms numbers back"
   }, voiceMode ? "🔊 Voice on" : "🔈 Voice")), /*#__PURE__*/React.createElement("div", {
     className: "convmsgs",
     style: {
@@ -9823,22 +11492,14 @@ function App() {
     className: "convrow ai"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
+  }, personaFace(curPersona, true)), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai"
-  }, "Hey, I'm AL — let's build this estimate. First: are we working outside, inside, or on the systems?")), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
+  }, "Hey, I'm ", curPersona.name, " — let's build this estimate. First: are we working outside, inside, or on the systems?")), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
     className: "convrow ai",
     key: i
   }, /*#__PURE__*/React.createElement("div", {
     className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
+  }, personaFace(curPersona, true)), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai"
   }, m.text)) : /*#__PURE__*/React.createElement("div", {
     className: "convbubble me",
@@ -9847,11 +11508,7 @@ function App() {
     className: "convrow ai"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convav"
-  }, /*#__PURE__*/React.createElement("img", {
-    className: "helperimg sm",
-    src: AL_NOTEPAD,
-    alt: ""
-  })), /*#__PURE__*/React.createElement("div", {
+  }, personaFace(curPersona, true)), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai typing"
   }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null)))), (() => {
     const tradesHere = HOUSE_HOTSPOTS.filter(h => h.state === houseView);
@@ -10013,21 +11670,20 @@ function App() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement("button", {
-    className: "btn " + (listening ? "primary" : "ghost"),
+    className: "btn " + (voiceSession ? "primary" : "ghost"),
     style: {
       padding: "0 12px",
       animation: listening ? "pulse 1s infinite" : "none"
     },
-    disabled: alBusy || transcribing,
     onClick: startVoiceInput,
-    title: listening ? "Tap to stop" : "Tap and talk"
-  }, listening ? "● Stop" : transcribing ? "…" : "🎤"), /*#__PURE__*/React.createElement("input", {
+    title: voiceSession ? "End hands-free conversation" : "Start a hands-free conversation"
+  }, voiceSession ? "■ Stop" : "🎤"), /*#__PURE__*/React.createElement("input", {
     value: alInput,
     onChange: e => setAlInput(e.target.value),
     onKeyDown: e => {
       if (e.key === "Enter") alSend();
     },
-    placeholder: listening ? "Recording… tap Stop when done" : transcribing ? "Transcribing…" : "e.g. “west slope is 8/12” or “what do you still need?”",
+    placeholder: voiceSession ? listening ? "Listening… just talk" : transcribing ? "Got it — one sec…" : "AL is talking…" : "e.g. “west slope is 8/12” or “what do you still need?”",
     style: {
       flex: 1
     }
@@ -10035,12 +11691,17 @@ function App() {
     className: "btn primary",
     disabled: alBusy || !alInput.trim(),
     onClick: () => alSend()
-  }, "Send")), voiceMode && /*#__PURE__*/React.createElement("p", {
+  }, "Send")), voiceSession ? /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 4
     }
-  }, "🔊 Tap 🎤, say it (e.g. “standing seam, eight twelve, valley into the dormer”), tap Stop — AL transcribes, fills it in, and reads it back to confirm before it locks.")), /*#__PURE__*/React.createElement("div", {
+  }, "🎙️ Hands-free — just talk. Pause and ", curPersona.name, " takes the turn, reads it back, then listens again. No tapping until you hit ■ Stop.") : voiceMode && /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 4
+    }
+  }, "🔊 Tap 🎤 once to start a hands-free conversation — say it (e.g. “standing seam, eight twelve, valley into the dormer”), pause, and ", curPersona.name, " fills it in and reads it back. iPhone needs the one tap to allow the mic.")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6
@@ -10251,9 +11912,14 @@ function App() {
         cost: labor + matTotal + matTax + t.equipment
       };
     };
-    const combined = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+    const tradesCost = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+    const mob = mobilizeCostOf(trades);
+    const combined = tradesCost + mob;
     const sell = Math.round(combined / (1 - estMargin / 100) / 25) * 25;
     const profit = sell - combined;
+    const mr = mobRates();
+    const mobMiles = Math.max(0, num(estMiles) || 0);
+    const mobCrew = trades.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
@@ -10269,7 +11935,24 @@ function App() {
     }, "← Back to scope"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost grow1",
       onClick: startNewEstimate
-    }, "Start new estimate")), /*#__PURE__*/React.createElement("section", {
+    }, "Start new estimate")), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary full",
+      style: {
+        marginBottom: 4
+      },
+      onClick: openProposal
+    }, "📄 Present proposal to homeowner"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      style: {
+        marginBottom: 4
+      },
+      onClick: () => {
+        persistCurrent();
+        openTimer();
+      }
+    }, "⏱ Track time on this job ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "log actual hours per phase")), /*#__PURE__*/React.createElement("section", {
       className: "card",
       style: {
         marginBottom: 4
@@ -10288,6 +11971,13 @@ function App() {
       value: estAddress,
       onChange: e => setEstAddress(e.target.value),
       placeholder: "address"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Customer email"), /*#__PURE__*/React.createElement("input", {
+      type: "email",
+      value: estEmail,
+      onChange: e => setEstEmail(e.target.value),
+      placeholder: "name@email.com"
     })), /*#__PURE__*/React.createElement("label", {
       className: "estf"
     }, /*#__PURE__*/React.createElement("span", null, "Status"), /*#__PURE__*/React.createElement("select", {
@@ -10492,7 +12182,32 @@ function App() {
         step: "0.001",
         value: t.taxRate,
         onChange: e => estTradeField(ti, "taxRate", num(e.target.value))
-      }))), /*#__PURE__*/React.createElement("div", {
+      }))), Array.isArray(t.phases) && t.phases.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 10
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "seclabel"
+      }, "Phase bid ", /*#__PURE__*/React.createElement("span", {
+        className: "hint"
+      }, "man-hours per phase — what the on-site timer compares against")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+          marginTop: 4
+        }
+      }, t.phases.map((ph, pi) => /*#__PURE__*/React.createElement("span", {
+        key: pi,
+        style: {
+          fontSize: 12,
+          background: "#eef2f6",
+          color: "#33414f",
+          border: "1px solid #dde3ea",
+          borderRadius: 12,
+          padding: "3px 10px"
+        }
+      }, /*#__PURE__*/React.createElement("b", null, ph.name), " ", ph.bidHours, " hr")))), /*#__PURE__*/React.createElement("div", {
         className: "costbox",
         style: {
           marginTop: 12
@@ -10556,17 +12271,62 @@ function App() {
       }, "📋 Log job actuals (calibrate)")));
     }), /*#__PURE__*/React.createElement("section", {
       className: "card"
-    }, trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", {
       className: "costbox"
-    }, trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
+    }, trades.length > 1 && trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
       className: "costrow",
       key: ti
-    }, /*#__PURE__*/React.createElement("span", null, t.label || t.title), /*#__PURE__*/React.createElement("b", null, $0(tradeCost(t).cost)))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, t.label || t.title), /*#__PURE__*/React.createElement("b", null, $0(tradeCost(t).cost)))), trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+      className: "costrow"
+    }, /*#__PURE__*/React.createElement("span", null, "Trades subtotal"), /*#__PURE__*/React.createElement("b", null, $0(tradesCost))), /*#__PURE__*/React.createElement("div", {
+      className: "costrow",
+      style: {
+        alignItems: "center",
+        flexWrap: "wrap",
+        rowGap: 4
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: estMobOn,
+      onChange: e => setEstMobOn(e.target.checked),
+      title: "Include the delivery / mobilization charge on this job"
+    }), "Delivery / mobilization", /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4
+      }
+    }, "· round-trip ", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      value: estMiles,
+      disabled: !estMobOn,
+      onChange: e => setEstMiles(num(e.target.value)),
+      style: {
+        width: 56,
+        padding: "2px 6px",
+        border: "1px solid #dde3ea",
+        borderRadius: 6,
+        opacity: estMobOn ? 1 : 0.5
+      }
+    }), " mi")), /*#__PURE__*/React.createElement("b", null, $0(mob))), estMobOn && /*#__PURE__*/React.createElement("div", {
+      className: "costrow"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "↳ ", $0(mr.base), " base + ", mobMiles, " mi × ", mobCrew, " crew drive-time + ", mobMiles, " mi × $", mr.truck.toFixed(2), "/mi truck · rates in Profile → cost book"), /*#__PURE__*/React.createElement("b", null)), /*#__PURE__*/React.createElement("div", {
       className: "costrow total"
-    }, /*#__PURE__*/React.createElement("span", null, "Combined cost"), /*#__PURE__*/React.createElement("b", null, $0(combined)))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, trades.length > 1 ? "Total job cost" : "Job cost"), /*#__PURE__*/React.createElement("b", null, $0(combined)))), /*#__PURE__*/React.createElement("div", {
       className: "marginbox",
       style: {
-        marginTop: trades.length > 1 ? 12 : 0
+        marginTop: 12
       }
     }, /*#__PURE__*/React.createElement("div", {
       className: "marginhead"
@@ -10804,7 +12564,759 @@ function App() {
   }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: csvResetImport
-  }, "Cancel")))))), me.role === "contractor" && tab === "work" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }, "Cancel")))))), me.role === "contractor" && tab === "estimator" && timerView && estResult && estResult.trades && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 80,
+      background: "#fff",
+      overflowY: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 560,
+      margin: "0 auto",
+      padding: 14,
+      paddingBottom: 40
+    }
+  }, timerView === "timer" ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h1",
+    style: {
+      flex: 1,
+      margin: 0
+    }
+  }, "⏱ Time audit", estCustomer.trim() ? " — " + estCustomer.trim() : ""), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: closeTimer
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      margin: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "Job crew"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 10px"
+    },
+    onClick: () => setJobCrew(Math.max(1, jobCrew - 1))
+  }, "−"), /*#__PURE__*/React.createElement("b", {
+    style: {
+      minWidth: 16,
+      textAlign: "center"
+    }
+  }, jobCrew), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 10px"
+    },
+    onClick: () => setJobCrew(jobCrew + 1)
+  }, "+"), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "each phase defaults to this")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn " + (timerRec ? "primary" : "ghost"),
+    style: {
+      flex: 1,
+      animation: timerRec ? "pulse 1s infinite" : "none"
+    },
+    onClick: () => timerRecOnce(timerVoiceCommand)
+  }, timerRec ? "● Listening… tap to send" : "🎤 “starting dry-in, two guys”"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => {
+      commitAllRunning();
+      flash("Paused all phases.");
+    }
+  }, "⏸ Pause all")), (() => {
+    const running = [];
+    let totMh = 0;
+    estResult.trades.forEach(t => (t.phases || []).forEach(ph => {
+      totMh += phaseManHours(ph);
+      if (ph.running) running.push(ph.name + " · " + phaseCrew(ph) + " guys");
+    }));
+    totMh = Math.round(totMh * 10) / 10;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        padding: "8px 11px",
+        borderRadius: 10,
+        background: running.length ? "#eafaf0" : "#f3f4f6",
+        border: "1px solid " + (running.length ? "#36e07a" : "#e6e8ea"),
+        fontWeight: 700
+      }
+    }, running.length ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#0a7d36"
+      }
+    }, "● Running: ", running.join("  ·  ")) : /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "No phase running — tap ▶ Start on a phase below."), /*#__PURE__*/React.createElement("span", {
+      style: {
+        float: "right"
+      }
+    }, totMh, " mh so far"));
+  })(), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
+    className: "card",
+    key: ti,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, t.label || t.title), (t.phases || []).map((ph, pi) => {
+    const mh = phaseManHours(ph);
+    return /*#__PURE__*/React.createElement("div", {
+      key: pi,
+      style: {
+        marginTop: pi ? 6 : 0,
+        padding: "8px",
+        borderRadius: 8,
+        background: ph.running ? "#eafaf0" : "transparent",
+        border: ph.running ? "1px solid #36e07a" : "1px solid #eef0f2"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (ph.running ? "primary" : "ghost"),
+      style: {
+        padding: "8px 14px",
+        animation: ph.running ? "pulse 1s infinite" : "none"
+      },
+      onClick: () => ph.running ? phasePause(ti, pi) : phaseStart(ti, pi)
+    }, ph.running ? "⏸ Stop" : "▶ Start"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexWrap: "wrap"
+      }
+    }, ph.name, ph.running && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: "#fff",
+        background: "#e0392b",
+        borderRadius: 6,
+        padding: "1px 7px"
+      }
+    }, "● RUNNING")), /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "bid ", ph.bidHours, " hr"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontVariantNumeric: "tabular-nums",
+        fontWeight: 800,
+        fontSize: 18,
+        color: ph.running ? "#0a7d36" : "#33414f"
+      }
+    }, "⏱ ", fmtClock(phaseLiveMin(ph))), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "×"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 9px"
+      },
+      onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)
+    }, "−"), /*#__PURE__*/React.createElement("b", {
+      style: {
+        minWidth: 14,
+        textAlign: "center"
+      }
+    }, phaseCrew(ph)), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 9px"
+      },
+      onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) + 1)
+    }, "+"), /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "guys")), /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: "auto",
+        fontWeight: 800,
+        fontSize: 16
+      }
+    }, "= ", mh, " mh")), ph.subs && ph.subs.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 4,
+        marginTop: 4
+      }
+    }, ph.subs.map((sb, si) => /*#__PURE__*/React.createElement("span", {
+      key: si,
+      className: "hint",
+      style: {
+        background: "#eef2f6",
+        borderRadius: 10,
+        padding: "2px 8px"
+      }
+    }, sb.name, " ", Math.round(sb.min), "m"))), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px",
+        fontSize: 12,
+        marginTop: 4
+      },
+      onClick: () => {
+        const n = window.prompt("Precise task inside " + ph.name + " (e.g. chimney flashing)");
+        if (!n) return;
+        const m = window.prompt("Minutes on " + n, "30");
+        if (m == null) return;
+        phaseAddSub(ti, pi, n, num(m));
+      }
+    }, "+ precise task ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "slice of this phase")));
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full big",
+    style: {
+      marginTop: 12
+    },
+    onClick: () => {
+      commitAllRunning();
+      setTimerView("closeout");
+    }
+  }, "End & review →"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Actuals are man-hours (clock × that phase's crew). Overlap is fine — each phase keeps its own crew so they don't double-count. Time persists across days.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h1",
+    style: {
+      flex: 1,
+      margin: 0
+    }
+  }, "Closeout — approve each phase"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setTimerView("timer")
+  }, "← Timer")), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Bid vs actual man-hours. Approve the ones that look right; fix the one that's off. Only approved values save."), (() => {
+    const anyLoud = estResult.trades.some(t => (t.phases || []).some(ph => {
+      const b = ph.bidHours,
+        a = ph.actualManHours != null ? ph.actualManHours : phaseManHours(ph);
+      return b > 0 && Math.abs((a - b) / b * 100) > 75;
+    }));
+    return anyLoud ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "8px 11px",
+        background: "#fde7e7",
+        border: "1px solid #f5a9a3",
+        borderRadius: 10,
+        color: "#b3261e",
+        fontWeight: 700,
+        fontSize: 13,
+        marginBottom: 4
+      }
+    }, "⚠️ A phase is way off the bid — check it (timer left running?) before saving.") : null;
+  })(), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      margin: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn " + (timerRec ? "primary" : "ghost"),
+    style: {
+      flex: 1,
+      animation: timerRec ? "pulse 1s infinite" : "none"
+    },
+    onClick: () => timerRecOnce(closeoutVoice)
+  }, timerRec ? "● Listening…" : "🎤 Fix by voice (e.g. “set details to four hours”)")), estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("section", {
+    className: "card",
+    key: ti,
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "seclabel"
+  }, t.label || t.title), (t.phases || []).map((ph, pi) => {
+    const bid = ph.bidHours;
+    const actual = ph.actualManHours != null ? ph.actualManHours : phaseManHours(ph);
+    const diff = Math.round((actual - bid) * 10) / 10;
+    const pct = bid > 0 ? Math.round(diff / bid * 100) : actual > 0 ? 999 : 0;
+    const loud = Math.abs(pct) > 75;
+    const warn = !loud && Math.abs(pct) > 25;
+    const col = loud ? "#b3261e" : warn ? "#8A5A12" : "#1B7A3D";
+    const bg = loud ? "#fde7e7" : warn ? "#FFF4E6" : "#F0FAF3";
+    const key = ti + "-" + pi;
+    const draft = tcorr[key];
+    return /*#__PURE__*/React.createElement("div", {
+      key: pi,
+      style: {
+        borderTop: pi ? "1px solid #eef0f2" : "none",
+        padding: "8px 0"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700
+      }
+    }, ph.name, " ", ph.approved && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#1B7A3D"
+      }
+    }, "✓ saved")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: col,
+        fontWeight: 700,
+        background: bg,
+        display: "inline-block",
+        padding: "1px 8px",
+        borderRadius: 8,
+        marginTop: 2
+      }
+    }, loud ? "⚠️ " : "", "bid ", bid, " · actual ", actual, " · ", diff >= 0 ? "+" : "", diff, " (", pct >= 0 ? "+" : "", pct, "%)")), /*#__PURE__*/React.createElement("label", {
+      className: "estf",
+      style: {
+        width: 84
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "Actual mh"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      value: actual,
+      onChange: e => phaseCorrectManHours(ti, pi, num(e.target.value))
+    })), /*#__PURE__*/React.createElement("button", {
+      className: "btn " + (ph.approved ? "ghost" : "primary"),
+      style: {
+        padding: "6px 12px"
+      },
+      onClick: () => phaseApprove(ti, pi)
+    }, ph.approved ? "Approved" : "Approve")), draft && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 6,
+        background: "#FFFBF4",
+        border: "1px solid #F2C98A",
+        borderRadius: 8,
+        padding: "6px 8px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        flex: 1
+      }
+    }, "Set ", /*#__PURE__*/React.createElement("b", null, draft.name), " to ", /*#__PURE__*/React.createElement("b", null, draft.mh), " man-hours?"), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary",
+      style: {
+        padding: "2px 10px"
+      },
+      onClick: () => {
+        phaseCorrectManHours(ti, pi, draft.mh);
+        setTcorr({});
+      }
+    }, "Apply"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px"
+      },
+      onClick: () => setTcorr({})
+    }, "✕")));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost grow1",
+    onClick: () => setTimerView("timer")
+  }, "← Back to timer"), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary grow1",
+    onClick: () => {
+      persistCurrent({
+        auditClosedAt: new Date().toISOString()
+      });
+      flash("Saved — approved phases recorded.");
+      setTimerView("");
+    }
+  }, "Save audit"))))), me.role === "contractor" && tab === "estimator" && propOpen && estResult && estResult.trades && (() => {
+    const tiers = proposalTiers();
+    const chosen = estResult.proposalTier || (tiers.length === 3 ? tiers[1].tier : tiers[0] && tiers[0].tier);
+    const who = estCustomer.trim() || "the homeowner";
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 80,
+        background: "#f4f6f8",
+        overflowY: "auto"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        maxWidth: 560,
+        margin: "0 auto",
+        padding: 14,
+        paddingBottom: 40
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "flex-end",
+        marginBottom: -8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "2px 8px"
+      },
+      onClick: () => setPropOpen(false)
+    }, "✕")), /*#__PURE__*/React.createElement("label", {
+      style: {
+        display: "block",
+        textAlign: "center",
+        marginBottom: 8,
+        cursor: "pointer"
+      }
+    }, profC.avatar ? /*#__PURE__*/React.createElement("img", {
+      src: profC.avatar,
+      alt: "Company logo",
+      style: {
+        maxHeight: 72,
+        maxWidth: "70%",
+        objectFit: "contain"
+      }
+    }) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "inline-block",
+        padding: "16px 22px",
+        border: "2px dashed #c2c8ce",
+        borderRadius: 12,
+        color: "#8a929a",
+        fontWeight: 700
+      }
+    }, "+ Add your company logo"), /*#__PURE__*/React.createElement("input", {
+      type: "file",
+      accept: "image/*",
+      style: {
+        display: "none"
+      },
+      onChange: async e => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        try {
+          const u = await imageToJpeg(f, 600);
+          setProfC(p => ({
+            ...p,
+            avatar: u
+          }));
+          flash("Logo saved to your profile.");
+        } catch (err) {
+          flash("Couldn't add that image.");
+        }
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        marginBottom: 4
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h1",
+      style: {
+        margin: 0
+      }
+    }, "Your Roofing Proposal"), /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, profC.company || "Caza Contractors", " · prepared for ", who, estAddress.trim() ? " · " + estAddress.trim() : "")), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginTop: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h2"
+    }, "What we found on your roof"), whPhotos.length > 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        marginTop: 6
+      }
+    }, whPhotos.map((p, i) => /*#__PURE__*/React.createElement("div", {
+      key: i
+    }, /*#__PURE__*/React.createElement("img", {
+      src: p,
+      alt: "Inspection " + (i + 1),
+      style: {
+        width: "100%",
+        borderRadius: 10,
+        display: "block"
+      }
+    }))), /*#__PURE__*/React.createElement("p", {
+      className: "hint"
+    }, "Photos of your actual roof taken at inspection.")) : /*#__PURE__*/React.createElement("p", {
+      className: "hint"
+    }, "Add inspection photos on the job (📷 Photo) to show the homeowner the real condition.")), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginTop: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h2"
+    }, "Choose your option"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        marginTop: 8
+      }
+    }, tiers.map((tr, i) => {
+      const popular = tiers.length === 3 && i === 1;
+      const on = chosen === tr.tier;
+      return /*#__PURE__*/React.createElement("div", {
+        key: i,
+        style: {
+          border: "2px solid " + (on ? "#0a7d36" : popular ? "#d8b24a" : "#e0e4e8"),
+          borderRadius: 14,
+          padding: 14,
+          background: on ? "#f0faf3" : "#fff",
+          position: "relative"
+        }
+      }, popular && /*#__PURE__*/React.createElement("div", {
+        style: {
+          position: "absolute",
+          top: -10,
+          left: 14,
+          background: "#d8b24a",
+          color: "#3a2c00",
+          fontSize: 11,
+          fontWeight: 800,
+          padding: "2px 10px",
+          borderRadius: 8
+        }
+      }, "MOST POPULAR"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 800,
+          textTransform: "uppercase",
+          letterSpacing: ".5px",
+          color: "#6a737d"
+        }
+      }, tr.tier), /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginLeft: "auto",
+          fontSize: 26,
+          fontWeight: 800
+        }
+      }, $0(tr.price))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: 16,
+          marginTop: 2
+        }
+      }, tr.name), tr.why && /*#__PURE__*/React.createElement("div", {
+        className: "hint",
+        style: {
+          marginTop: 2
+        }
+      }, tr.why), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12.5,
+          color: "#2F4A39",
+          marginTop: 6
+        }
+      }, "🛡 ", tr.warranty), /*#__PURE__*/React.createElement("button", {
+        className: "btn " + (on ? "primary" : "ghost") + " full",
+        style: {
+          marginTop: 10
+        },
+        onClick: () => setProposalTier(tr.tier)
+      }, on ? "✓ Selected" : "Choose this"));
+    }))), (() => {
+      const lines = estResult.trades.map((t, ti) => {
+        // primary trade uses the picked tier's product name → its manufacturer's colors
+        const chosenTierObj = ti === 0 && chosen ? tiers.find(x => x.tier === chosen) : null;
+        const product = chosenTierObj && chosenTierObj.name || t.items && t.items[0] && t.items[0].name || (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] : "");
+        return {
+          t,
+          line: colorLineForProduct(product, t.tradeKey, houseScope[t.tradeKey])
+        };
+      }).filter(x => x.line);
+      if (!lines.length) return null;
+      const colors = estResult.colors || {};
+      return /*#__PURE__*/React.createElement("section", {
+        className: "card",
+        style: {
+          marginTop: 10
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "h2"
+      }, "Pick your color", lines.length > 1 ? "s" : ""), lines.map(({
+        t,
+        line
+      }, li) => {
+        const sel = colors[t.tradeKey];
+        return /*#__PURE__*/React.createElement("div", {
+          key: li,
+          style: {
+            marginTop: li ? 12 : 4
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          className: "seclabel"
+        }, lines.length > 1 ? (t.label || t.title) + " · " : "", line.label, sel ? " · " + sel : ""), /*#__PURE__*/React.createElement("div", {
+          style: {
+            display: "grid",
+            gridTemplateColumns: "repeat(4, 1fr)",
+            gap: 8,
+            marginTop: 6
+          }
+        }, line.colors.map(c => {
+          const on = sel === c.name;
+          return /*#__PURE__*/React.createElement("button", {
+            key: c.name,
+            onClick: () => setProposalColor(t.tradeKey, c.name),
+            style: {
+              border: on ? "3px solid #0a7d36" : "1px solid #ccd2d8",
+              borderRadius: 10,
+              padding: 0,
+              overflow: "hidden",
+              cursor: "pointer",
+              background: "#fff"
+            }
+          }, /*#__PURE__*/React.createElement("div", {
+            style: {
+              height: 40,
+              background: c.hex
+            }
+          }), /*#__PURE__*/React.createElement("div", {
+            style: {
+              fontSize: 10.5,
+              padding: "3px 2px",
+              fontWeight: on ? 800 : 500
+            }
+          }, on ? "✓ " : "", c.name));
+        })));
+      }));
+    })(), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginTop: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h2"
+    }, "What's included"), /*#__PURE__*/React.createElement("ul", {
+      className: "bid-inc",
+      style: {
+        marginTop: 4
+      }
+    }, proposalScopeBullets().map((b, i) => /*#__PURE__*/React.createElement("li", {
+      key: i
+    }, b)), /*#__PURE__*/React.createElement("li", null, "Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep)."), /*#__PURE__*/React.createElement("li", null, "Licensed & insured · workmanship guaranteed.")), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      onClick: () => setPropScopeOpen(o => !o)
+    }, propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"), propScopeOpen && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8
+      }
+    }, estResult.trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
+      key: ti,
+      style: {
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "seclabel"
+    }, t.label || t.title), (t.items || []).map((it, i) => /*#__PURE__*/React.createElement("div", {
+      key: i,
+      className: "costrow"
+    }, /*#__PURE__*/React.createElement("span", null, it.name), /*#__PURE__*/React.createElement("b", {
+      className: "hint"
+    }, it.qty, " ", it.unit))))), /*#__PURE__*/React.createElement("p", {
+      className: "hint"
+    }, "Quantities shown for transparency. Final materials per the selected option."))), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginTop: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h2"
+    }, "Why Caza Contractors"), /*#__PURE__*/React.createElement("p", {
+      className: "body",
+      style: {
+        marginTop: 2
+      }
+    }, "A family roofing business — named for AL, the grandfather who started it. Fully licensed and insured, with a workmanship guarantee behind every job. We use full manufacturer systems (not just shingles) so your warranty actually holds.")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 12,
+        padding: "10px 12px",
+        background: "#FFF4E6",
+        border: "1px solid #F2C98A",
+        borderRadius: 10,
+        fontSize: 12.5,
+        color: "#8A5A12"
+      }
+    }, "✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option", Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : "", " are saved with the estimate."), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      style: {
+        marginTop: 10
+      },
+      onClick: () => {
+        persistCurrent();
+        setPropOpen(false);
+      }
+    }, "Done")));
+  })(), me.role === "contractor" && tab === "work" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
   }, /*#__PURE__*/React.createElement("div", {
     className: "pagetitle"
