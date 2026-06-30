@@ -132,8 +132,11 @@ exports.handler = async function (event) {
     }
   }
 
+  // MODEL SPLIT: this sync path serves the interactive conversation (AL back-and-forth,
+  // measurement/geo extraction) — run it on Sonnet (~3x faster, cheaper). The rigorous
+  // build/commit preflight runs on Opus in estimate-background.js.
   const payload = {
-    model: "claude-opus-4-8",
+    model: "claude-sonnet-4-6",
     max_tokens: maxTokens,
     messages: messages,
   };

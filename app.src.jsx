@@ -1057,7 +1057,11 @@ async function callClaude(messages, opts) {
   }
 }
 async function __callClaudeInner(messages, opts) {
-  const body = { model: "claude-sonnet-4-20250514", max_tokens: (opts && opts.maxTokens) || 1000, messages };
+  // MODEL SPLIT: the model is chosen SERVER-SIDE per function — this sync path hits
+  // /estimate.js (Sonnet, fast: the AL conversation + measurement/geo extraction); the
+  // BUILD/commit preflight goes through callClaudeBackground → /estimate-background.js
+  // (Opus, rigorous). The `model` below is not sent to the function; it's documentary.
+  const body = { model: "claude-sonnet-4-6", max_tokens: (opts && opts.maxTokens) || 1000, messages };
   if (opts && opts.search) body.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }];
   body.messages = body.messages.map((m) =>
     typeof m.content === "string" ? { ...m, content: [{ type: "text", text: m.content }] } : m
@@ -3321,6 +3325,7 @@ function App() {
     const sel = Object.keys(houseScope);
     if (!sel.length) { flash("Add at least one trade first — AL's buttons up top."); return; }
     setEstBusy("run"); setEstResult(null);
+    if (voiceRef.current) speakAL("Let me double-check everything before I save this."); // voice pairing for the Opus preflight wait
     try {
       const results = [];
       for (const t of sel) {
@@ -5803,6 +5808,17 @@ function App() {
               <button className="btn primary full big" disabled={estBusy === "run" || !Object.keys(houseScope).length} style={{ marginTop: 4 }} onClick={buildUnifiedEstimate}>
                 {estBusy === "run" ? "Building takeoff…" : (Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Add a trade to build")}
               </button>
+              {/* PREFLIGHT WAIT — the build runs the Opus pre-flight pass (verify takeoff + labor +
+                  catch errors). Show an honest single-message spinner so the screen never looks frozen. */}
+              {estBusy === "run" && (
+                <div className="card" style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+                  <span className="spin" style={{ width: 22, height: 22, borderRadius: "50%", border: "3px solid #d8e0e8", borderTopColor: "#14a04a", flex: "0 0 auto" }} />
+                  <div>
+                    <div style={{ fontWeight: 700 }}>Finalizing your estimate…</div>
+                    <div className="hint">AL is double-checking the takeoff, labor, and price before it's saved — a few seconds.</div>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             (() => {
