@@ -1406,10 +1406,28 @@ const TRADE_PHASES = {
   insulation:{ names: ["Prep & air-seal", "Install", "Cleanup"], split: [0.25, 0.60, 0.15] },
   _default:  { names: ["Prep", "Install", "Detail", "Cleanup"], split: [0.20, 0.50, 0.20, 0.10] },
 };
+// Roofing phases are TYPE-SPECIFIC — removal/install differ by system, so actuals land in
+// type-specific buckets and the calibration loop learns per system (not a mushed average).
+const ROOF_PHASES = {
+  shingle:   { names: ["Tear-off (shingles)", "Dry-in", "Field install", "Details & flashing", "Cleanup"], split: [0.20, 0.10, 0.40, 0.22, 0.08] },
+  metal:     { names: ["Tear-off / strip", "Underlayment", "Panel set (standing seam)", "Trim & flashing", "Cleanup"], split: [0.18, 0.10, 0.42, 0.22, 0.08] },
+  agpanel:   { names: ["Tear-off / strip", "Underlayment", "Panel set & screws", "Trim & closures", "Cleanup"], split: [0.18, 0.10, 0.40, 0.24, 0.08] },
+  flat:      { names: ["Strip existing roof", "Insulation", "Membrane install", "Details & flashing", "Cleanup"], split: [0.22, 0.15, 0.40, 0.15, 0.08] },
+  tile:      { names: ["Tear-off (tile)", "Underlayment & battens", "Tile set", "Hip/ridge & details", "Cleanup"], split: [0.20, 0.15, 0.40, 0.17, 0.08] },
+  composite: { names: ["Tear-off", "Dry-in", "Composite field install", "Details & flashing", "Cleanup"], split: [0.18, 0.10, 0.42, 0.22, 0.08] },
+  slate:     { names: ["Tear-off", "Dry-in", "Slate set", "Hip/ridge & details", "Cleanup"], split: [0.18, 0.12, 0.42, 0.20, 0.08] },
+};
+function roofPhaseSpec(sys) {
+  const s = (sys || "").toLowerCase();
+  if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return ROOF_PHASES.composite;
+  if (/slate/.test(s)) return ROOF_PHASES.slate;
+  return ROOF_PHASES[roofTypeOf(s)] || ROOF_PHASES.shingle;
+}
 // Allocate bid LABOR HOURS across a trade's phases (man-hours). Remainder lands on the
-// biggest bucket so the per-phase bids sum back to the trade's total.
-function allocatePhases(tradeKey, laborHours) {
-  const spec = TRADE_PHASES[tradeKey] || TRADE_PHASES._default;
+// biggest bucket so the per-phase bids sum back to the trade's total. For roofing the phase
+// set is keyed to the material/system (sys) so removal/install are type-specific.
+function allocatePhases(tradeKey, laborHours, sys) {
+  const spec = tradeKey === "roofing" ? roofPhaseSpec(sys) : (TRADE_PHASES[tradeKey] || TRADE_PHASES._default);
   const total = Math.max(0, Math.round(Number(laborHours) || 0));
   const raw = spec.names.map((n, i) => ({ name: n, bidHours: Math.round(total * (spec.split[i] || 0)) }));
   const diff = total - raw.reduce((s, p) => s + p.bidHours, 0);
@@ -1724,6 +1742,7 @@ function App() {
   const [estId, setEstId] = useState(null);           // id of the estimate currently open/in-progress
   const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
   const [estAddress, setEstAddress] = useState("");   // job address on the current estimate
+  const [estEmail, setEstEmail] = useState("");       // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
   const [estStatus, setEstStatus] = useState("draft");// draft | sent | won | lost
   const [savedOpen, setSavedOpen] = useState(false);  // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
@@ -2195,7 +2214,7 @@ function App() {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return;
     clearTimeout(estSaveTimer.current);
     estSaveTimer.current = setTimeout(() => { persistCurrent(); }, 600);
-  }, [estResult, estMargin, estCustomer, estAddress, estStatus]);
+  }, [estResult, estMargin, estCustomer, estAddress, estEmail, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -3225,7 +3244,8 @@ function App() {
         try {
           const __cat = tierPrefCategory(t, scope + " " + desc);
           const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (__cat && profC.tierPrefs && profC.tierPrefs[__cat]) || null });
-          r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
+          r.phaseSys = scope + " " + desc; // remember the system so phases stay type-specific on edit/reopen
+          r.phases = allocatePhases(t, r.laborHours, r.phaseSys); // per-phase BID hours, keyed to the material/system
           results.push(Object.assign({ tradeKey: t, label: label }, r));
         } catch (e) { results.push({ tradeKey: t, label: label, error: errMsg(e) }); }
       }
@@ -3268,7 +3288,7 @@ function App() {
     }) };
   });
   const estItemDel = (ti, i) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, items: tr.items.filter((_, idx) => idx !== i) } : tr) } : r);
-  const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => { if (k !== ti) return tr; const nt = { ...tr, [field]: val }; if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val); return nt; }) } : r);
+  const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => { if (k !== ti) return tr; const nt = { ...tr, [field]: val }; if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || ""); return nt; }) } : r);
   // ===== PART 1: on-site PER-PHASE TIMER (transition-based, forgiving) =====
   // Actuals are MAN-HOURS = clock-time × that phase's crew. Each phase carries committed
   // minutes (actualMin); a RUNNING phase also has startAt (ephemeral, never persisted while
@@ -3294,7 +3314,7 @@ function App() {
     // before per-phase bids existed have no .phases, which left the timer empty.
     setEstResult((r) => {
       if (!r || !r.trades) return r;
-      return { ...r, trades: r.trades.map((t) => (Array.isArray(t.phases) && t.phases.length) ? t : { ...t, phases: allocatePhases(t.tradeKey, t.laborHours) }) };
+      return { ...r, trades: r.trades.map((t) => (Array.isArray(t.phases) && t.phases.length) ? t : { ...t, phases: allocatePhases(t.tradeKey, t.laborHours, t.phaseSys || (t.label || "") + " " + (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] || "" : "")) }) };
     });
     if (estResult && estResult.trades && estResult.trades[0]) setJobCrew(num(estResult.trades[0].crew) || 3);
     setTimerView("timer");
@@ -3390,7 +3410,7 @@ function App() {
     const price = sellOf(combinedCostOf(estResult.trades), estMargin);
     const title = (estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades");
     const rec = Object.assign({
-      id: id, customerName: estCustomer.trim(), jobAddress: estAddress.trim(), status: estStatus,
+      id: id, customerName: estCustomer.trim(), jobAddress: estAddress.trim(), customerEmail: estEmail.trim(), status: estStatus,
       jobNimbusId: null, price: price, title: title, tradeCount: estResult.trades.length, payload: currentEstPayload(),
     }, extra || {});
     if (!estId) setEstId(id);
@@ -3402,7 +3422,7 @@ function App() {
   const openSavedEstimate = (rec) => {
     if (!rec || !rec.payload) return;
     const p = rec.payload;
-    setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstStatus(rec.status || "draft");
+    setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
@@ -3424,7 +3444,7 @@ function App() {
   // "Start new": SAVE the current one first (never destroy work), then clear to a fresh scope.
   const startNewEstimate = async () => {
     await persistCurrent();
-    setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstStatus("draft");
+    setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
     setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
@@ -5650,6 +5670,7 @@ function App() {
                     <div className="estfields">
                       <label className="estf"><span>Customer</span><input value={estCustomer} onChange={(e) => setEstCustomer(e.target.value)} placeholder="name" /></label>
                       <label className="estf"><span>Job address</span><input value={estAddress} onChange={(e) => setEstAddress(e.target.value)} placeholder="address" /></label>
+                      <label className="estf"><span>Customer email</span><input type="email" value={estEmail} onChange={(e) => setEstEmail(e.target.value)} placeholder="name@email.com" /></label>
                       <label className="estf"><span>Status</span>
                         <select value={estStatus} onChange={(e) => setEstStatus(e.target.value)}>
                           {["draft", "sent", "won", "lost"].map((s) => <option key={s} value={s}>{s}</option>)}

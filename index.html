@@ -4058,10 +4058,49 @@ const TRADE_PHASES = {
     split: [0.20, 0.50, 0.20, 0.10]
   }
 };
+// Roofing phases are TYPE-SPECIFIC — removal/install differ by system, so actuals land in
+// type-specific buckets and the calibration loop learns per system (not a mushed average).
+const ROOF_PHASES = {
+  shingle: {
+    names: ["Tear-off (shingles)", "Dry-in", "Field install", "Details & flashing", "Cleanup"],
+    split: [0.20, 0.10, 0.40, 0.22, 0.08]
+  },
+  metal: {
+    names: ["Tear-off / strip", "Underlayment", "Panel set (standing seam)", "Trim & flashing", "Cleanup"],
+    split: [0.18, 0.10, 0.42, 0.22, 0.08]
+  },
+  agpanel: {
+    names: ["Tear-off / strip", "Underlayment", "Panel set & screws", "Trim & closures", "Cleanup"],
+    split: [0.18, 0.10, 0.40, 0.24, 0.08]
+  },
+  flat: {
+    names: ["Strip existing roof", "Insulation", "Membrane install", "Details & flashing", "Cleanup"],
+    split: [0.22, 0.15, 0.40, 0.15, 0.08]
+  },
+  tile: {
+    names: ["Tear-off (tile)", "Underlayment & battens", "Tile set", "Hip/ridge & details", "Cleanup"],
+    split: [0.20, 0.15, 0.40, 0.17, 0.08]
+  },
+  composite: {
+    names: ["Tear-off", "Dry-in", "Composite field install", "Details & flashing", "Cleanup"],
+    split: [0.18, 0.10, 0.42, 0.22, 0.08]
+  },
+  slate: {
+    names: ["Tear-off", "Dry-in", "Slate set", "Hip/ridge & details", "Cleanup"],
+    split: [0.18, 0.12, 0.42, 0.20, 0.08]
+  }
+};
+function roofPhaseSpec(sys) {
+  const s = (sys || "").toLowerCase();
+  if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return ROOF_PHASES.composite;
+  if (/slate/.test(s)) return ROOF_PHASES.slate;
+  return ROOF_PHASES[roofTypeOf(s)] || ROOF_PHASES.shingle;
+}
 // Allocate bid LABOR HOURS across a trade's phases (man-hours). Remainder lands on the
-// biggest bucket so the per-phase bids sum back to the trade's total.
-function allocatePhases(tradeKey, laborHours) {
-  const spec = TRADE_PHASES[tradeKey] || TRADE_PHASES._default;
+// biggest bucket so the per-phase bids sum back to the trade's total. For roofing the phase
+// set is keyed to the material/system (sys) so removal/install are type-specific.
+function allocatePhases(tradeKey, laborHours, sys) {
+  const spec = tradeKey === "roofing" ? roofPhaseSpec(sys) : TRADE_PHASES[tradeKey] || TRADE_PHASES._default;
   const total = Math.max(0, Math.round(Number(laborHours) || 0));
   const raw = spec.names.map((n, i) => ({
     name: n,
@@ -4693,6 +4732,7 @@ function App() {
   const [estId, setEstId] = useState(null); // id of the estimate currently open/in-progress
   const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
   const [estAddress, setEstAddress] = useState(""); // job address on the current estimate
+  const [estEmail, setEstEmail] = useState(""); // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
   const [estStatus, setEstStatus] = useState("draft"); // draft | sent | won | lost
   const [savedOpen, setSavedOpen] = useState(false); // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
@@ -5586,7 +5626,7 @@ function App() {
     estSaveTimer.current = setTimeout(() => {
       persistCurrent();
     }, 600);
-  }, [estResult, estMargin, estCustomer, estAddress, estStatus]);
+  }, [estResult, estMargin, estCustomer, estAddress, estEmail, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -7360,7 +7400,8 @@ function App() {
             aiTrade: aiT,
             tierPref: __cat && profC.tierPrefs && profC.tierPrefs[__cat] || null
           });
-          r.phases = allocatePhases(t, r.laborHours); // per-phase BID hours (time-audit Part 1)
+          r.phaseSys = scope + " " + desc; // remember the system so phases stay type-specific on edit/reopen
+          r.phases = allocatePhases(t, r.laborHours, r.phaseSys); // per-phase BID hours, keyed to the material/system
           results.push(Object.assign({
             tradeKey: t,
             label: label
@@ -7497,7 +7538,7 @@ function App() {
         ...tr,
         [field]: val
       };
-      if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val);
+      if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || "");
       return nt;
     })
   } : r);
@@ -7577,7 +7618,7 @@ function App() {
         ...r,
         trades: r.trades.map(t => Array.isArray(t.phases) && t.phases.length ? t : {
           ...t,
-          phases: allocatePhases(t.tradeKey, t.laborHours)
+          phases: allocatePhases(t.tradeKey, t.laborHours, t.phaseSys || (t.label || "") + " " + (houseScope[t.tradeKey] !== true ? houseScope[t.tradeKey] || "" : ""))
         })
       };
     });
@@ -7816,6 +7857,7 @@ function App() {
       id: id,
       customerName: estCustomer.trim(),
       jobAddress: estAddress.trim(),
+      customerEmail: estEmail.trim(),
       status: estStatus,
       jobNimbusId: null,
       price: price,
@@ -7837,6 +7879,7 @@ function App() {
     setEstId(rec.id);
     setEstCustomer(rec.customerName || "");
     setEstAddress(rec.jobAddress || "");
+    setEstEmail(rec.customerEmail || "");
     setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30);
     setHouseScope(p.houseScope || {});
@@ -7887,6 +7930,7 @@ function App() {
     setEstId(null);
     setEstCustomer("");
     setEstAddress("");
+    setEstEmail("");
     setEstStatus("draft");
     setHouseScope({});
     setHousePanelW({});
@@ -11848,6 +11892,13 @@ function App() {
       value: estAddress,
       onChange: e => setEstAddress(e.target.value),
       placeholder: "address"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Customer email"), /*#__PURE__*/React.createElement("input", {
+      type: "email",
+      value: estEmail,
+      onChange: e => setEstEmail(e.target.value),
+      placeholder: "name@email.com"
     })), /*#__PURE__*/React.createElement("label", {
       className: "estf"
     }, /*#__PURE__*/React.createElement("span", null, "Status"), /*#__PURE__*/React.createElement("select", {
