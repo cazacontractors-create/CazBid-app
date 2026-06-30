@@ -3601,7 +3601,7 @@ function RateBox({
     key: n,
     className: "starbtn" + (st >= n ? " on" : ""),
     onClick: () => setSt(n)
-  }, "\u2605"))), /*#__PURE__*/React.createElement("input", {
+  }, "★"))), /*#__PURE__*/React.createElement("input", {
     className: "in",
     placeholder: "Say a few words (shows on their profile)",
     value: cm,
@@ -3746,7 +3746,7 @@ function JobContextPanel({
     className: "card jobcontext"
   }, /*#__PURE__*/React.createElement("div", {
     className: "seclabel"
-  }, "\uD83D\uDCCB Job context"), ph.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "📋 Job context"), ph.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -3764,14 +3764,14 @@ function JobContextPanel({
     style: {
       marginTop: 6
     }
-  }, "\uD83D\uDCD0 ", /*#__PURE__*/React.createElement("b", null, "Measurements:"), " ", meas), !ph.length && !meas && /*#__PURE__*/React.createElement("p", {
+  }, "📐 ", /*#__PURE__*/React.createElement("b", null, "Measurements:"), " ", meas), !ph.length && !meas && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "No photos or measurements yet \u2014 add photos below, or get measured."), /*#__PURE__*/React.createElement("p", {
+  }, "No photos or measurements yet — add photos below, or get measured."), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 6
     }
-  }, "\uD83D\uDCD0 Get measured: ", /*#__PURE__*/React.createElement("a", {
+  }, "📐 Get measured: ", /*#__PURE__*/React.createElement("a", {
     href: "https://www.eagleview.com",
     target: "_blank",
     rel: "noopener noreferrer"
@@ -3779,7 +3779,7 @@ function JobContextPanel({
     href: "https://hover.to",
     target: "_blank",
     rel: "noopener noreferrer"
-  }, "Hover"), " (roof & exterior) \xB7 ", /*#__PURE__*/React.createElement("a", {
+  }, "Hover"), " (roof & exterior) · ", /*#__PURE__*/React.createElement("a", {
     href: "https://poly.cam",
     target: "_blank",
     rel: "noopener noreferrer"
@@ -4292,7 +4292,7 @@ function ImageHouse({
   }, /*#__PURE__*/React.createElement("input", {
     value: customTrade,
     onChange: e => setCustomTrade(e.target.value),
-    placeholder: "Something else? type a trade\u2026",
+    placeholder: "Something else? type a trade…",
     style: {
       flex: 1
     }
@@ -4335,13 +4335,13 @@ function ImageHouse({
       alignItems: "center",
       marginBottom: 8
     }
-  }, /*#__PURE__*/React.createElement("b", null, labelFor(typeFor), " \u2014 which type / system?"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("b", null, labelFor(typeFor), " — which type / system?"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     style: {
       padding: "2px 8px"
     },
     onClick: () => setTypeFor(null)
-  }, "\u2715")), HOUSE_TYPES[typeFor].map(ty => /*#__PURE__*/React.createElement("button", {
+  }, "✕")), HOUSE_TYPES[typeFor].map(ty => /*#__PURE__*/React.createElement("button", {
     key: ty,
     className: "btn ghost full",
     style: {
@@ -4363,7 +4363,7 @@ function ImageHouse({
   }, /*#__PURE__*/React.createElement("input", {
     value: customType,
     onChange: e => setCustomType(e.target.value),
-    placeholder: "or type another system\u2026",
+    placeholder: "or type another system…",
     style: {
       flex: 1
     }
@@ -4379,7 +4379,7 @@ function ImageHouse({
     style: {
       marginTop: 8
     }
-  }, "\u201CMixed\u201D combines systems (e.g. sloped shingle + flat) \u2014 AL sizes each part separately so the bid stays accurate."))), selectedKeys.length > 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "“Mixed” combines systems (e.g. sloped shingle + flat) — AL sizes each part separately so the bid stays accurate."))), selectedKeys.length > 0 ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
@@ -4412,12 +4412,12 @@ function ImageHouse({
       e.stopPropagation();
       onDeselect(t);
     }
-  }, "\xD7")))) : /*#__PURE__*/React.createElement("p", {
+  }, "×")))) : /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 12
     }
-  }, "Pick the trades you're bidding \u2014 they build up here, then AL walks each one."), /*#__PURE__*/React.createElement("p", {
+  }, "Pick the trades you're bidding — they build up here, then AL walks each one."), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
@@ -4578,7 +4578,7 @@ function HouseVisual({
         e.stopPropagation();
         onChipRemove && onChipRemove(t);
       }
-    }, "\xD7"));
+    }, "×"));
   }), onAddMore && /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     style: {
@@ -4627,7 +4627,9 @@ function App() {
     prefMaterials: "",
     avatar: "",
     posts: [],
-    tierPrefs: {}
+    tierPrefs: {},
+    mobBase: 350,
+    mobTruckPerMi: 0.7
   });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
@@ -4720,6 +4722,8 @@ function App() {
   const [estBusy, setEstBusy] = useState("");
   const [estResult, setEstResult] = useState(null); // {trade, items:[{name,qty,unit,cost}], laborHours, laborRate, equipment, taxRate, days, crew, notes}
   const [estMargin, setEstMargin] = useState(30);
+  const [estMiles, setEstMiles] = useState(0); // round-trip delivery/mobilization miles (manual entry first)
+  const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
   const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
   const [propOpen, setPropOpen] = useState(false); // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
@@ -5626,7 +5630,7 @@ function App() {
     estSaveTimer.current = setTimeout(() => {
       persistCurrent();
     }, 600);
-  }, [estResult, estMargin, estCustomer, estAddress, estEmail, estStatus]);
+  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -5650,10 +5654,12 @@ function App() {
         bio: profC.bio,
         prefMaterials: profC.prefMaterials,
         avatar: profC.avatar,
-        tierPrefs: profC.tierPrefs
+        tierPrefs: profC.tierPrefs,
+        mobBase: profC.mobBase,
+        mobTruckPerMi: profC.mobTruckPerMi
       }
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs, profC.mobBase, profC.mobTruckPerMi]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async role => {
@@ -6251,7 +6257,7 @@ function App() {
       className: "revat"
     }, fmtDate(r.at))), r.comment && /*#__PURE__*/React.createElement("div", {
       className: "revtxt"
-    }, "\u201C", r.comment, "\u201D"), /*#__PURE__*/React.createElement("div", {
+    }, "“", r.comment, "”"), /*#__PURE__*/React.createElement("div", {
       className: "revjob"
     }, r.job))));
   };
@@ -7428,7 +7434,7 @@ function App() {
       });
       // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
       if (voiceRef.current) {
-        const price = sellOf(combinedCostOf(ok), estMargin);
+        const price = sellOf(jobCostOf(ok), estMargin);
         speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars.");
       }
     } catch (e) {
@@ -7782,6 +7788,31 @@ function App() {
   };
   const combinedCostOf = trades => (trades || []).reduce((a, t) => a + tradeCostOf(t), 0);
   const sellOf = (cost, margin) => Math.round(cost / (1 - (num(margin) || 0) / 100) / 25) * 25;
+  // DELIVERY / MOBILIZATION — one job-level cost line (cost-true; gross margin lands on top
+  // like every other cost). base + RT_miles x crew x (burdened $/min) + RT_miles x truck $/mi.
+  // crew = the most workers on any one trade (who travel); burden = labor-weighted burdened
+  // $/hr across all trades (so a single-trade job uses exactly that trade's crew + rate).
+  const mobRates = () => ({
+    base: profC.mobBase == null || profC.mobBase === "" ? 350 : num(profC.mobBase) || 0,
+    truck: profC.mobTruckPerMi == null || profC.mobTruckPerMi === "" ? 0.7 : num(profC.mobTruckPerMi) || 0
+  });
+  const mobilizeCostOf = trades => {
+    if (!estMobOn) return 0;
+    const list = trades || [];
+    if (!list.length) return 0;
+    const {
+      base,
+      truck
+    } = mobRates();
+    const mi = Math.max(0, num(estMiles) || 0);
+    const crew = list.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
+    const totHrs = list.reduce((a, t) => a + (num(t.laborHours) || 0), 0);
+    const totLab = list.reduce((a, t) => a + (num(t.laborHours) || 0) * (num(t.laborRate) || 0), 0);
+    const burden = totHrs > 0 ? totLab / totHrs : num(list[0].laborRate) || 0;
+    return Math.round(base + mi * crew * (burden / 60) + mi * truck);
+  };
+  // Full job cost = trades + mobilization. Margin is applied to THIS via sellOf.
+  const jobCostOf = trades => combinedCostOf(trades) + mobilizeCostOf(trades);
   // ===== PART 2: HOMEOWNER PROPOSAL (presentation only; signing is behind the legal gate) =====
   const tierWarranty = tier => {
     const t = String(tier || "").toLowerCase();
@@ -7794,7 +7825,7 @@ function App() {
   const proposalTiers = () => {
     if (!estResult || !estResult.trades || !estResult.trades.length) return [];
     const trades = estResult.trades,
-      combined = combinedCostOf(trades),
+      combined = jobCostOf(trades),
       primary = trades[0];
     const opts = (primary.primaryOptions || []).filter(o => num(o.cost) > 0);
     if (!opts.length) return [{
@@ -7839,6 +7870,8 @@ function App() {
     multi: !!(estResult && estResult.multi),
     errors: estResult && estResult.errors || [],
     estMargin: estMargin,
+    estMiles: estMiles,
+    estMobOn: estMobOn,
     houseScope: houseScope,
     housePanelW: housePanelW,
     whDims: whDims,
@@ -7851,7 +7884,7 @@ function App() {
   const persistCurrent = async extra => {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
     const id = estId || "est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-    const price = sellOf(combinedCostOf(estResult.trades), estMargin);
+    const price = sellOf(jobCostOf(estResult.trades), estMargin);
     const title = estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades";
     const rec = Object.assign({
       id: id,
@@ -7882,6 +7915,8 @@ function App() {
     setEstEmail(rec.customerEmail || "");
     setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30);
+    setEstMiles(num(p.estMiles) || 0);
+    setEstMobOn(p.estMobOn === true);
     setHouseScope(p.houseScope || {});
     setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || "");
@@ -7932,6 +7967,8 @@ function App() {
     setEstAddress("");
     setEstEmail("");
     setEstStatus("draft");
+    setEstMiles(0);
+    setEstMobOn(true);
     setHouseScope({});
     setHousePanelW({});
     setWhDims("");
@@ -9362,7 +9399,7 @@ function App() {
     style: {
       padding: "16px 0"
     }
-  }, "Nothing yet \u2014 new jobs, hires, accepted bids, and messages show up here."), notifs.map(nt => /*#__PURE__*/React.createElement("button", {
+  }, "Nothing yet — new jobs, hires, accepted bids, and messages show up here."), notifs.map(nt => /*#__PURE__*/React.createElement("button", {
     className: "notifrow" + (nt.at > (me.seenAt || 0) ? " unseen" : ""),
     key: nt.id,
     onClick: () => tapNotif(nt)
@@ -9385,16 +9422,16 @@ function App() {
     className: "svchead"
   }, "Before you go to ", svcPrompt.name), /*#__PURE__*/React.createElement("ol", {
     className: "howtosteps"
-  }, /*#__PURE__*/React.createElement("li", null, svcPrompt.name, " opens in a new browser tab \u2014 get your measurement report there."), /*#__PURE__*/React.createElement("li", null, "On the page showing your numbers (total area, pitch, ridges, valleys\u2026), ", /*#__PURE__*/React.createElement("b", null, "take a screenshot"), "."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Come back to this CazBid tab"), " and tap ", /*#__PURE__*/React.createElement("b", null, "\u201C\uD83D\uDCF8 Upload screenshot.\u201D"), " No files to download or hunt for.")), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, svcPrompt.name, " opens in a new browser tab — get your measurement report there."), /*#__PURE__*/React.createElement("li", null, "On the page showing your numbers (total area, pitch, ridges, valleys…), ", /*#__PURE__*/React.createElement("b", null, "take a screenshot"), "."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Come back to this CazBid tab"), " and tap ", /*#__PURE__*/React.createElement("b", null, "“📸 Upload screenshot.”"), " No files to download or hunt for.")), /*#__PURE__*/React.createElement("p", {
     className: "howtoback"
-  }, "\u21A9\uFE0E ", /*#__PURE__*/React.createElement("b", null, "Getting back is easy:"), " CazBid stays open in this tab. Switch tabs or tap the back arrow to return \u2014 your job is saved as a draft, so nothing is lost."), /*#__PURE__*/React.createElement("button", {
+  }, "↩︎ ", /*#__PURE__*/React.createElement("b", null, "Getting back is easy:"), " CazBid stays open in this tab. Switch tabs or tap the back arrow to return — your job is saved as a draft, so nothing is lost."), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full big",
     onClick: () => {
       const u = svcPrompt.url;
       setSvcPrompt(null);
       window.open(u, "_blank", "noopener,noreferrer");
     }
-  }, "Continue to ", svcPrompt.name, " \u2197"), /*#__PURE__*/React.createElement("button", {
+  }, "Continue to ", svcPrompt.name, " ↗"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => setSvcPrompt(null)
   }, "Cancel"))), convConfirmReset && /*#__PURE__*/React.createElement("div", {
@@ -9416,7 +9453,7 @@ function App() {
   }, "Yes, start over"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => setConvConfirmReset(false)
-  }, "Cancel \u2014 keep chatting"))), estSvcPrompt && /*#__PURE__*/React.createElement("div", {
+  }, "Cancel — keep chatting"))), estSvcPrompt && /*#__PURE__*/React.createElement("div", {
     className: "svcwrap",
     onClick: () => setEstSvcPrompt(null)
   }, /*#__PURE__*/React.createElement("div", {
@@ -9426,16 +9463,16 @@ function App() {
     className: "svchead"
   }, "Before you go to ", estSvcPrompt.name), /*#__PURE__*/React.createElement("ol", {
     className: "howtosteps"
-  }, /*#__PURE__*/React.createElement("li", null, estSvcPrompt.name, " opens in a new tab \u2014 pull your measurement report there."), /*#__PURE__*/React.createElement("li", null, "On the page with your numbers, ", /*#__PURE__*/React.createElement("b", null, "take a screenshot"), " (or download the PDF)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Come back to this CazBid tab"), " and tap ", /*#__PURE__*/React.createElement("b", null, "\u201C\uD83D\uDCF8 Upload report or screenshot.\u201D"))), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("li", null, estSvcPrompt.name, " opens in a new tab — pull your measurement report there."), /*#__PURE__*/React.createElement("li", null, "On the page with your numbers, ", /*#__PURE__*/React.createElement("b", null, "take a screenshot"), " (or download the PDF)."), /*#__PURE__*/React.createElement("li", null, /*#__PURE__*/React.createElement("b", null, "Come back to this CazBid tab"), " and tap ", /*#__PURE__*/React.createElement("b", null, "“📸 Upload report or screenshot.”"))), /*#__PURE__*/React.createElement("p", {
     className: "howtoback"
-  }, "\u21A9\uFE0E CazBid stays open in this tab \u2014 switch back when you're done."), /*#__PURE__*/React.createElement("button", {
+  }, "↩︎ CazBid stays open in this tab — switch back when you're done."), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full big",
     onClick: () => {
       const u = estSvcPrompt.url;
       setEstSvcPrompt(null);
       window.open(u, "_blank", "noopener,noreferrer");
     }
-  }, "Continue to ", estSvcPrompt.name, " \u2197"), /*#__PURE__*/React.createElement("button", {
+  }, "Continue to ", estSvcPrompt.name, " ↗"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => setEstSvcPrompt(null)
   }, "Cancel"))), viewing && (() => {
@@ -9446,7 +9483,7 @@ function App() {
       className: "card"
     }, /*#__PURE__*/React.createElement("p", {
       className: "hint"
-    }, "Loading profile\u2026")));
+    }, "Loading profile…")));
     const isCo = u.role === "contractor";
     return /*#__PURE__*/React.createElement("main", {
       className: "page"
@@ -9473,7 +9510,7 @@ function App() {
       className: "h2"
     }, "Recent work"), viewPosts.length === 0 && /*#__PURE__*/React.createElement("p", {
       className: "hint"
-    }, "Loading photos\u2026"), /*#__PURE__*/React.createElement("div", {
+    }, "Loading photos…"), /*#__PURE__*/React.createElement("div", {
       className: "postcol"
     }, viewPosts.map(p => /*#__PURE__*/React.createElement("figure", {
       className: "postcard",
@@ -9503,7 +9540,7 @@ function App() {
     style: {
       marginTop: 24
     }
-  }, "No messages yet \u2014 say hi and talk scheduling, access, and the final walkthrough price."), chatMsgs.map(m => /*#__PURE__*/React.createElement("div", {
+  }, "No messages yet — say hi and talk scheduling, access, and the final walkthrough price."), chatMsgs.map(m => /*#__PURE__*/React.createElement("div", {
     key: m.id,
     className: "bubble" + (m.from === activeUid ? " mine" : "")
   }, /*#__PURE__*/React.createElement("span", {
@@ -9519,7 +9556,7 @@ function App() {
     size: 18
   })), /*#__PURE__*/React.createElement("input", {
     className: "chatin",
-    placeholder: "Message\u2026",
+    placeholder: "Message…",
     value: chatText,
     onChange: e => setChatText(e.target.value),
     onKeyDown: e => {
@@ -9548,7 +9585,7 @@ function App() {
       }));
       setTab("profile");
     }
-  }, "\uD83C\uDFE0 I need work done"), /*#__PURE__*/React.createElement("button", {
+  }, "🏠 I need work done"), /*#__PURE__*/React.createElement("button", {
     className: "rolebtn dark",
     onClick: () => {
       setMe(m => ({
@@ -9557,7 +9594,7 @@ function App() {
       }));
       setTab("myjobs");
     }
-  }, "\uD83D\uDD27 I'm a contractor"), /*#__PURE__*/React.createElement("div", {
+  }, "🔧 I'm a contractor"), /*#__PURE__*/React.createElement("div", {
     className: "howrow"
   }, /*#__PURE__*/React.createElement("div", {
     className: "howstep"
@@ -9579,7 +9616,7 @@ function App() {
     size: 15
   }), " Send feedback")), /*#__PURE__*/React.createElement("p", {
     className: "hint center"
-  }, "Prototype. CazBid takes no cut and never touches the money \u2014 homeowners pay contractors directly. Anything posted is visible to everyone using this app.")), me.role === "homeowner" && tab === "post" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }, "Prototype. CazBid takes no cut and never touches the money — homeowners pay contractors directly. Anything posted is visible to everyone using this app.")), me.role === "homeowner" && tab === "post" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
   }, /*#__PURE__*/React.createElement("div", {
     className: "pagetitle"
@@ -9590,7 +9627,7 @@ function App() {
     rows: 4,
     value: desc,
     onChange: e => setDesc(e.target.value),
-    placeholder: "What do you need done? e.g. Replace the shingle roof on my 1,800 sqft ranch \u2014 some plywood feels soft near the chimney."
+    placeholder: "What do you need done? e.g. Replace the shingle roof on my 1,800 sqft ranch — some plywood feels soft near the chimney."
   }), /*#__PURE__*/React.createElement("label", {
     className: "dropzone"
   }, /*#__PURE__*/React.createElement("input", {
@@ -9641,13 +9678,13 @@ function App() {
     },
     value: jobAddr,
     onChange: e => setJobAddr(e.target.value),
-    placeholder: "Job address \u2014 123 Main St, Town, NY"
+    placeholder: "Job address — 123 Main St, Town, NY"
   }), sameAddr && profH.address && /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
     }
-  }, "\uD83D\uDCCD ", profH.address, " \xB7 only shared with the pro you hire")), /*#__PURE__*/React.createElement("section", {
+  }, "📍 ", profH.address, " · only shared with the pro you hire")), /*#__PURE__*/React.createElement("section", {
     className: "card measband" + (roofOpen ? " open" : "")
   }, /*#__PURE__*/React.createElement("button", {
     className: "rowtoggle",
@@ -9656,19 +9693,19 @@ function App() {
     className: "measleft"
   }, /*#__PURE__*/React.createElement("span", {
     className: "measicon"
-  }, "\uD83D\uDCD0"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+  }, "📐"), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
     className: "meastitle"
   }, "Add exact measurements ", /*#__PURE__*/React.createElement("span", {
     className: "measrec"
   }, "recommended")), /*#__PURE__*/React.createElement("span", {
     className: "meassub"
-  }, "Roof report or LiDAR room scan \u2192 a much tighter, more accurate price"))), /*#__PURE__*/React.createElement("span", {
+  }, "Roof report or LiDAR room scan → a much tighter, more accurate price"))), /*#__PURE__*/React.createElement("span", {
     className: "chev"
   }, roofOpen ? "▴" : "▾")), roofOpen && /*#__PURE__*/React.createElement("div", {
     className: "roofbody"
   }, /*#__PURE__*/React.createElement("div", {
     className: "seclabel"
-  }, "Roof \u2014 aerial reports"), /*#__PURE__*/React.createElement("div", {
+  }, "Roof — aerial reports"), /*#__PURE__*/React.createElement("div", {
     className: "reportgrid"
   }, /*#__PURE__*/React.createElement("button", {
     className: "report",
@@ -9678,7 +9715,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "EagleView"), /*#__PURE__*/React.createElement("span", null, "Aerial report, the industry standard. eagleview.com"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setSvcPrompt({
       name: "GAF QuickMeasure",
@@ -9686,17 +9723,17 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "GAF QuickMeasure"), /*#__PURE__*/React.createElement("span", null, "~$25-35 aerial report, ~1 hour. gaf.com"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setSvcPrompt({
       name: "Hover",
       url: "https://hover.to/onboarding/login"
     })
-  }, /*#__PURE__*/React.createElement("b", null, "Hover"), /*#__PURE__*/React.createElement("span", null, "Free app \u2014 photos of your house build the measurements. hover.to"), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("b", null, "Hover"), /*#__PURE__*/React.createElement("span", null, "Free app — photos of your house build the measurements. hover.to"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197"))), /*#__PURE__*/React.createElement("div", {
+  }, "Tap for steps ↗"))), /*#__PURE__*/React.createElement("div", {
     className: "seclabel"
-  }, "Indoor \u2014 scan the room with your phone"), /*#__PURE__*/React.createElement("div", {
+  }, "Indoor — scan the room with your phone"), /*#__PURE__*/React.createElement("div", {
     className: "reportgrid"
   }, /*#__PURE__*/React.createElement("button", {
     className: "report",
@@ -9706,7 +9743,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "Polycam"), /*#__PURE__*/React.createElement("span", null, "LiDAR room scans on Pro iPhones. poly.cam"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setSvcPrompt({
       name: "magicplan",
@@ -9714,7 +9751,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "magicplan"), /*#__PURE__*/React.createElement("span", null, "Floor plans straight from your phone. magicplan.app"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setSvcPrompt({
       name: "Canvas",
@@ -9722,7 +9759,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "Canvas"), /*#__PURE__*/React.createElement("span", null, "Contractor-grade LiDAR home scans. canvas.io"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197"))), /*#__PURE__*/React.createElement("p", {
+  }, "Tap for steps ↗"))), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       textAlign: "center",
@@ -9769,14 +9806,14 @@ function App() {
     rows: 3,
     value: pasteText,
     onChange: e => setPasteText(e.target.value),
-    placeholder: "e.g. area 2450 sqft, pitch 8/12, eaves 120, ridges 45 \u2014 or: kitchen 14x18, living room 16x22, ceilings 8 ft"
+    placeholder: "e.g. area 2450 sqft, pitch 8/12, eaves 120, ridges 45 — or: kitchen 14x18, living room 16x22, ceilings 8 ft"
   }), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full",
     disabled: busy === "report",
     onClick: parsePaste
   }, busy === "report" ? "Parsing…" : "Parse"))), roofDims && /*#__PURE__*/React.createElement("p", {
     className: "ai-note"
-  }, "\uD83D\uDCD0 ", roofDims)), !questions && /*#__PURE__*/React.createElement("button", {
+  }, "📐 ", roofDims)), !questions && /*#__PURE__*/React.createElement("button", {
     className: "btn primary full big",
     disabled: busy === "ask" || busy === "bid",
     onClick: askQuestions
@@ -9786,7 +9823,7 @@ function App() {
     className: "h2"
   }, "A couple quick questions ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "helps nail the price \u2014 answer what you can")), questions.map((q, i) => /*#__PURE__*/React.createElement("label", {
+  }, "helps nail the price — answer what you can")), questions.map((q, i) => /*#__PURE__*/React.createElement("label", {
     className: "fld",
     key: i
   }, /*#__PURE__*/React.createElement("span", null, q), /*#__PURE__*/React.createElement("input", {
@@ -9815,9 +9852,9 @@ function App() {
     className: "body"
   }, bidPreview.summary), /*#__PURE__*/React.createElement("div", {
     className: "bid-price"
-  }, $0(bidPreview.priceLow), " \u2013 ", $0(bidPreview.priceHigh)), /*#__PURE__*/React.createElement("div", {
+  }, $0(bidPreview.priceLow), " – ", $0(bidPreview.priceHigh)), /*#__PURE__*/React.createElement("div", {
     className: "bid-days"
-  }, "\u2248 ", bidPreview.days, " day", bidPreview.days !== 1 ? "s" : "", " on site"), bidPreview.confidence && bidPreview.confidence !== "high" && /*#__PURE__*/React.createElement("div", {
+  }, "≈ ", bidPreview.days, " day", bidPreview.days !== 1 ? "s" : "", " on site"), bidPreview.confidence && bidPreview.confidence !== "high" && /*#__PURE__*/React.createElement("div", {
     className: "tighten"
   }, /*#__PURE__*/React.createElement("p", {
     className: "tightentext"
@@ -9827,15 +9864,15 @@ function App() {
     className: "btn ghost full",
     disabled: busy === "ask" || busy === "bid",
     onClick: tightenPrice
-  }, "\u270E Answer a few questions for a tighter price")), bidPreview.includes.length > 0 && /*#__PURE__*/React.createElement("ul", {
+  }, "✎ Answer a few questions for a tighter price")), bidPreview.includes.length > 0 && /*#__PURE__*/React.createElement("ul", {
     className: "bid-inc"
   }, bidPreview.includes.map((x, i) => /*#__PURE__*/React.createElement("li", {
     key: i
   }, x))), bidPreview.usedEstimate && /*#__PURE__*/React.createElement("p", {
     className: "estflag"
-  }, "\uD83D\uDCCD Priced using a rough size estimate from the address \u2014 add a measurement report for an exact quote."), bidPreview.note && /*#__PURE__*/React.createElement("p", {
+  }, "📍 Priced using a rough size estimate from the address — add a measurement report for an exact quote."), bidPreview.note && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "\u26A0 ", bidPreview.note), photos.length > 0 && /*#__PURE__*/React.createElement("button", {
+  }, "⚠ ", bidPreview.note), photos.length > 0 && /*#__PURE__*/React.createElement("button", {
     className: "privacyaccept" + (privacyOk ? " on" : ""),
     onClick: () => setPrivacyOk(!privacyOk)
   }, /*#__PURE__*/React.createElement("span", {
@@ -9863,9 +9900,9 @@ function App() {
     className: "convconf " + convBid.confidence
   }, convBid.confidence === "high" ? "Dialed in" : convBid.confidence === "medium" ? "Getting close" : "Rough so far")), /*#__PURE__*/React.createElement("div", {
     className: "bid-price"
-  }, $0(convBid.priceLow), " \u2013 ", $0(convBid.priceHigh)), /*#__PURE__*/React.createElement("div", {
+  }, $0(convBid.priceLow), " – ", $0(convBid.priceHigh)), /*#__PURE__*/React.createElement("div", {
     className: "bid-days"
-  }, "\u2248 ", convBid.days, " day", convBid.days !== 1 ? "s" : "", " on site"), convBid.engineBacked && /*#__PURE__*/React.createElement("div", {
+  }, "≈ ", convBid.days, " day", convBid.days !== 1 ? "s" : "", " on site"), convBid.engineBacked && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 6
     }
@@ -9875,7 +9912,7 @@ function App() {
       fontWeight: 600,
       color: "#0a7d36"
     }
-  }, "\u2713 Priced by Caza\u2019s estimating engine", convBid.engineScope && convBid.engineScope.length ? " · " + convBid.engineScope.join(", ") : ""), convBid.disclaimer && /*#__PURE__*/React.createElement("div", {
+  }, "✓ Priced by Caza’s estimating engine", convBid.engineScope && convBid.engineScope.length ? " · " + convBid.engineScope.join(", ") : ""), convBid.disclaimer && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: "#667085",
@@ -9885,7 +9922,7 @@ function App() {
     className: "convchosen"
   }, /*#__PURE__*/React.createElement("span", {
     className: "convchosenlbl"
-  }, "\u2713 Material"), /*#__PURE__*/React.createElement("span", {
+  }, "✓ Material"), /*#__PURE__*/React.createElement("span", {
     className: "convchosenval"
   }, convBid.chosen.tier ? convBid.chosen.tier + " — " : "", convBid.chosen.name), /*#__PURE__*/React.createElement("button", {
     className: "convchosenchg",
@@ -9916,7 +9953,7 @@ function App() {
     href: o.url,
     target: "_blank",
     rel: "noopener noreferrer"
-  }, "\u2197")))) : null), /*#__PURE__*/React.createElement("section", {
+  }, "↗")))) : null), /*#__PURE__*/React.createElement("section", {
     className: "card convchat"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convmsgs"
@@ -9962,7 +9999,7 @@ function App() {
     alt: ""
   }), /*#__PURE__*/React.createElement("button", {
     onClick: () => setConvPhotos(a => a.filter((_, idx) => idx !== i))
-  }, "\xD7")))), /*#__PURE__*/React.createElement("div", {
+  }, "×")))), /*#__PURE__*/React.createElement("div", {
     className: "convattach"
   }, /*#__PURE__*/React.createElement("label", {
     className: "attachbtn"
@@ -10016,7 +10053,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "EagleView"), /*#__PURE__*/React.createElement("span", null, "Aerial roof report. eagleview.com"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setEstSvcPrompt({
       name: "GAF QuickMeasure",
@@ -10024,7 +10061,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "GAF QuickMeasure"), /*#__PURE__*/React.createElement("span", null, "~$25-35 aerial report. gaf.com"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197")), /*#__PURE__*/React.createElement("button", {
+  }, "Tap for steps ↗")), /*#__PURE__*/React.createElement("button", {
     className: "report",
     onClick: () => setEstSvcPrompt({
       name: "Polycam",
@@ -10032,7 +10069,7 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("b", null, "Polycam"), /*#__PURE__*/React.createElement("span", null, "LiDAR room scans. poly.cam"), /*#__PURE__*/React.createElement("span", {
     className: "reportgo"
-  }, "Tap for steps \u2197"))), /*#__PURE__*/React.createElement("div", {
+  }, "Tap for steps ↗"))), /*#__PURE__*/React.createElement("div", {
     className: "convinputrow"
   }, /*#__PURE__*/React.createElement("input", {
     className: "in",
@@ -10056,7 +10093,7 @@ function App() {
     style: {
       marginBottom: 10
     }
-  }, "Looks like I've got a solid price for you. Post it and local pros will apply \u2014 you pick who gets the job."), /*#__PURE__*/React.createElement("div", {
+  }, "Looks like I've got a solid price for you. Post it and local pros will apply — you pick who gets the job."), /*#__PURE__*/React.createElement("div", {
     className: "addrvis"
   }, /*#__PURE__*/React.createElement("div", {
     className: "addrvistitle"
@@ -10129,7 +10166,7 @@ function App() {
         className: "h2tight"
       }, j.title), /*#__PURE__*/React.createElement("div", {
         className: "hint"
-      }, fmtDate(j.createdAt), " \xB7 ", $0(j.priceLow), "\u2013", $0(j.priceHigh))), /*#__PURE__*/React.createElement(JobPill, {
+      }, fmtDate(j.createdAt), " · ", $0(j.priceLow), "–", $0(j.priceHigh))), /*#__PURE__*/React.createElement(JobPill, {
         j: j
       })), j.status === "open" && editJob !== j.id && /*#__PURE__*/React.createElement("div", {
         className: "editrow"
@@ -10165,9 +10202,9 @@ function App() {
         onClick: () => saveEdit(j)
       }, busy === "edit-" + j.id ? "Saving…" : "Save changes"))), j.status === "open" && apps.length === 0 && /*#__PURE__*/React.createElement("p", {
         className: "hint"
-      }, "Waiting for interested pros\u2026"), j.status === "open" && apps.length > 0 && /*#__PURE__*/React.createElement("p", {
+      }, "Waiting for interested pros…"), j.status === "open" && apps.length > 0 && /*#__PURE__*/React.createElement("p", {
         className: "good"
-      }, apps.length, " pro", apps.length !== 1 ? "s" : "", " want", apps.length === 1 ? "s" : "", " this job \u2014 pick one:"), j.status === "open" && apps.map(a => {
+      }, apps.length, " pro", apps.length !== 1 ? "s" : "", " want", apps.length === 1 ? "s" : "", " this job — pick one:"), j.status === "open" && apps.map(a => {
         const u = users[a.uid];
         return /*#__PURE__*/React.createElement("div", {
           className: "applicant",
@@ -10179,7 +10216,7 @@ function App() {
           onClick: () => setViewing(a.uid)
         }, /*#__PURE__*/React.createElement("b", null, u ? u.company : a.company), /*#__PURE__*/React.createElement("div", {
           className: "hint"
-        }, u && u.trades ? u.trades + " · " : "", appDist[j.id + a.uid] != null ? "~" + appDist[j.id + a.uid] + " mi away · " : "", starsOf(coStars, a.uid) || "no ratings yet", " \xB7 tap for profile")), /*#__PURE__*/React.createElement("div", {
+        }, u && u.trades ? u.trades + " · " : "", appDist[j.id + a.uid] != null ? "~" + appDist[j.id + a.uid] + " mi away · " : "", starsOf(coStars, a.uid) || "no ratings yet", " · tap for profile")), /*#__PURE__*/React.createElement("div", {
           className: "appbid"
         }, /*#__PURE__*/React.createElement("span", {
           className: "appbidnum"
@@ -10199,7 +10236,7 @@ function App() {
         className: "grow"
       }, /*#__PURE__*/React.createElement("b", null, chosenU.company), /*#__PURE__*/React.createElement("div", {
         className: "hint"
-      }, starsOf(coStars, j.chosen) || "no ratings yet", " \xB7 tap for profile"))), (j.status === "matched" || j.status === "complete") && /*#__PURE__*/React.createElement("div", {
+      }, starsOf(coStars, j.chosen) || "no ratings yet", " · tap for profile"))), (j.status === "matched" || j.status === "complete") && /*#__PURE__*/React.createElement("div", {
         className: "btnrow"
       }, /*#__PURE__*/React.createElement("button", {
         className: "btn ghost grow1" + (unread[j.id] ? " attn" : ""),
@@ -10228,7 +10265,7 @@ function App() {
     className: "card"
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "No contractor profiles yet \u2014 tell a contractor about CazBid.")), pros.map(u => /*#__PURE__*/React.createElement("section", {
+  }, "No contractor profiles yet — tell a contractor about CazBid.")), pros.map(u => /*#__PURE__*/React.createElement("section", {
     className: "card prosrow",
     key: u.uid,
     onClick: () => setViewing(u.uid)
@@ -10250,7 +10287,7 @@ function App() {
     className: "pagetitle"
   }, "Your Profile"), needsSetup && /*#__PURE__*/React.createElement("section", {
     className: "card setupbanner"
-  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Add your name and contact below and tap Save profile. Then you can post a job \u2014 contractors need a way to reach you.")), /*#__PURE__*/React.createElement("section", {
+  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Add your name and contact below and tap Save profile. Then you can post a job — contractors need a way to reach you.")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "profedit"
@@ -10342,7 +10379,7 @@ function App() {
   }, "Reviews about you"), /*#__PURE__*/React.createElement(ReviewList, {
     uid: me.uidH,
     role: "homeowner",
-    emptyText: "No reviews yet \u2014 pros rate you after completed jobs."
+    emptyText: "No reviews yet — pros rate you after completed jobs."
   })), /*#__PURE__*/React.createElement("div", {
     className: "chooserbtns"
   }, /*#__PURE__*/React.createElement("button", {
@@ -10370,7 +10407,7 @@ function App() {
     size: 34
   }), /*#__PURE__*/React.createElement("b", null, "No open jobs yet"), /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "Homeowners post around the clock \u2014 tap \u21BB up top to check again. Know a homeowner with a project? Invite them:"), /*#__PURE__*/React.createElement("button", {
+  }, "Homeowners post around the clock — tap ↻ up top to check again. Know a homeowner with a project? Invite them:"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: shareApp
   }, /*#__PURE__*/React.createElement(Share, {
@@ -10398,15 +10435,15 @@ function App() {
       j: j
     })), /*#__PURE__*/React.createElement("div", {
       className: "hint"
-    }, "\uD83D\uDCCD ", j.addrPublic && j.address ? j.address : j.town || "Local area", " \xB7 ", fmtDate(j.createdAt), " \xB7 homeowner ", starsOf(hoStars, j.homeownerUid) || "is new", " \xB7 ", (j.applicants || []).length, " interested"), /*#__PURE__*/React.createElement("div", {
+    }, "📍 ", j.addrPublic && j.address ? j.address : j.town || "Local area", " · ", fmtDate(j.createdAt), " · homeowner ", starsOf(hoStars, j.homeownerUid) || "is new", " · ", (j.applicants || []).length, " interested"), /*#__PURE__*/React.createElement("div", {
       className: "addrbadge " + (j.addrPublic ? "open" : "gated")
     }, j.addrPublic ? "📍 Address visible — verify before bidding" : "📍 Area only — exact address shared on hire"), /*#__PURE__*/React.createElement("p", {
       className: "body"
     }, j.summary || j.desc), j.roofDims && /*#__PURE__*/React.createElement("p", {
       className: "ai-note"
-    }, "\uD83D\uDCD0 ", j.roofDims), j.usedEstimate && !j.roofDims && /*#__PURE__*/React.createElement("p", {
+    }, "📐 ", j.roofDims), j.usedEstimate && !j.roofDims && /*#__PURE__*/React.createElement("p", {
       className: "estflag"
-    }, "\uD83D\uDCCD Price based on a rough size estimate (no measurements) \u2014 confirm on site."), (() => {
+    }, "📍 Price based on a rough size estimate (no measurements) — confirm on site."), (() => {
       const ml = matLists[j.id];
       return /*#__PURE__*/React.createElement("div", {
         className: "matwrap"
@@ -10424,7 +10461,7 @@ function App() {
         size: 15
       }), " Materials & quantities ", /*#__PURE__*/React.createElement("span", {
         className: "hint"
-      }, "editable \u2014 your estimate")), ml.items.map((it, i) => /*#__PURE__*/React.createElement("div", {
+      }, "editable — your estimate")), ml.items.map((it, i) => /*#__PURE__*/React.createElement("div", {
         className: "matrow",
         key: i
       }, /*#__PURE__*/React.createElement("input", {
@@ -10447,7 +10484,7 @@ function App() {
         onClick: () => addMatRow(j.id)
       }, "+ Add material"), ml.note && /*#__PURE__*/React.createElement("p", {
         className: "hint"
-      }, "\uD83D\uDCD0 ", ml.note)));
+      }, "📐 ", ml.note)));
     })(), j.cost && /*#__PURE__*/React.createElement("div", {
       className: "costbox"
     }, /*#__PURE__*/React.createElement("div", {
@@ -10456,7 +10493,7 @@ function App() {
       className: "hint"
     }, "(only contractors see this)")), /*#__PURE__*/React.createElement("div", {
       className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Labor \u2014 ", j.mh || "?", " hrs @ ", $0(j.cost.rate), "/hr"), /*#__PURE__*/React.createElement("b", null, $0(j.cost.labor))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, "Labor — ", j.mh || "?", " hrs @ ", $0(j.cost.rate), "/hr"), /*#__PURE__*/React.createElement("b", null, $0(j.cost.labor))), /*#__PURE__*/React.createElement("div", {
       className: "costrow"
     }, /*#__PURE__*/React.createElement("span", null, "Materials"), /*#__PURE__*/React.createElement("b", null, $0(j.cost.mats))), /*#__PURE__*/React.createElement("div", {
       className: "costrow"
@@ -10466,12 +10503,12 @@ function App() {
       className: "costrow total"
     }, /*#__PURE__*/React.createElement("span", null, "Est. total cost"), /*#__PURE__*/React.createElement("b", null, $0(j.cost.base))), /*#__PURE__*/React.createElement("div", {
       className: "costrow"
-    }, /*#__PURE__*/React.createElement("span", null, "Suggested range (28\u201335% GM)"), /*#__PURE__*/React.createElement("b", null, $0(j.priceLow), "\u2013", $0(j.priceHigh))), /*#__PURE__*/React.createElement("p", {
+    }, /*#__PURE__*/React.createElement("span", null, "Suggested range (28–35% GM)"), /*#__PURE__*/React.createElement("b", null, $0(j.priceLow), "–", $0(j.priceHigh))), /*#__PURE__*/React.createElement("p", {
       className: "hint",
       style: {
         marginTop: 6
       }
-    }, "AI estimate", priceLib.length ? " · learning from " + priceLib.length + " past local job" + (priceLib.length !== 1 ? "s" : "") : "", " \u2014 trust your own read. Set any price below.")), (() => {
+    }, "AI estimate", priceLib.length ? " · learning from " + priceLib.length + " past local job" + (priceLib.length !== 1 ? "s" : "") : "", " — trust your own read. Set any price below.")), (() => {
       const lo = num(j.priceLow),
         hi = num(j.priceHigh) || j.price;
       const ov = bidOverride[j.id];
@@ -10504,7 +10541,7 @@ function App() {
         className: "bidends"
       }, /*#__PURE__*/React.createElement("span", null, $0(lo)), /*#__PURE__*/React.createElement("span", {
         className: "hint"
-      }, "AI range \xB7 \u2248", j.mh || "?", " MH \xB7 ", j.days, "d"), /*#__PURE__*/React.createElement("span", null, $0(hi))), /*#__PURE__*/React.createElement("p", {
+      }, "AI range · ≈", j.mh || "?", " MH · ", j.days, "d"), /*#__PURE__*/React.createElement("span", null, $0(hi))), /*#__PURE__*/React.createElement("p", {
         className: "hint",
         style: {
           marginTop: 6
@@ -10543,7 +10580,7 @@ function App() {
         }
       }, "Use range instead")))) : /*#__PURE__*/React.createElement("div", {
         className: "hint"
-      }, "You bid ", $0((j.applicants || []).find(a => a.uid === me.uidC) ? j.applicants.find(a => a.uid === me.uidC).bid || myBid : myBid), " \u2014 homeowner deciding.")), /*#__PURE__*/React.createElement("div", {
+      }, "You bid ", $0((j.applicants || []).find(a => a.uid === me.uidC) ? j.applicants.find(a => a.uid === me.uidC).bid || myBid : myBid), " — homeowner deciding.")), /*#__PURE__*/React.createElement("div", {
         className: "btnrow"
       }, /*#__PURE__*/React.createElement("button", {
         className: "btn pass",
@@ -10562,7 +10599,7 @@ function App() {
     className: "pagetitle"
   }, "My Jobs"), needsSetup && /*#__PURE__*/React.createElement("section", {
     className: "card setupbanner"
-  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Head to the ", /*#__PURE__*/React.createElement("b", null, "Profile"), " tab, add your company name and trades, and Save \u2014 homeowners pick contractors from their profiles. Then browse the ", /*#__PURE__*/React.createElement("b", null, "Feed"), " to bid on jobs.")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Head to the ", /*#__PURE__*/React.createElement("b", null, "Profile"), " tab, add your company name and trades, and Save — homeowners pick contractors from their profiles. Then browse the ", /*#__PURE__*/React.createElement("b", null, "Feed"), " to bid on jobs.")), /*#__PURE__*/React.createElement("div", {
     className: "stats"
   }, /*#__PURE__*/React.createElement("button", {
     className: "stat" + (jobView === "applied" ? " on" : ""),
@@ -10610,7 +10647,7 @@ function App() {
       className: "h2"
     }, "Your reviews"), revs.length === 0 ? /*#__PURE__*/React.createElement("p", {
       className: "hint"
-    }, "No reviews yet \u2014 finish a job and your homeowner can leave one.") : revs.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    }, "No reviews yet — finish a job and your homeowner can leave one.") : revs.map((r, i) => /*#__PURE__*/React.createElement("div", {
       className: "revitem",
       key: i
     }, /*#__PURE__*/React.createElement("div", {
@@ -10683,17 +10720,17 @@ function App() {
         className: "h2tight"
       }, j.title), /*#__PURE__*/React.createElement("div", {
         className: "hint"
-      }, $0(j.price), " \xB7 ", fmtDate(j.createdAt))), /*#__PURE__*/React.createElement(JobPill, {
+      }, $0(j.price), " · ", fmtDate(j.createdAt))), /*#__PURE__*/React.createElement(JobPill, {
         j: j
       })), j.status === "open" && /*#__PURE__*/React.createElement("p", {
         className: "hint"
-      }, "Applied \xB7 homeowner deciding \xB7 ", (j.applicants || []).length, " pros in"), j.status === "matched" && won && /*#__PURE__*/React.createElement("p", {
+      }, "Applied · homeowner deciding · ", (j.applicants || []).length, " pros in"), j.status === "matched" && won && /*#__PURE__*/React.createElement("p", {
         className: "good"
-      }, "\u2713 You got it! ", j.homeownerName, " \xB7 ", j.contact, j.address ? " · 📍 " + j.address : j.town ? " · " + j.town : ""), j.status === "matched" && !won && /*#__PURE__*/React.createElement("p", {
+      }, "✓ You got it! ", j.homeownerName, " · ", j.contact, j.address ? " · 📍 " + j.address : j.town ? " · " + j.town : ""), j.status === "matched" && !won && /*#__PURE__*/React.createElement("p", {
         className: "hint"
       }, "Homeowner went with another pro on this one."), j.status === "complete" && won && /*#__PURE__*/React.createElement("p", {
         className: "good"
-      }, "\u2713 Complete"), (j.status === "matched" || j.status === "complete") && won && /*#__PURE__*/React.createElement("div", {
+      }, "✓ Complete"), (j.status === "matched" || j.status === "complete") && won && /*#__PURE__*/React.createElement("div", {
         className: "btnrow"
       }, /*#__PURE__*/React.createElement("button", {
         className: "btn ghost grow1" + (unread[j.id] ? " attn" : ""),
@@ -10801,7 +10838,7 @@ function App() {
     placeholder: "e.g. Lyons Falls, NY"
   })), /*#__PURE__*/React.createElement("label", {
     className: "fld"
-  }, /*#__PURE__*/React.createElement("span", null, "Travel radius \u2014 ", profC.radius || 30, " miles"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("span", null, "Travel radius — ", profC.radius || 30, " miles"), /*#__PURE__*/React.createElement("input", {
     className: "radslider",
     type: "range",
     min: "5",
@@ -10819,7 +10856,44 @@ function App() {
     className: "bidends"
   }, /*#__PURE__*/React.createElement("span", null, "5 mi"), /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("label", {
+  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      marginTop: 6
+    }
+  }, "Delivery / mobilization rates ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "cost book — your real costs, margin lands on top")), /*#__PURE__*/React.createElement("div", {
+    className: "estfields"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Mobilization base $"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    value: profC.mobBase,
+    onChange: e => setProfC({
+      ...profC,
+      mobBase: num(e.target.value)
+    }),
+    placeholder: "350"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Truck $/mile"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: "0",
+    step: "0.05",
+    value: profC.mobTruckPerMi,
+    onChange: e => setProfC({
+      ...profC,
+      mobTruckPerMi: num(e.target.value)
+    }),
+    placeholder: "0.70"
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 2
+    }
+  }, "Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate."), /*#__PURE__*/React.createElement("label", {
     className: "fld"
   }, /*#__PURE__*/React.createElement("span", null, "About your company"), /*#__PURE__*/React.createElement("textarea", {
     className: "desc",
@@ -10846,14 +10920,14 @@ function App() {
   }, "Reviews about you"), /*#__PURE__*/React.createElement(ReviewList, {
     uid: me.uidC,
     role: "contractor",
-    emptyText: "No written reviews yet \u2014 finish jobs and they'll show up here."
+    emptyText: "No written reviews yet — finish jobs and they'll show up here."
   })), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
   }, "Subscription ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "demo \u2014 no real billing")), /*#__PURE__*/React.createElement("div", {
+  }, "demo — no real billing")), /*#__PURE__*/React.createElement("div", {
     className: "plangrid"
   }, PLANS.map(pl => /*#__PURE__*/React.createElement("button", {
     key: pl.id,
@@ -10868,7 +10942,7 @@ function App() {
     className: "hint"
   }, pl.blurb), me.plan === pl.id && /*#__PURE__*/React.createElement("span", {
     className: "planon"
-  }, "\u2713 Active")))), myPlan && myPlan.limit > 0 && /*#__PURE__*/React.createElement("p", {
+  }, "✓ Active")))), myPlan && myPlan.limit > 0 && /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
@@ -10878,7 +10952,7 @@ function App() {
     style: {
       marginTop: 6
     }
-  }, "Flat fee, no cut of your jobs \u2014 homeowners pay you directly.")), /*#__PURE__*/React.createElement("div", {
+  }, "Flat fee, no cut of your jobs — homeowners pay you directly.")), /*#__PURE__*/React.createElement("div", {
     className: "chooserbtns"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost grow1",
@@ -10907,7 +10981,7 @@ function App() {
       ...profC,
       prefMaterials: e.target.value
     }),
-    placeholder: "e.g. Roofing: GAF Timberline HDZ \xB7 Siding: James Hardie \xB7 Decking: Trex \xB7 Gutters: 6in seamless aluminum"
+    placeholder: "e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum"
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14,
@@ -10918,7 +10992,7 @@ function App() {
     className: "seclabel"
   }, "Good / better / best lines ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your tiers \u2014 AL builds estimates around these")), /*#__PURE__*/React.createElement("div", {
+  }, "your tiers — AL builds estimates around these")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexWrap: "wrap",
@@ -10978,14 +11052,14 @@ function App() {
       },
       value: opts.includes(cur) ? "" : cur,
       onChange: e => setTier(e.target.value),
-      placeholder: "\u2026or type your own line for this tier"
+      placeholder: "…or type your own line for this tier"
     }));
   }), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 6
     }
-  }, "Set a category's three lines and AL builds your good/better/best around them \u2014 and the proposal shows that brand's colors when a tier is chosen.")), /*#__PURE__*/React.createElement("button", {
+  }, "Set a category's three lines and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.")), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full",
     style: {
       marginTop: 12
@@ -11003,7 +11077,7 @@ function App() {
     style: {
       marginTop: -2
     }
-  }, "Pick who reads your estimates back. AL is the default. Tap \u25B6 to hear each one, set its speed, then Use."), /*#__PURE__*/React.createElement("div", {
+  }, "Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, set its speed, then Use."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -11040,7 +11114,7 @@ function App() {
       }
     }, p.name, " ", p.name === "AL" && /*#__PURE__*/React.createElement("span", {
       className: "hint"
-    }, "\xB7 default")), /*#__PURE__*/React.createElement("div", {
+    }, "· default")), /*#__PURE__*/React.createElement("div", {
       className: "hint"
     }, p.sex === "f" ? "Female voice" : "Male voice")), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
@@ -11049,7 +11123,7 @@ function App() {
       },
       onClick: () => previewPersona(p),
       title: "Hear " + p.name + " at " + spd.toFixed(2) + "×"
-    }, "\u25B6"), /*#__PURE__*/React.createElement("button", {
+    }, "▶"), /*#__PURE__*/React.createElement("button", {
       className: "btn " + (persona === p.name ? "primary" : "ghost"),
       style: {
         padding: "4px 12px"
@@ -11086,13 +11160,13 @@ function App() {
         textAlign: "right",
         fontVariantNumeric: "tabular-nums"
       }
-    }, spd.toFixed(2), "\xD7")));
+    }, spd.toFixed(2), "×")));
   })), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 8
     }
-  }, "Speed 0.70\u20131.20\xD7 (1.00 = normal). Avatars are coming \u2014 names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
+  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -11107,14 +11181,14 @@ function App() {
     className: "matsummary"
   }, /*#__PURE__*/React.createElement("div", {
     className: "matcount"
-  }, "\u2713 ", matCosts.length, " material price", matCosts.length !== 1 ? "s" : "", " loaded"), /*#__PURE__*/React.createElement("div", {
+  }, "✓ ", matCosts.length, " material price", matCosts.length !== 1 ? "s" : "", " loaded"), /*#__PURE__*/React.createElement("div", {
     className: "matpreview"
   }, matCosts.slice(0, 5).map((m, i) => /*#__PURE__*/React.createElement("div", {
     className: "matrow",
     key: i
   }, /*#__PURE__*/React.createElement("span", null, m.name, m.unit ? " (" + m.unit + ")" : ""), /*#__PURE__*/React.createElement("b", null, $0(m.cost)))), matCosts.length > 5 && /*#__PURE__*/React.createElement("div", {
     className: "hint"
-  }, "\u2026and ", matCosts.length - 5, " more")), /*#__PURE__*/React.createElement("div", {
+  }, "…and ", matCosts.length - 5, " more")), /*#__PURE__*/React.createElement("div", {
     className: "btnrow"
   }, /*#__PURE__*/React.createElement("label", {
     className: "btn ghost grow1"
@@ -11202,7 +11276,7 @@ function App() {
   }), /*#__PURE__*/React.createElement("button", {
     className: "dimx",
     onClick: () => savePriceBook(priceBook.filter(x => x.id !== m.id))
-  }, "\xD7"))))), /*#__PURE__*/React.createElement("button", {
+  }, "×"))))), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => savePriceBook([...priceBook, {
       id: "u-" + rid(),
@@ -11264,7 +11338,7 @@ function App() {
   }), /*#__PURE__*/React.createElement("button", {
     className: "dimx",
     onClick: () => saveRateBook(rateBook.filter(x => x.id !== r.id))
-  }, "\xD7"))))), /*#__PURE__*/React.createElement("button", {
+  }, "×"))))), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => saveRateBook([...rateBook, {
       id: "u-" + rid(),
@@ -11283,9 +11357,9 @@ function App() {
     className: "propill"
   }, "PRO")), /*#__PURE__*/React.createElement("p", {
     className: "body"
-  }, "Build full itemized estimates \u2014 material takeoff, labor hours, equipment, and a live margin slider \u2014 right from a photo, a description, or an EagleView/LiDAR report."), /*#__PURE__*/React.createElement("ul", {
+  }, "Build full itemized estimates — material takeoff, labor hours, equipment, and a live margin slider — right from a photo, a description, or an EagleView/LiDAR report."), /*#__PURE__*/React.createElement("ul", {
     className: "bid-inc"
-  }, /*#__PURE__*/React.createElement("li", null, "AI material takeoff with editable quantities & costs"), /*#__PURE__*/React.createElement("li", null, "Burdened labor + equipment + tax, priced bottom-up"), /*#__PURE__*/React.createElement("li", null, "Drag-a-margin slider \u2014 watch your price move live"), /*#__PURE__*/React.createElement("li", null, "Same aerial & LiDAR report tools as the homeowner side")), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("li", null, "AI material takeoff with editable quantities & costs"), /*#__PURE__*/React.createElement("li", null, "Burdened labor + equipment + tax, priced bottom-up"), /*#__PURE__*/React.createElement("li", null, "Drag-a-margin slider — watch your price move live"), /*#__PURE__*/React.createElement("li", null, "Same aerial & LiDAR report tools as the homeowner side")), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full",
     onClick: () => {
       setMe({
@@ -11306,9 +11380,9 @@ function App() {
       display: "flex"
     },
     onClick: () => setSavedOpen(o => !o)
-  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCC1 Saved estimates"), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", null, "📁 Saved estimates"), /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, estimates.length, " \xB7 ", savedOpen ? "hide" : "show")), savedOpen && /*#__PURE__*/React.createElement("div", {
+  }, estimates.length, " · ", savedOpen ? "hide" : "show")), savedOpen && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
@@ -11356,7 +11430,7 @@ function App() {
     },
     title: "Rename",
     onClick: () => renameSavedEstimate(rec)
-  }, "\u270F\uFE0F"), /*#__PURE__*/React.createElement("button", {
+  }, "✏️"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     style: {
       padding: "2px 6px"
@@ -11365,12 +11439,12 @@ function App() {
     onClick: () => {
       if (window.confirm("Delete this saved estimate?")) deleteSavedEstimate(rec.id);
     }
-  }, "\uD83D\uDDD1"))), /*#__PURE__*/React.createElement("p", {
+  }, "🗑"))), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 6
     }
-  }, "Saved on this device only \u2014 not a backup yet (cache clear / new phone = gone). Export/PDF anything you send."))), whSpecs ? /*#__PURE__*/React.createElement(HouseVisual, {
+  }, "Saved on this device only — not a backup yet (cache clear / new phone = gone). Export/PDF anything you send."))), whSpecs ? /*#__PURE__*/React.createElement(HouseVisual, {
     view: houseView,
     selected: houseScope,
     activeTrade: activeTrade,
@@ -11389,7 +11463,7 @@ function App() {
     className: "card"
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Loading the house\u2026")), /*#__PURE__*/React.createElement("section", {
+  }, "Loading the house…")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "convhead"
@@ -11420,7 +11494,7 @@ function App() {
     className: "convav"
   }, personaFace(curPersona, true)), /*#__PURE__*/React.createElement("div", {
     className: "convbubble ai"
-  }, "Hey, I'm ", curPersona.name, " \u2014 let's build this estimate. First: are we working outside, inside, or on the systems?")), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
+  }, "Hey, I'm ", curPersona.name, " — let's build this estimate. First: are we working outside, inside, or on the systems?")), alMsgs.map((m, i) => m.role === "ai" ? /*#__PURE__*/React.createElement("div", {
     className: "convrow ai",
     key: i
   }, /*#__PURE__*/React.createElement("div", {
@@ -11504,7 +11578,7 @@ function App() {
     }, /*#__PURE__*/React.createElement("input", {
       value: customTrade,
       onChange: e => setCustomTrade(e.target.value),
-      placeholder: "Something else? type a trade\u2026",
+      placeholder: "Something else? type a trade…",
       style: {
         flex: 1
       }
@@ -11525,7 +11599,7 @@ function App() {
     }, /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       onClick: () => setSelStep("category")
-    }, "\u2190 Change area"), /*#__PURE__*/React.createElement("button", {
+    }, "← Change area"), /*#__PURE__*/React.createElement("button", {
       className: "btn primary grow1",
       disabled: !selKeys.length,
       onClick: () => setSelStep(needType.length ? "type" : "ready")
@@ -11536,7 +11610,7 @@ function App() {
         style: {
           marginBottom: 6
         }
-      }, TRADE_LABEL(t), " \u2014 which type / system? ", /*#__PURE__*/React.createElement("span", {
+      }, TRADE_LABEL(t), " — which type / system? ", /*#__PURE__*/React.createElement("span", {
         className: "hint"
       }, "locks the takeoff so systems don't mix")), /*#__PURE__*/React.createElement("div", {
         style: {
@@ -11566,7 +11640,7 @@ function App() {
       }, /*#__PURE__*/React.createElement("input", {
         value: customType,
         onChange: e => setCustomType(e.target.value),
-        placeholder: "or type another system\u2026",
+        placeholder: "or type another system…",
         style: {
           flex: 1
         }
@@ -11585,7 +11659,7 @@ function App() {
         style: {
           marginTop: 6
         }
-      }, "\u201CMixed\u201D combines systems \u2014 AL sizes each part separately so the bid stays accurate."));
+      }, "“Mixed” combines systems — AL sizes each part separately so the bid stays accurate."));
     })(), selStep === "ready" && /*#__PURE__*/React.createElement("div", {
       className: "convbubble ai"
     }, "Scope locked in (pinned on the house above). Add measurements or photos below if you've got them, fill any blanks, then Build."));
@@ -11622,12 +11696,12 @@ function App() {
     style: {
       marginTop: 4
     }
-  }, "\uD83C\uDF99\uFE0F Hands-free \u2014 just talk. Pause and ", curPersona.name, " takes the turn, reads it back, then listens again. No tapping until you hit \u25A0 Stop.") : voiceMode && /*#__PURE__*/React.createElement("p", {
+  }, "🎙️ Hands-free — just talk. Pause and ", curPersona.name, " takes the turn, reads it back, then listens again. No tapping until you hit ■ Stop.") : voiceMode && /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 4
     }
-  }, "\uD83D\uDD0A Tap \uD83C\uDFA4 once to start a hands-free conversation \u2014 say it (e.g. \u201Cstanding seam, eight twelve, valley into the dormer\u201D), pause, and ", curPersona.name, " fills it in and reads it back. iPhone needs the one tap to allow the mic.")), /*#__PURE__*/React.createElement("div", {
+  }, "🔊 Tap 🎤 once to start a hands-free conversation — say it (e.g. “standing seam, eight twelve, valley into the dormer”), pause, and ", curPersona.name, " fills it in and reads it back. iPhone needs the one tap to allow the mic.")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6
@@ -11639,7 +11713,7 @@ function App() {
       cursor: "pointer",
       textAlign: "center"
     }
-  }, "\uD83D\uDCF7 Photo", /*#__PURE__*/React.createElement("input", {
+  }, "📷 Photo", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*",
     capture: "environment",
@@ -11659,7 +11733,7 @@ function App() {
       textAlign: "center",
       opacity: whReportBusy ? 0.6 : 1
     }
-  }, "\uD83D\uDCC4 Report", /*#__PURE__*/React.createElement("input", {
+  }, "📄 Report", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*,application/pdf,.pdf",
     disabled: whReportBusy,
@@ -11677,7 +11751,7 @@ function App() {
       flex: 1
     },
     onClick: () => setWhMeasuredOpen(o => !o)
-  }, "\uD83D\uDCD0 Measure")), whMeasuredOpen && /*#__PURE__*/React.createElement("section", {
+  }, "📐 Measure")), whMeasuredOpen && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
@@ -11689,11 +11763,11 @@ function App() {
     href: "https://hover.to",
     target: "_blank",
     rel: "noopener noreferrer"
-  }, "Hover"), " (roof & exterior) \xB7 ", /*#__PURE__*/React.createElement("a", {
+  }, "Hover"), " (roof & exterior) · ", /*#__PURE__*/React.createElement("a", {
     href: "https://poly.cam",
     target: "_blank",
     rel: "noopener noreferrer"
-  }, "Polycam"), " (interior). Then tap \uD83D\uDCC4 Report to upload it and AL reads the numbers.")), (whPhotos.length > 0 || whDims) && /*#__PURE__*/React.createElement("section", {
+  }, "Polycam"), " (interior). Then tap 📄 Report to upload it and AL reads the numbers.")), (whPhotos.length > 0 || whDims) && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, whPhotos.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -11709,27 +11783,27 @@ function App() {
     alt: ""
   }), /*#__PURE__*/React.createElement("button", {
     onClick: () => setWhPhotos(a => a.filter((_, idx) => idx !== i))
-  }, "\xD7")))), whReportBusy && /*#__PURE__*/React.createElement("p", {
+  }, "×")))), whReportBusy && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Reading the report\u2026"), whDims && /*#__PURE__*/React.createElement("p", {
+  }, "Reading the report…"), whDims && /*#__PURE__*/React.createElement("p", {
     className: "ai-note",
     style: {
       marginTop: 6
     }
-  }, "\uD83D\uDCD0 ", whDims, " ", /*#__PURE__*/React.createElement("button", {
+  }, "📐 ", whDims, " ", /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     style: {
       padding: "0 6px",
       marginLeft: 6
     },
     onClick: () => setWhDims("")
-  }, "\u2715"))), Object.keys(houseScope).length > 0 && /*#__PURE__*/React.createElement("section", {
+  }, "✕"))), Object.keys(houseScope).length > 0 && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "seclabel"
   }, "Details ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "fill any blanks \u2014 AL pre-fills from your files")), Object.keys(houseScope).map(ht => {
+  }, "fill any blanks — AL pre-fills from your files")), Object.keys(houseScope).map(ht => {
     const pbk = PB_TRADE_KEY[ht];
     const spec = pbk ? (whSpecs || []).find(s => s.trade === pbk) : null;
     const own = pbk ? (enginePB || []).filter(e => e && String(e.trade) === pbk && String(e.material || "").trim()).map(e => String(e.material).trim()) : [];
@@ -11753,7 +11827,7 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("span", {
       className: "seclabel"
-    }, "\u2713 ", TRADE_LABEL(ht), curMat && curMat !== true ? " · " + curMat : ""), /*#__PURE__*/React.createElement("button", {
+    }, "✓ ", TRADE_LABEL(ht), curMat && curMat !== true ? " · " + curMat : ""), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
         padding: "2px 8px"
@@ -11773,7 +11847,7 @@ function App() {
       onChange: e => houseSelect(ht, e.target.value)
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "\u2014 choose \u2014"), curMat && curMat !== true && !(HOUSE_TYPES[ht] || mats).includes(curMat) && /*#__PURE__*/React.createElement("option", {
+    }, "— choose —"), curMat && curMat !== true && !(HOUSE_TYPES[ht] || mats).includes(curMat) && /*#__PURE__*/React.createElement("option", {
       value: curMat
     }, curMat), (HOUSE_TYPES[ht] || mats).map(m => /*#__PURE__*/React.createElement("option", {
       key: m,
@@ -11817,7 +11891,7 @@ function App() {
       style: {
         marginTop: 6
       }
-    }, "No fixed dimensions \u2014 AL prices this from your description, photos, and measurements."));
+    }, "No fixed dimensions — AL prices this from your description, photos, and measurements."));
   })), /*#__PURE__*/React.createElement("button", {
     className: "btn primary full big",
     disabled: estBusy === "run" || !Object.keys(houseScope).length,
@@ -11838,9 +11912,14 @@ function App() {
         cost: labor + matTotal + matTax + t.equipment
       };
     };
-    const combined = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+    const tradesCost = trades.reduce((a, t) => a + tradeCost(t).cost, 0);
+    const mob = mobilizeCostOf(trades);
+    const combined = tradesCost + mob;
     const sell = Math.round(combined / (1 - estMargin / 100) / 25) * 25;
     const profit = sell - combined;
+    const mr = mobRates();
+    const mobMiles = Math.max(0, num(estMiles) || 0);
+    const mobCrew = trades.reduce((m, t) => Math.max(m, num(t.crew) || 1), 1);
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
@@ -11853,7 +11932,7 @@ function App() {
         persistCurrent();
         setEstResult(null);
       }
-    }, "\u2190 Back to scope"), /*#__PURE__*/React.createElement("button", {
+    }, "← Back to scope"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost grow1",
       onClick: startNewEstimate
     }, "Start new estimate")), /*#__PURE__*/React.createElement("button", {
@@ -11862,7 +11941,7 @@ function App() {
         marginBottom: 4
       },
       onClick: openProposal
-    }, "\uD83D\uDCC4 Present proposal to homeowner"), /*#__PURE__*/React.createElement("button", {
+    }, "📄 Present proposal to homeowner"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost full",
       style: {
         marginBottom: 4
@@ -11871,7 +11950,7 @@ function App() {
         persistCurrent();
         openTimer();
       }
-    }, "\u23F1 Track time on this job ", /*#__PURE__*/React.createElement("span", {
+    }, "⏱ Track time on this job ", /*#__PURE__*/React.createElement("span", {
       className: "hint"
     }, "log actual hours per phase")), /*#__PURE__*/React.createElement("section", {
       className: "card",
@@ -11912,14 +11991,14 @@ function App() {
       style: {
         marginTop: 4
       }
-    }, "\uD83D\uDCBE Auto-saved on this device. Local only \u2014 not a backup yet; export/PDF anything you send.")), /*#__PURE__*/React.createElement("div", {
+    }, "💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.")), /*#__PURE__*/React.createElement("div", {
       className: "h1",
       style: {
         marginBottom: 2
       }
     }, trades.length === 1 ? trades[0].title : "Combined estimate — " + trades.length + " trades"), estResult.errors && estResult.errors.length > 0 && /*#__PURE__*/React.createElement("p", {
       className: "hint"
-    }, "Couldn't build: ", estResult.errors.map(e => e.label).join(", "), " \u2014 tap Back to retry."), trades.map((t, ti) => {
+    }, "Couldn't build: ", estResult.errors.map(e => e.label).join(", "), " — tap Back to retry."), trades.map((t, ti) => {
       const c = tradeCost(t);
       return /*#__PURE__*/React.createElement("section", {
         className: "card",
@@ -11940,7 +12019,7 @@ function App() {
           color: "#8A5A12",
           fontWeight: 600
         }
-      }, "\uD83E\uDD16 AI-built trade \u2014 VERIFY before bidding."), t.calibN > 0 ? /*#__PURE__*/React.createElement("div", {
+      }, "🤖 AI-built trade — VERIFY before bidding."), t.calibN > 0 ? /*#__PURE__*/React.createElement("div", {
         style: {
           margin: "4px 0 8px",
           padding: "8px 11px",
@@ -11951,16 +12030,16 @@ function App() {
           color: "#1B7A3D",
           fontWeight: 600
         }
-      }, "\u2713 Calibrated from ", t.calibN, " job", t.calibN === 1 ? "" : "s", " \u2014 labor \xD7", t.calibFactor, ".") : t.calibKey ? /*#__PURE__*/React.createElement("p", {
+      }, "✓ Calibrated from ", t.calibN, " job", t.calibN === 1 ? "" : "s", " — labor ×", t.calibFactor, ".") : t.calibKey ? /*#__PURE__*/React.createElement("p", {
         className: "hint",
         style: {
           marginBottom: 6
         }
-      }, "Uncalibrated \u2014 log this job's real hours when it's done to dial in \u201C", t.calibKey, "\u201D.") : null, t.manualLoaded ? /*#__PURE__*/React.createElement("div", {
+      }, "Uncalibrated — log this job's real hours when it's done to dial in “", t.calibKey, "”.") : null, t.manualLoaded ? /*#__PURE__*/React.createElement("div", {
         className: "manualbadge on"
-      }, "\uD83D\uDCD8 Caza ", t.manualKey, " manual loaded") : t.manualKey ? /*#__PURE__*/React.createElement("div", {
+      }, "📘 Caza ", t.manualKey, " manual loaded") : t.manualKey ? /*#__PURE__*/React.createElement("div", {
         className: "manualbadge off"
-      }, "\u26AA No manual loaded (", t.manualKey, ") \u2014 built-in trade logic") : null, t.notes && /*#__PURE__*/React.createElement("p", {
+      }, "⚪ No manual loaded (", t.manualKey, ") — built-in trade logic") : null, t.notes && /*#__PURE__*/React.createElement("p", {
         className: "hint"
       }, t.notes), t.checks && t.checks.length > 0 && /*#__PURE__*/React.createElement("div", {
         style: {
@@ -11979,18 +12058,18 @@ function App() {
           letterSpacing: ".4px",
           marginBottom: 4
         }
-      }, "\u2713 Opus pre-flight check"), t.checks.map((c2, i) => /*#__PURE__*/React.createElement("div", {
+      }, "✓ Opus pre-flight check"), t.checks.map((c2, i) => /*#__PURE__*/React.createElement("div", {
         key: i,
         style: {
           fontSize: 12.5,
           color: "#2F4A39",
           lineHeight: 1.45
         }
-      }, "\u2022 ", c2))), t.primaryOptions && t.primaryOptions.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      }, "• ", c2))), t.primaryOptions && t.primaryOptions.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
         className: "seclabel"
       }, "Popular local options ", /*#__PURE__*/React.createElement("span", {
         className: "hint"
-      }, "good \xB7 better \xB7 best \u2014 tap to use")), /*#__PURE__*/React.createElement("div", {
+      }, "good · better · best — tap to use")), /*#__PURE__*/React.createElement("div", {
         className: "tiergrid"
       }, t.primaryOptions.map((o, i) => /*#__PURE__*/React.createElement("div", {
         className: "tiercard" + (t.chosenTier === o.tier ? " on" : ""),
@@ -12015,7 +12094,7 @@ function App() {
         href: o.url,
         target: "_blank",
         rel: "noopener noreferrer"
-      }, "View \u2197")))))), /*#__PURE__*/React.createElement("div", {
+      }, "View ↗")))))), /*#__PURE__*/React.createElement("div", {
         className: "seclabel"
       }, "Material takeoff ", /*#__PURE__*/React.createElement("span", {
         className: "hint"
@@ -12111,7 +12190,7 @@ function App() {
         className: "seclabel"
       }, "Phase bid ", /*#__PURE__*/React.createElement("span", {
         className: "hint"
-      }, "man-hours per phase \u2014 what the on-site timer compares against")), /*#__PURE__*/React.createElement("div", {
+      }, "man-hours per phase — what the on-site timer compares against")), /*#__PURE__*/React.createElement("div", {
         style: {
           display: "flex",
           flexWrap: "wrap",
@@ -12139,7 +12218,7 @@ function App() {
         className: "costrow"
       }, /*#__PURE__*/React.createElement("span", null, "Material tax (", (t.taxRate * 100).toFixed(1), "%)"), /*#__PURE__*/React.createElement("b", null, $0(c.matTax))), /*#__PURE__*/React.createElement("div", {
         className: "costrow"
-      }, /*#__PURE__*/React.createElement("span", null, "Labor \u2014 ", t.laborHours, " hrs @ ", $0(t.laborRate), "/hr ", /*#__PURE__*/React.createElement("span", {
+      }, /*#__PURE__*/React.createElement("span", null, "Labor — ", t.laborHours, " hrs @ ", $0(t.laborRate), "/hr ", /*#__PURE__*/React.createElement("span", {
         className: "labtag book",
         title: "Burdened rate: base wage + comp/insurance + payroll taxes + overhead (not bare wage)"
       }, "burdened"), t.laborSource === "ratebook" ? /*#__PURE__*/React.createElement("span", {
@@ -12148,11 +12227,11 @@ function App() {
         className: "labtag book"
       }, "engine") : /*#__PURE__*/React.createElement("span", {
         className: "labtag est"
-      }, "AI est. \xB7 verify")), /*#__PURE__*/React.createElement("b", null, $0(c.labor))), t.rateFloored && /*#__PURE__*/React.createElement("div", {
+      }, "AI est. · verify")), /*#__PURE__*/React.createElement("b", null, $0(c.labor))), t.rateFloored && /*#__PURE__*/React.createElement("div", {
         className: "costrow"
       }, /*#__PURE__*/React.createElement("span", {
         className: "hint"
-      }, "\u21B3 raised to the ", $0(t.rateFloor), "/hr burdened minimum for this trade \u2014 override above if your loaded cost differs"), /*#__PURE__*/React.createElement("b", null)), /*#__PURE__*/React.createElement("div", {
+      }, "↳ raised to the ", $0(t.rateFloor), "/hr burdened minimum for this trade — override above if your loaded cost differs"), /*#__PURE__*/React.createElement("b", null)), /*#__PURE__*/React.createElement("div", {
         className: "costrow"
       }, /*#__PURE__*/React.createElement("span", null, "Equipment / disposal"), /*#__PURE__*/React.createElement("b", null, $0(t.equipment))), /*#__PURE__*/React.createElement("div", {
         className: "costrow total"
@@ -12182,27 +12261,72 @@ function App() {
           setLogOpen(false);
           setLogMH("");
         }
-      }, "\u2715")) : /*#__PURE__*/React.createElement("button", {
+      }, "✕")) : /*#__PURE__*/React.createElement("button", {
         className: "btn ghost",
         style: {
           marginTop: 8,
           fontSize: 12
         },
         onClick: () => setLogOpen(t.calibKey)
-      }, "\uD83D\uDCCB Log job actuals (calibrate)")));
+      }, "📋 Log job actuals (calibrate)")));
     }), /*#__PURE__*/React.createElement("section", {
       className: "card"
-    }, trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", {
       className: "costbox"
-    }, trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
+    }, trades.length > 1 && trades.map((t, ti) => /*#__PURE__*/React.createElement("div", {
       className: "costrow",
       key: ti
-    }, /*#__PURE__*/React.createElement("span", null, t.label || t.title), /*#__PURE__*/React.createElement("b", null, $0(tradeCost(t).cost)))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, t.label || t.title), /*#__PURE__*/React.createElement("b", null, $0(tradeCost(t).cost)))), trades.length > 1 && /*#__PURE__*/React.createElement("div", {
+      className: "costrow"
+    }, /*#__PURE__*/React.createElement("span", null, "Trades subtotal"), /*#__PURE__*/React.createElement("b", null, $0(tradesCost))), /*#__PURE__*/React.createElement("div", {
+      className: "costrow",
+      style: {
+        alignItems: "center",
+        flexWrap: "wrap",
+        rowGap: 4
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: estMobOn,
+      onChange: e => setEstMobOn(e.target.checked),
+      title: "Include the delivery / mobilization charge on this job"
+    }), "Delivery / mobilization", /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4
+      }
+    }, "· round-trip ", /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      value: estMiles,
+      disabled: !estMobOn,
+      onChange: e => setEstMiles(num(e.target.value)),
+      style: {
+        width: 56,
+        padding: "2px 6px",
+        border: "1px solid #dde3ea",
+        borderRadius: 6,
+        opacity: estMobOn ? 1 : 0.5
+      }
+    }), " mi")), /*#__PURE__*/React.createElement("b", null, $0(mob))), estMobOn && /*#__PURE__*/React.createElement("div", {
+      className: "costrow"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "↳ ", $0(mr.base), " base + ", mobMiles, " mi × ", mobCrew, " crew drive-time + ", mobMiles, " mi × $", mr.truck.toFixed(2), "/mi truck · rates in Profile → cost book"), /*#__PURE__*/React.createElement("b", null)), /*#__PURE__*/React.createElement("div", {
       className: "costrow total"
-    }, /*#__PURE__*/React.createElement("span", null, "Combined cost"), /*#__PURE__*/React.createElement("b", null, $0(combined)))), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, trades.length > 1 ? "Total job cost" : "Job cost"), /*#__PURE__*/React.createElement("b", null, $0(combined)))), /*#__PURE__*/React.createElement("div", {
       className: "marginbox",
       style: {
-        marginTop: trades.length > 1 ? 12 : 0
+        marginTop: 12
       }
     }, /*#__PURE__*/React.createElement("div", {
       className: "marginhead"
@@ -12241,9 +12365,9 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Your material costs \u2014 matched per trade, override seed pricing. Homeowners never see these; they only get a range."), enginePB.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, "Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range."), enginePB.length === 0 && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "No prices yet. Add your material costs below \u2014 the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.map(e => /*#__PURE__*/React.createElement("div", {
+  }, "No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.map(e => /*#__PURE__*/React.createElement("div", {
     className: "estfields",
     key: e.id,
     style: {
@@ -12288,7 +12412,7 @@ function App() {
       alignSelf: "center"
     },
     onClick: () => pbDel(e.id)
-  }, "\u2715"))), /*#__PURE__*/React.createElement("button", {
+  }, "✕"))), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 8
@@ -12303,29 +12427,29 @@ function App() {
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     onClick: () => setPbImportOpen(o => !o)
-  }, "\uD83D\uDCC4 ", pbImportOpen ? "Hide CSV importer" : "Import from CSV"), pbImportOpen && !csvReview && /*#__PURE__*/React.createElement("div", {
+  }, "📄 ", pbImportOpen ? "Hide CSV importer" : "Import from CSV"), pbImportOpen && !csvReview && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement("label", {
     className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCF7 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("span", null, "📷 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*,application/pdf,.pdf",
     disabled: csvBusy,
     onChange: e => onPriceFile(e.target.files && e.target.files[0])
   })), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Upload a supplier quote or price sheet \u2014 AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
+  }, "Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Reading the price sheet\u2026"), /*#__PURE__*/React.createElement("p", {
+  }, "Reading the price sheet…"), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       textAlign: "center",
       margin: "8px 0",
       fontWeight: 600
     }
-  }, "\u2014 or import a CSV \u2014"), /*#__PURE__*/React.createElement("label", {
+  }, "— or import a CSV —"), /*#__PURE__*/React.createElement("label", {
     className: "estf"
   }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
     value: csvSupplier,
@@ -12352,7 +12476,7 @@ function App() {
     onChange: e => onCsvFile(e.target.files && e.target.files[0])
   })), /*#__PURE__*/React.createElement("label", {
     className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "\u2026or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
+  }, /*#__PURE__*/React.createElement("span", null, "…or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
     rows: 4,
     onChange: e => onCsvText(e.target.value),
     placeholder: "material,unit,cost\n2x4x8 SPF,EA,5.85"
@@ -12371,7 +12495,7 @@ function App() {
     }))
   }, /*#__PURE__*/React.createElement("option", {
     value: -1
-  }, "\u2014"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
+  }, "—"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
     key: i,
     value: i
   }, h || "col " + (i + 1))))))), /*#__PURE__*/React.createElement("button", {
@@ -12387,7 +12511,7 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Review & correct, then commit. \u26A0\uFE0F low-confidence rows are highlighted \u2014 fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
+  }, "Review & correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
     className: "estfields",
     key: i,
     style: {
@@ -12437,7 +12561,7 @@ function App() {
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn primary grow1",
     onClick: csvCommit
-  }, "\u2713 Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
+  }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: csvResetImport
   }, "Cancel")))))), me.role === "contractor" && tab === "estimator" && timerView && estResult && estResult.trades && /*#__PURE__*/React.createElement("div", {
@@ -12467,10 +12591,10 @@ function App() {
       flex: 1,
       margin: 0
     }
-  }, "\u23F1 Time audit", estCustomer.trim() ? " — " + estCustomer.trim() : ""), /*#__PURE__*/React.createElement("button", {
+  }, "⏱ Time audit", estCustomer.trim() ? " — " + estCustomer.trim() : ""), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: closeTimer
-  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -12485,7 +12609,7 @@ function App() {
       padding: "2px 10px"
     },
     onClick: () => setJobCrew(Math.max(1, jobCrew - 1))
-  }, "\u2212"), /*#__PURE__*/React.createElement("b", {
+  }, "−"), /*#__PURE__*/React.createElement("b", {
     style: {
       minWidth: 16,
       textAlign: "center"
@@ -12516,7 +12640,7 @@ function App() {
       commitAllRunning();
       flash("Paused all phases.");
     }
-  }, "\u23F8 Pause all")), (() => {
+  }, "⏸ Pause all")), (() => {
     const running = [];
     let totMh = 0;
     estResult.trades.forEach(t => (t.phases || []).forEach(ph => {
@@ -12537,9 +12661,9 @@ function App() {
       style: {
         color: "#0a7d36"
       }
-    }, "\u25CF Running: ", running.join("  ·  ")) : /*#__PURE__*/React.createElement("span", {
+    }, "● Running: ", running.join("  ·  ")) : /*#__PURE__*/React.createElement("span", {
       className: "hint"
-    }, "No phase running \u2014 tap \u25B6 Start on a phase below."), /*#__PURE__*/React.createElement("span", {
+    }, "No phase running — tap ▶ Start on a phase below."), /*#__PURE__*/React.createElement("span", {
       style: {
         float: "right"
       }
@@ -12598,7 +12722,7 @@ function App() {
         borderRadius: 6,
         padding: "1px 7px"
       }
-    }, "\u25CF RUNNING")), /*#__PURE__*/React.createElement("div", {
+    }, "● RUNNING")), /*#__PURE__*/React.createElement("div", {
       className: "hint"
     }, "bid ", ph.bidHours, " hr"))), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -12615,7 +12739,7 @@ function App() {
         fontSize: 18,
         color: ph.running ? "#0a7d36" : "#33414f"
       }
-    }, "\u23F1 ", fmtClock(phaseLiveMin(ph))), /*#__PURE__*/React.createElement("span", {
+    }, "⏱ ", fmtClock(phaseLiveMin(ph))), /*#__PURE__*/React.createElement("span", {
       style: {
         display: "flex",
         alignItems: "center",
@@ -12623,13 +12747,13 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("span", {
       className: "hint"
-    }, "\xD7"), /*#__PURE__*/React.createElement("button", {
+    }, "×"), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost",
       style: {
         padding: "2px 9px"
       },
       onClick: () => phaseSetCrew(ti, pi, phaseCrew(ph) - 1)
-    }, "\u2212"), /*#__PURE__*/React.createElement("b", {
+    }, "−"), /*#__PURE__*/React.createElement("b", {
       style: {
         minWidth: 14,
         textAlign: "center"
@@ -12689,12 +12813,12 @@ function App() {
       commitAllRunning();
       setTimerView("closeout");
     }
-  }, "End & review \u2192"), /*#__PURE__*/React.createElement("p", {
+  }, "End & review →"), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: 6
     }
-  }, "Actuals are man-hours (clock \xD7 that phase's crew). Overlap is fine \u2014 each phase keeps its own crew so they don't double-count. Time persists across days.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Actuals are man-hours (clock × that phase's crew). Overlap is fine — each phase keeps its own crew so they don't double-count. Time persists across days.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -12706,10 +12830,10 @@ function App() {
       flex: 1,
       margin: 0
     }
-  }, "Closeout \u2014 approve each phase"), /*#__PURE__*/React.createElement("button", {
+  }, "Closeout — approve each phase"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: () => setTimerView("timer")
-  }, "\u2190 Timer")), /*#__PURE__*/React.createElement("p", {
+  }, "← Timer")), /*#__PURE__*/React.createElement("p", {
     className: "hint"
   }, "Bid vs actual man-hours. Approve the ones that look right; fix the one that's off. Only approved values save."), (() => {
     const anyLoud = estResult.trades.some(t => (t.phases || []).some(ph => {
@@ -12728,7 +12852,7 @@ function App() {
         fontSize: 13,
         marginBottom: 4
       }
-    }, "\u26A0\uFE0F A phase is way off the bid \u2014 check it (timer left running?) before saving.") : null;
+    }, "⚠️ A phase is way off the bid — check it (timer left running?) before saving.") : null;
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -12786,7 +12910,7 @@ function App() {
       style: {
         color: "#1B7A3D"
       }
-    }, "\u2713 saved")), /*#__PURE__*/React.createElement("div", {
+    }, "✓ saved")), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12.5,
         color: col,
@@ -12797,7 +12921,7 @@ function App() {
         borderRadius: 8,
         marginTop: 2
       }
-    }, loud ? "⚠️ " : "", "bid ", bid, " \xB7 actual ", actual, " \xB7 ", diff >= 0 ? "+" : "", diff, " (", pct >= 0 ? "+" : "", pct, "%)")), /*#__PURE__*/React.createElement("label", {
+    }, loud ? "⚠️ " : "", "bid ", bid, " · actual ", actual, " · ", diff >= 0 ? "+" : "", diff, " (", pct >= 0 ? "+" : "", pct, "%)")), /*#__PURE__*/React.createElement("label", {
       className: "estf",
       style: {
         width: 84
@@ -12843,7 +12967,7 @@ function App() {
         padding: "2px 8px"
       },
       onClick: () => setTcorr({})
-    }, "\u2715")));
+    }, "✕")));
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -12853,7 +12977,7 @@ function App() {
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost grow1",
     onClick: () => setTimerView("timer")
-  }, "\u2190 Back to timer"), /*#__PURE__*/React.createElement("button", {
+  }, "← Back to timer"), /*#__PURE__*/React.createElement("button", {
     className: "btn primary grow1",
     onClick: () => {
       persistCurrent({
@@ -12893,7 +13017,7 @@ function App() {
         padding: "2px 8px"
       },
       onClick: () => setPropOpen(false)
-    }, "\u2715")), /*#__PURE__*/React.createElement("label", {
+    }, "✕")), /*#__PURE__*/React.createElement("label", {
       style: {
         display: "block",
         textAlign: "center",
@@ -12950,7 +13074,7 @@ function App() {
       }
     }, "Your Roofing Proposal"), /*#__PURE__*/React.createElement("div", {
       className: "hint"
-    }, profC.company || "Caza Contractors", " \xB7 prepared for ", who, estAddress.trim() ? " · " + estAddress.trim() : "")), /*#__PURE__*/React.createElement("section", {
+    }, profC.company || "Caza Contractors", " · prepared for ", who, estAddress.trim() ? " · " + estAddress.trim() : "")), /*#__PURE__*/React.createElement("section", {
       className: "card",
       style: {
         marginTop: 10
@@ -12978,7 +13102,7 @@ function App() {
       className: "hint"
     }, "Photos of your actual roof taken at inspection.")) : /*#__PURE__*/React.createElement("p", {
       className: "hint"
-    }, "Add inspection photos on the job (\uD83D\uDCF7 Photo) to show the homeowner the real condition.")), /*#__PURE__*/React.createElement("section", {
+    }, "Add inspection photos on the job (📷 Photo) to show the homeowner the real condition.")), /*#__PURE__*/React.createElement("section", {
       className: "card",
       style: {
         marginTop: 10
@@ -13053,7 +13177,7 @@ function App() {
           color: "#2F4A39",
           marginTop: 6
         }
-      }, "\uD83D\uDEE1 ", tr.warranty), /*#__PURE__*/React.createElement("button", {
+      }, "🛡 ", tr.warranty), /*#__PURE__*/React.createElement("button", {
         className: "btn " + (on ? "primary" : "ghost") + " full",
         style: {
           marginTop: 10
@@ -13139,7 +13263,7 @@ function App() {
       }
     }, proposalScopeBullets().map((b, i) => /*#__PURE__*/React.createElement("li", {
       key: i
-    }, b)), /*#__PURE__*/React.createElement("li", null, "Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep)."), /*#__PURE__*/React.createElement("li", null, "Licensed & insured \xB7 workmanship guaranteed.")), /*#__PURE__*/React.createElement("button", {
+    }, b)), /*#__PURE__*/React.createElement("li", null, "Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep)."), /*#__PURE__*/React.createElement("li", null, "Licensed & insured · workmanship guaranteed.")), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost full",
       onClick: () => setPropScopeOpen(o => !o)
     }, propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"), propScopeOpen && /*#__PURE__*/React.createElement("div", {
@@ -13172,7 +13296,7 @@ function App() {
       style: {
         marginTop: 2
       }
-    }, "A family roofing business \u2014 named for AL, the grandfather who started it. Fully licensed and insured, with a workmanship guarantee behind every job. We use full manufacturer systems (not just shingles) so your warranty actually holds.")), /*#__PURE__*/React.createElement("div", {
+    }, "A family roofing business — named for AL, the grandfather who started it. Fully licensed and insured, with a workmanship guarantee behind every job. We use full manufacturer systems (not just shingles) so your warranty actually holds.")), /*#__PURE__*/React.createElement("div", {
       style: {
         marginTop: 12,
         padding: "10px 12px",
@@ -13182,7 +13306,7 @@ function App() {
         fontSize: 12.5,
         color: "#8A5A12"
       }
-    }, "\u270D\uFE0F On-the-spot e-sign (DocuSign) is coming next \u2014 it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option", Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : "", " are saved with the estimate."), /*#__PURE__*/React.createElement("button", {
+    }, "✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option", Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : "", " are saved with the estimate."), /*#__PURE__*/React.createElement("button", {
       className: "btn ghost full",
       style: {
         marginTop: 10
