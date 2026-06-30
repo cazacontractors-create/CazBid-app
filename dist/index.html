@@ -3343,8 +3343,12 @@ async function callClaude(messages, opts) {
   }
 }
 async function __callClaudeInner(messages, opts) {
+  // MODEL SPLIT: the model is chosen SERVER-SIDE per function — this sync path hits
+  // /estimate.js (Sonnet, fast: the AL conversation + measurement/geo extraction); the
+  // BUILD/commit preflight goes through callClaudeBackground → /estimate-background.js
+  // (Opus, rigorous). The `model` below is not sent to the function; it's documentary.
   const body = {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     max_tokens: opts && opts.maxTokens || 1000,
     messages
   };
@@ -7553,6 +7557,7 @@ function App() {
     }
     setEstBusy("run");
     setEstResult(null);
+    if (voiceRef.current) speakAL("Let me double-check everything before I save this."); // voice pairing for the Opus preflight wait
     try {
       const results = [];
       for (const t of sel) {
@@ -12131,7 +12136,31 @@ function App() {
       marginTop: 4
     },
     onClick: buildUnifiedEstimate
-  }, estBusy === "run" ? "Building takeoff…" : Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Add a trade to build")) : (() => {
+  }, estBusy === "run" ? "Building takeoff…" : Object.keys(houseScope).length ? "✦ Build Estimate (" + Object.keys(houseScope).length + " trade" + (Object.keys(houseScope).length === 1 ? "" : "s") + ")" : "Add a trade to build"), estBusy === "run" && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "spin",
+    style: {
+      width: 22,
+      height: 22,
+      borderRadius: "50%",
+      border: "3px solid #d8e0e8",
+      borderTopColor: "#14a04a",
+      flex: "0 0 auto"
+    }
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700
+    }
+  }, "Finalizing your estimate…"), /*#__PURE__*/React.createElement("div", {
+    className: "hint"
+  }, "AL is double-checking the takeoff, labor, and price before it's saved — a few seconds.")))) : (() => {
     const trades = estResult.trades || [];
     const tradeCost = t => {
       const matTotal = t.items.reduce((a, b) => a + (num(b.cost) || 0), 0);
