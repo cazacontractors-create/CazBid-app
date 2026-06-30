@@ -8072,6 +8072,30 @@ function App() {
     persistCurrent();
     setPropOpen(true);
   };
+  // Export the on-screen proposal as a PDF via the browser's native print (Save as PDF / Share → Print).
+  // No library to inline; the @media print stylesheet isolates the .propsheet and drops app chrome.
+  const exportProposalPDF = () => {
+    persistCurrent();
+    const prev = document.title;
+    document.title = "Proposal — " + (estCustomer.trim() || profC.company || "Caza Contractors");
+    let done = false;
+    const restore = () => {
+      if (done) return;
+      done = true;
+      document.title = prev;
+      window.removeEventListener("afterprint", restore);
+    };
+    window.addEventListener("afterprint", restore);
+    setTimeout(restore, 3000); // iOS may not fire afterprint
+    setTimeout(() => {
+      try {
+        window.print();
+      } catch (e) {
+        restore();
+        flash("Use your browser's Share → Print to save the PDF.");
+      }
+    }, 60);
+  };
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: estResult && estResult.trades || [],
@@ -13199,6 +13223,7 @@ function App() {
     const chosen = estResult.proposalTier || (tiers.length === 3 ? tiers[1].tier : tiers[0] && tiers[0].tier);
     const who = estCustomer.trim() || "the homeowner";
     return /*#__PURE__*/React.createElement("div", {
+      className: "propsheet",
       style: {
         position: "fixed",
         inset: 0,
@@ -13214,6 +13239,7 @@ function App() {
         paddingBottom: 40
       }
     }, /*#__PURE__*/React.createElement("div", {
+      className: "no-print",
       style: {
         display: "flex",
         justifyContent: "flex-end",
@@ -13241,6 +13267,7 @@ function App() {
         objectFit: "contain"
       }
     }) : /*#__PURE__*/React.createElement("span", {
+      className: "no-print",
       style: {
         display: "inline-block",
         padding: "16px 22px",
@@ -13386,7 +13413,7 @@ function App() {
           marginTop: 6
         }
       }, "🛡 ", tr.warranty), /*#__PURE__*/React.createElement("button", {
-        className: "btn " + (on ? "primary" : "ghost") + " full",
+        className: "btn " + (on ? "primary" : "ghost") + " full no-print",
         style: {
           marginTop: 10
         },
@@ -13472,7 +13499,7 @@ function App() {
     }, proposalScopeBullets().map((b, i) => /*#__PURE__*/React.createElement("li", {
       key: i
     }, b)), /*#__PURE__*/React.createElement("li", null, "Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep)."), /*#__PURE__*/React.createElement("li", null, "Licensed & insured · workmanship guaranteed.")), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost full",
+      className: "btn ghost full no-print",
       onClick: () => setPropScopeOpen(o => !o)
     }, propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"), propScopeOpen && /*#__PURE__*/React.createElement("div", {
       style: {
@@ -13505,6 +13532,7 @@ function App() {
         marginTop: 2
       }
     }, "A family roofing business — named for AL, the grandfather who started it. Fully licensed and insured, with a workmanship guarantee behind every job. We use full manufacturer systems (not just shingles) so your warranty actually holds.")), /*#__PURE__*/React.createElement("div", {
+      className: "no-print",
       style: {
         marginTop: 12,
         padding: "10px 12px",
@@ -13515,9 +13543,15 @@ function App() {
         color: "#8A5A12"
       }
     }, "✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option", Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : "", " are saved with the estimate."), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost full",
+      className: "btn primary full no-print",
       style: {
-        marginTop: 10
+        marginTop: 12
+      },
+      onClick: exportProposalPDF
+    }, "📄 Save / print as PDF"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full no-print",
+      style: {
+        marginTop: 8
       },
       onClick: () => {
         persistCurrent();
@@ -14137,6 +14171,18 @@ button{cursor:pointer;font:inherit}
 
 @media (min-width:560px){.reportgrid{grid-template-columns:repeat(3,1fr)}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}.confetti{display:none}}
+/* PROPOSAL PDF EXPORT — native print → Save as PDF. The .propsheet is a direct child of .app,
+   so hide its siblings (header/screens/nav) and let the proposal flow from the top across pages. */
+@media print {
+  @page { margin: 12mm; }
+  html, body { background:#fff !important; }
+  .app > *:not(.propsheet) { display:none !important; }
+  .propsheet { position:static !important; inset:auto !important; width:auto !important; background:#fff !important; overflow:visible !important; z-index:auto !important; }
+  .propsheet .no-print { display:none !important; }
+  .propsheet .card { box-shadow:none !important; border:1px solid #e0e4e8 !important; break-inside:avoid; }
+  .propsheet img { max-width:100% !important; }
+  * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+}
 `;
 
 // ---- mount the app (Netlify/browser; the artifact relay used to do this automatically) ----

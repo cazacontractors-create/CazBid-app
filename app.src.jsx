@@ -3531,6 +3531,18 @@ function App() {
   const setProposalColor = (tradeKey, name) => setEstResult((r) => r ? { ...r, colors: Object.assign({}, r.colors, { [tradeKey]: name }) } : r);
   const setProposalTier = (tier) => setEstResult((r) => r ? { ...r, proposalTier: tier } : r);
   const openProposal = () => { persistCurrent(); setPropOpen(true); };
+  // Export the on-screen proposal as a PDF via the browser's native print (Save as PDF / Share → Print).
+  // No library to inline; the @media print stylesheet isolates the .propsheet and drops app chrome.
+  const exportProposalPDF = () => {
+    persistCurrent();
+    const prev = document.title;
+    document.title = "Proposal — " + (estCustomer.trim() || profC.company || "Caza Contractors");
+    let done = false;
+    const restore = () => { if (done) return; done = true; document.title = prev; window.removeEventListener("afterprint", restore); };
+    window.addEventListener("afterprint", restore);
+    setTimeout(restore, 3000); // iOS may not fire afterprint
+    setTimeout(() => { try { window.print(); } catch (e) { restore(); flash("Use your browser's Share → Print to save the PDF."); } }, 60);
+  };
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
@@ -6156,16 +6168,16 @@ function App() {
         const chosen = estResult.proposalTier || (tiers.length === 3 ? tiers[1].tier : (tiers[0] && tiers[0].tier));
         const who = estCustomer.trim() || "the homeowner";
         return (
-          <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "#f4f6f8", overflowY: "auto" }}>
+          <div className="propsheet" style={{ position: "fixed", inset: 0, zIndex: 80, background: "#f4f6f8", overflowY: "auto" }}>
             <div style={{ maxWidth: 560, margin: "0 auto", padding: 14, paddingBottom: 40 }}>
               {/* COMPANY LOGO spot (tap to add/replace — saved to your profile) */}
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -8 }}>
+              <div className="no-print" style={{ display: "flex", justifyContent: "flex-end", marginBottom: -8 }}>
                 <button className="btn ghost" style={{ padding: "2px 8px" }} onClick={() => setPropOpen(false)}>✕</button>
               </div>
               <label style={{ display: "block", textAlign: "center", marginBottom: 8, cursor: "pointer" }}>
                 {profC.avatar
                   ? <img src={profC.avatar} alt="Company logo" style={{ maxHeight: 72, maxWidth: "70%", objectFit: "contain" }} />
-                  : <span style={{ display: "inline-block", padding: "16px 22px", border: "2px dashed #c2c8ce", borderRadius: 12, color: "#8a929a", fontWeight: 700 }}>+ Add your company logo</span>}
+                  : <span className="no-print" style={{ display: "inline-block", padding: "16px 22px", border: "2px dashed #c2c8ce", borderRadius: 12, color: "#8a929a", fontWeight: 700 }}>+ Add your company logo</span>}
                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return; try { const u = await imageToJpeg(f, 600); setProfC((p) => ({ ...p, avatar: u })); flash("Logo saved to your profile."); } catch (err) { flash("Couldn't add that image."); } }} />
               </label>
               <div style={{ textAlign: "center", marginBottom: 4 }}>
@@ -6201,7 +6213,7 @@ function App() {
                         <div style={{ fontWeight: 700, fontSize: 16, marginTop: 2 }}>{tr.name}</div>
                         {tr.why && <div className="hint" style={{ marginTop: 2 }}>{tr.why}</div>}
                         <div style={{ fontSize: 12.5, color: "#2F4A39", marginTop: 6 }}>🛡 {tr.warranty}</div>
-                        <button className={"btn " + (on ? "primary" : "ghost") + " full"} style={{ marginTop: 10 }} onClick={() => setProposalTier(tr.tier)}>{on ? "✓ Selected" : "Choose this"}</button>
+                        <button className={"btn " + (on ? "primary" : "ghost") + " full no-print"} style={{ marginTop: 10 }} onClick={() => setProposalTier(tr.tier)}>{on ? "✓ Selected" : "Choose this"}</button>
                       </div>
                     );
                   })}
@@ -6252,7 +6264,7 @@ function App() {
                   <li>Full tear-off and haul-away, site protection, and complete cleanup (magnetic nail sweep).</li>
                   <li>Licensed &amp; insured · workmanship guaranteed.</li>
                 </ul>
-                <button className="btn ghost full" onClick={() => setPropScopeOpen((o) => !o)}>{propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"}</button>
+                <button className="btn ghost full no-print" onClick={() => setPropScopeOpen((o) => !o)}>{propScopeOpen ? "▾ Hide itemized detail" : "▸ See itemized detail"}</button>
                 {propScopeOpen && (
                   <div style={{ marginTop: 8 }}>
                     {estResult.trades.map((t, ti) => (
@@ -6273,10 +6285,11 @@ function App() {
               </section>
 
               {/* SIGN — deferred behind the legal-review gate */}
-              <div style={{ marginTop: 12, padding: "10px 12px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12" }}>
+              <div className="no-print" style={{ marginTop: 12, padding: "10px 12px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12" }}>
                 ✍️ On-the-spot e-sign (DocuSign) is coming next — it's held until the NY contract terms + right-to-cancel notice are legal-reviewed, so what gets signed is compliant. For now, present and capture the homeowner's choice; the selected option{Object.keys(estResult.colors || {}).length ? " and color" + (Object.keys(estResult.colors).length > 1 ? "s" : "") + " (" + Object.values(estResult.colors).join(", ") + ")" : ""} are saved with the estimate.
               </div>
-              <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => { persistCurrent(); setPropOpen(false); }}>Done</button>
+              <button className="btn primary full no-print" style={{ marginTop: 12 }} onClick={exportProposalPDF}>📄 Save / print as PDF</button>
+              <button className="btn ghost full no-print" style={{ marginTop: 8 }} onClick={() => { persistCurrent(); setPropOpen(false); }}>Done</button>
             </div>
           </div>
         );
@@ -6861,6 +6874,18 @@ button{cursor:pointer;font:inherit}
 
 @media (min-width:560px){.reportgrid{grid-template-columns:repeat(3,1fr)}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}.confetti{display:none}}
+/* PROPOSAL PDF EXPORT — native print → Save as PDF. The .propsheet is a direct child of .app,
+   so hide its siblings (header/screens/nav) and let the proposal flow from the top across pages. */
+@media print {
+  @page { margin: 12mm; }
+  html, body { background:#fff !important; }
+  .app > *:not(.propsheet) { display:none !important; }
+  .propsheet { position:static !important; inset:auto !important; width:auto !important; background:#fff !important; overflow:visible !important; z-index:auto !important; }
+  .propsheet .no-print { display:none !important; }
+  .propsheet .card { box-shadow:none !important; border:1px solid #e0e4e8 !important; break-inside:avoid; }
+  .propsheet img { max-width:100% !important; }
+  * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+}
 `;
 
 
