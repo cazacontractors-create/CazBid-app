@@ -1029,6 +1029,21 @@ const CAZA_MANUAL_DEFAULT = {
     { id: "cm_m_cedartrim", role: "Cedar siding trim / J-channel", standard: "Metal J-channel (copper / bronze / aluminum)", subs: [], note: "No vinyl trim on cedar." },
     { id: "cm_m_soffitfascia", role: "Fascia (vinyl soffit job)", standard: "Aluminum fascia", subs: ["Vinyl fascia"], note: "" },
   ],
+  // PART 5 — vendors/brands: who Caza buys from + preferred manufacturers. Injected into the Opus
+  // prompt; the preflight flags a takeoff brand that isn't Caza's preferred (kind "vendor").
+  vendors: {
+    preferred: [
+      { id: "cm_v_abc", name: "ABC Supply", note: "primary roofing / exterior supplier" },
+      { id: "cm_v_srs", name: "SRS / Beacon", note: "" },
+      { id: "cm_v_ss", name: "Standing-seam panel supplier", note: "standing-seam metal" },
+    ],
+    brands: [
+      { id: "cm_b_oc", name: "Owens Corning", note: "roofing system (Total Protection)" },
+      { id: "cm_b_lt", name: "Lifetime Tool", note: "pipe flashing" },
+      { id: "cm_b_ct", name: "CertainTeed", note: "" },
+      { id: "cm_b_gaf", name: "GAF", note: "" },
+    ],
+  },
   // PART 4 — pricing: Caza's standard gross margin, the margin FLOOR (never bid below), and a job
   // minimum. Per-trade margin overrides matched to the primary trade. Delivery/mobilization charge
   // (base + miles) already lives in the cost book; tier pricing in proposalTiers. Applied client-side
@@ -1087,6 +1102,12 @@ function cazaManualBlock(scope, desc, manual) {
   if (sel.materials.length) s += "CAZA STANDARD MATERIALS (role → Caza standard; acceptable subs in parens):\n" + sel.materials.map((mm) => "- " + mm.role + " → " + mm.standard + ((mm.subs && mm.subs.length) ? " (subs ok: " + mm.subs.join(", ") + ")" : "") + (mm.note ? " — " + mm.note : "")).join("\n") + "\n";
   const rate = cazaCrewRate(scope, desc, manual);
   if (rate > 0) s += "CAZA STANDARD BURDENED CREW RATE for this trade: $" + rate + "/hr — use this as laborRate unless the job is genuinely unusual. If your computed burdened rate differs materially, flag a \"labor\" deviation (found=your $/hr, standard=" + rate + ").\n";
+  const ven = cazaManualOf(manual).vendors;
+  if (ven && ((ven.preferred && ven.preferred.length) || (ven.brands && ven.brands.length))) {
+    const brands = (ven.brands || []).map((b) => b.name).filter(Boolean);
+    if ((ven.preferred || []).length) s += "CAZA PREFERRED VENDORS: " + (ven.preferred || []).map((v) => v.name + (v.note ? " (" + v.note + ")" : "")).filter(Boolean).join("; ") + ".\n";
+    if (brands.length) s += "CAZA PREFERRED BRANDS: " + brands.join("; ") + ". If a takeoff line uses a manufacturer/brand that is NOT one of these (and not an accepted material sub above), flag a \"vendor\" deviation (found=the brand used, standard=the Caza preferred brand for that role).\n";
+  }
   return s;
 }
 
@@ -3251,8 +3272,8 @@ function App() {
         "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" +
         ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
         cazaManualBlock(scope, desc, profC.cazaManual) +
-        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, or a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": [].\n" +
-        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": [].\n" +
+        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
         ...photos.slice(0, 3).map((ph) => {
           const mt = ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg";
@@ -3356,7 +3377,7 @@ function App() {
       }));
       // CAZA MANUAL preflight deviations — flagged (not auto-applied); contractor accepts/overrides.
       const cazaDeviations = Array.isArray(d.deviations) ? d.deviations.slice(0, 8).map((x) => ({
-        kind: (["material", "missing", "extra", "labor"].indexOf(String(x.kind || "")) >= 0 ? String(x.kind) : "material"),
+        kind: (["material", "missing", "extra", "labor", "vendor"].indexOf(String(x.kind || "")) >= 0 ? String(x.kind) : "material"),
         item: String(x.item || ""), found: String(x.found || ""), standard: String(x.standard || ""), note: String(x.note || ""), status: "",
       })).filter((x) => x.item || x.standard) : [];
       const crewN = num(d.crew) || 2, daysN = num(d.days) || 1;
@@ -3517,8 +3538,9 @@ function App() {
   // CAZA MANUAL editor (Profile) — edits profC.cazaManual; seeds an editable copy from the default on first touch.
   const cmLabOf = (src) => (src && src.labor && (Array.isArray(src.labor.crewRates) || src.labor.defaultRate != null)) ? src.labor : CAZA_MANUAL_DEFAULT.labor;
   const cmPriceOf = (src) => (src && src.pricing && (src.pricing.marginStd != null || Array.isArray(src.pricing.perTrade))) ? src.pricing : CAZA_MANUAL_DEFAULT.pricing;
-  const cmManual = () => { const m = profC.cazaManual; const src = (m && (Array.isArray(m.assemblies) || Array.isArray(m.materials))) ? m : CAZA_MANUAL_DEFAULT; const lab = cmLabOf(src); const pr = cmPriceOf(src); return { assemblies: (src.assemblies || CAZA_MANUAL_DEFAULT.assemblies).map((a) => ({ ...a, includes: [...(a.includes || [])], excludes: [...(a.excludes || [])] })), materials: (src.materials || CAZA_MANUAL_DEFAULT.materials).map((x) => ({ ...x, subs: [...(x.subs || [])] })), labor: { defaultRate: lab.defaultRate, crewRates: (lab.crewRates || []).map((c) => ({ ...c })) }, pricing: { marginStd: pr.marginStd, marginFloor: pr.marginFloor, jobMin: pr.jobMin, perTrade: (pr.perTrade || []).map((o) => ({ ...o })) } }; };
-  const cmUpdate = (mut) => setProfC((p) => { const cur = (p.cazaManual && (Array.isArray(p.cazaManual.assemblies) || Array.isArray(p.cazaManual.materials))) ? p.cazaManual : CAZA_MANUAL_DEFAULT; const lab = cmLabOf(cur); const pr = cmPriceOf(cur); const base = { assemblies: (cur.assemblies || []).map((a) => ({ ...a, includes: [...(a.includes || [])], excludes: [...(a.excludes || [])] })), materials: (cur.materials || []).map((x) => ({ ...x, subs: [...(x.subs || [])] })), labor: { defaultRate: num(lab.defaultRate) || 50, crewRates: (lab.crewRates || []).map((c) => ({ ...c })) }, pricing: { marginStd: num(pr.marginStd) || 30, marginFloor: num(pr.marginFloor) || 0, jobMin: num(pr.jobMin) || 0, perTrade: (pr.perTrade || []).map((o) => ({ ...o })) } }; mut(base); return { ...p, cazaManual: base }; });
+  const cmVenOf = (src) => (src && src.vendors && (Array.isArray(src.vendors.preferred) || Array.isArray(src.vendors.brands))) ? src.vendors : CAZA_MANUAL_DEFAULT.vendors;
+  const cmManual = () => { const m = profC.cazaManual; const src = (m && (Array.isArray(m.assemblies) || Array.isArray(m.materials))) ? m : CAZA_MANUAL_DEFAULT; const lab = cmLabOf(src); const pr = cmPriceOf(src); const ven = cmVenOf(src); return { assemblies: (src.assemblies || CAZA_MANUAL_DEFAULT.assemblies).map((a) => ({ ...a, includes: [...(a.includes || [])], excludes: [...(a.excludes || [])] })), materials: (src.materials || CAZA_MANUAL_DEFAULT.materials).map((x) => ({ ...x, subs: [...(x.subs || [])] })), labor: { defaultRate: lab.defaultRate, crewRates: (lab.crewRates || []).map((c) => ({ ...c })) }, pricing: { marginStd: pr.marginStd, marginFloor: pr.marginFloor, jobMin: pr.jobMin, perTrade: (pr.perTrade || []).map((o) => ({ ...o })) }, vendors: { preferred: (ven.preferred || []).map((v) => ({ ...v })), brands: (ven.brands || []).map((b) => ({ ...b })) } }; };
+  const cmUpdate = (mut) => setProfC((p) => { const cur = (p.cazaManual && (Array.isArray(p.cazaManual.assemblies) || Array.isArray(p.cazaManual.materials))) ? p.cazaManual : CAZA_MANUAL_DEFAULT; const lab = cmLabOf(cur); const pr = cmPriceOf(cur); const ven = cmVenOf(cur); const base = { assemblies: (cur.assemblies || []).map((a) => ({ ...a, includes: [...(a.includes || [])], excludes: [...(a.excludes || [])] })), materials: (cur.materials || []).map((x) => ({ ...x, subs: [...(x.subs || [])] })), labor: { defaultRate: num(lab.defaultRate) || 50, crewRates: (lab.crewRates || []).map((c) => ({ ...c })) }, pricing: { marginStd: num(pr.marginStd) || 30, marginFloor: num(pr.marginFloor) || 0, jobMin: num(pr.jobMin) || 0, perTrade: (pr.perTrade || []).map((o) => ({ ...o })) }, vendors: { preferred: (ven.preferred || []).map((v) => ({ ...v })), brands: (ven.brands || []).map((b) => ({ ...b })) } }; mut(base); return { ...p, cazaManual: base }; });
   const cmAsmSet = (i, field, val) => cmUpdate((m) => { m.assemblies = m.assemblies.map((a, j) => j === i ? { ...a, [field]: val } : a); });
   const cmAsmAdd = () => cmUpdate((m) => { m.assemblies = [...m.assemblies, { id: "cm_a_" + rid(), match: "", includes: [], excludes: [], note: "" }]; });
   const cmAsmDel = (i) => cmUpdate((m) => { m.assemblies = m.assemblies.filter((_, j) => j !== i); });
@@ -3533,6 +3555,12 @@ function App() {
   const cmPtSet = (i, field, val) => cmUpdate((m) => { m.pricing.perTrade = m.pricing.perTrade.map((o, j) => j === i ? { ...o, [field]: (field === "margin" ? num(val) : val) } : o); });
   const cmPtAdd = () => cmUpdate((m) => { m.pricing.perTrade = [...m.pricing.perTrade, { id: "cm_p_" + rid(), trade: "", margin: num(m.pricing.marginStd) || 30 }]; });
   const cmPtDel = (i) => cmUpdate((m) => { m.pricing.perTrade = m.pricing.perTrade.filter((_, j) => j !== i); });
+  const cmVenSet = (i, field, val) => cmUpdate((m) => { m.vendors.preferred = m.vendors.preferred.map((v, j) => j === i ? { ...v, [field]: val } : v); });
+  const cmVenAdd = () => cmUpdate((m) => { m.vendors.preferred = [...m.vendors.preferred, { id: "cm_v_" + rid(), name: "", note: "" }]; });
+  const cmVenDel = (i) => cmUpdate((m) => { m.vendors.preferred = m.vendors.preferred.filter((_, j) => j !== i); });
+  const cmBrandSet = (i, field, val) => cmUpdate((m) => { m.vendors.brands = m.vendors.brands.map((b, j) => j === i ? { ...b, [field]: val } : b); });
+  const cmBrandAdd = () => cmUpdate((m) => { m.vendors.brands = [...m.vendors.brands, { id: "cm_b_" + rid(), name: "", note: "" }]; });
+  const cmBrandDel = (i) => cmUpdate((m) => { m.vendors.brands = m.vendors.brands.filter((_, j) => j !== i); });
   const cmList = (s) => String(s || "").split(";").map((x) => x.trim()).filter(Boolean);
   const cmCsv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
   const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => { if (k !== ti) return tr; const nt = { ...tr, [field]: val }; if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || ""); return nt; }) } : r);
@@ -5617,6 +5645,24 @@ function App() {
                 ))}
                 <button className="btn ghost full" style={{ marginTop: 6 }} onClick={cmPtAdd}><Plus size={14} /> Add per-trade margin</button>
                 <p className="hint" style={{ marginTop: 4 }}>Delivery / mobilization charge is set above (cost book); good/better/best tier pricing is automatic in the proposal.</p>
+                <div className="seclabel" style={{ marginTop: 12 }}>Preferred vendors <span className="hint">who you buy from</span></div>
+                {(man.vendors.preferred || []).map((v, i) => (
+                  <div key={v.id || i} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                    <input className="in" style={{ flex: 1 }} value={v.name} onChange={(e) => cmVenSet(i, "name", e.target.value)} placeholder="vendor (e.g. ABC Supply)" />
+                    <input className="in" style={{ flex: 1 }} value={v.note || ""} onChange={(e) => cmVenSet(i, "note", e.target.value)} placeholder="what they supply (optional)" />
+                    <button className="todel" onClick={() => cmVenDel(i)}><X size={14} /></button>
+                  </div>
+                ))}
+                <button className="btn ghost full" style={{ marginTop: 6 }} onClick={cmVenAdd}><Plus size={14} /> Add vendor</button>
+                <div className="seclabel" style={{ marginTop: 12 }}>Preferred brands <span className="hint">the preflight flags a non-preferred brand</span></div>
+                {(man.vendors.brands || []).map((b, i) => (
+                  <div key={b.id || i} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                    <input className="in" style={{ flex: 1 }} value={b.name} onChange={(e) => cmBrandSet(i, "name", e.target.value)} placeholder="brand (e.g. Owens Corning)" />
+                    <input className="in" style={{ flex: 1 }} value={b.note || ""} onChange={(e) => cmBrandSet(i, "note", e.target.value)} placeholder="for (optional, e.g. pipe flashing)" />
+                    <button className="todel" onClick={() => cmBrandDel(i)}><X size={14} /></button>
+                  </div>
+                ))}
+                <button className="btn ghost full" style={{ marginTop: 6 }} onClick={cmBrandAdd}><Plus size={14} /> Add brand</button>
               </div>
             ); })()}
             <label className="fld" style={{ marginTop: 8 }}><span>About your company</span>
@@ -6085,7 +6131,7 @@ function App() {
                             <div style={{ fontSize: 11.5, fontWeight: 700, color: "#8A5A12", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>⚑ Caza Manual — {t.cazaDeviations.length} flagged vs your standard</div>
                             {t.cazaDeviations.map((dv, di) => (
                               <div key={di} style={{ fontSize: 12.5, color: "#5a4a2a", lineHeight: 1.4, padding: "5px 0", borderTop: di ? "1px solid #f0e2c4" : "none" }}>
-                                <div><b>{dv.kind === "missing" ? "Missing: " : dv.kind === "extra" ? "Shouldn't be here: " : dv.kind === "labor" ? "Labor rate: " : "Off-spec: "}</b>{dv.found && dv.found !== "—" ? dv.found + " → " : ""}<b>{dv.kind === "labor" && dv.standard && !/\$|hr/.test(dv.standard) ? "$" + dv.standard + "/hr" : (dv.standard || dv.item)}</b></div>
+                                <div><b>{dv.kind === "missing" ? "Missing: " : dv.kind === "extra" ? "Shouldn't be here: " : dv.kind === "labor" ? "Labor rate: " : dv.kind === "vendor" ? "Non-preferred brand: " : "Off-spec: "}</b>{dv.found && dv.found !== "—" ? dv.found + " → " : ""}<b>{dv.kind === "labor" && dv.standard && !/\$|hr/.test(dv.standard) ? "$" + dv.standard + "/hr" : (dv.standard || dv.item)}</b></div>
                                 {dv.note && <div className="hint" style={{ marginTop: 1 }}>{dv.note}</div>}
                                 {dv.status ? (
                                   <div style={{ fontSize: 12, fontWeight: 700, color: dv.status === "accepted" ? "#1B7A3D" : "#8A5A12", marginTop: 3 }}>{dv.status === "accepted" ? "✓ Conformed to Caza standard" : "↪ Kept as-is (override)"}</div>
