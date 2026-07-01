@@ -3352,6 +3352,17 @@ const CAZA_MANUAL_DEFAULT = {
     subs: ["Vinyl fascia"],
     note: ""
   }],
+  // PART 4 — pricing: Caza's standard gross margin, the margin FLOOR (never bid below), and a job
+  // minimum. Per-trade margin overrides matched to the primary trade. Delivery/mobilization charge
+  // (base + miles) already lives in the cost book; tier pricing in proposalTiers. Applied client-side
+  // (the margin slider + sellOf); the pricing check flags below-floor margin / below-minimum price.
+  pricing: {
+    marginStd: 30,
+    marginFloor: 22,
+    jobMin: 0,
+    perTrade: []
+  },
+  // perTrade: [{id,trade,margin}]
   // PART 3 — labor: Caza's burdened crew rate ($/hr) by trade (matched first-hit, order specific→general).
   // Seeded to match the built-in rate floors so nothing changes until the contractor edits. Production
   // rates (MH/unit) already live in the editable rate book; the preflight flags labor off Caza's rate.
@@ -3402,6 +3413,30 @@ function cazaCrewRate(scope, desc, manual) {
     if (t && ctx.indexOf(t) >= 0 && num(cr.rate) > 0) return num(cr.rate);
   }
   return num(lab.defaultRate) || 0;
+}
+// PART 4 — Caza pricing rules. cazaPricing normalizes; the rest read the standard/floor/minimum.
+function cazaPricing(manual) {
+  const p = cazaManualOf(manual).pricing;
+  return p || CAZA_MANUAL_DEFAULT.pricing;
+}
+// Standard gross margin for the job — a per-trade override matched to the primary trade, else the std.
+function cazaMarginStd(trades, manual) {
+  const p = cazaPricing(manual);
+  const primary = trades && trades[0] || null;
+  if (primary && Array.isArray(p.perTrade)) {
+    const ctx = ((primary.label || "") + " " + (primary.title || "") + " " + (primary.tradeKey || "")).toLowerCase().replace(/[-–—]/g, " ");
+    for (const o of p.perTrade) {
+      const t = (o.trade || "").toLowerCase().trim();
+      if (t && ctx.indexOf(t) >= 0 && num(o.margin) > 0) return num(o.margin);
+    }
+  }
+  return num(p.marginStd) > 0 ? num(p.marginStd) : 30;
+}
+function cazaMarginFloor(manual) {
+  return num(cazaPricing(manual).marginFloor) || 0;
+}
+function cazaJobMin(manual) {
+  return num(cazaPricing(manual).jobMin) || 0;
 }
 // Use the contractor's edited manual if present, else the seeded default.
 function cazaManualOf(manual) {
@@ -7780,9 +7815,12 @@ function App() {
         errors: results.filter(r => r.error),
         multi: ok.length > 1
       });
+      // PART 4: apply Caza's standard gross margin for this job on a fresh build (contractor can still slide).
+      const stdMargin = cazaMarginStd(ok, profC.cazaManual);
+      setEstMargin(stdMargin);
       // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
       if (voiceRef.current) {
-        const price = sellOf(jobCostOf(ok), estMargin);
+        const price = sellOf(jobCostOf(ok), stdMargin);
         const nDev = ok.reduce((a, t) => a + (t.cazaDeviations || []).length, 0);
         speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars." + (nDev > 0 ? " Heads up — I flagged " + nDev + " thing" + (nDev === 1 ? "" : "s") + " that differ from your Caza standard. Take a look." : ""));
       }
@@ -7967,10 +8005,12 @@ function App() {
   } : r);
   // CAZA MANUAL editor (Profile) — edits profC.cazaManual; seeds an editable copy from the default on first touch.
   const cmLabOf = src => src && src.labor && (Array.isArray(src.labor.crewRates) || src.labor.defaultRate != null) ? src.labor : CAZA_MANUAL_DEFAULT.labor;
+  const cmPriceOf = src => src && src.pricing && (src.pricing.marginStd != null || Array.isArray(src.pricing.perTrade)) ? src.pricing : CAZA_MANUAL_DEFAULT.pricing;
   const cmManual = () => {
     const m = profC.cazaManual;
     const src = m && (Array.isArray(m.assemblies) || Array.isArray(m.materials)) ? m : CAZA_MANUAL_DEFAULT;
     const lab = cmLabOf(src);
+    const pr = cmPriceOf(src);
     return {
       assemblies: (src.assemblies || CAZA_MANUAL_DEFAULT.assemblies).map(a => ({
         ...a,
@@ -7986,12 +8026,21 @@ function App() {
         crewRates: (lab.crewRates || []).map(c => ({
           ...c
         }))
+      },
+      pricing: {
+        marginStd: pr.marginStd,
+        marginFloor: pr.marginFloor,
+        jobMin: pr.jobMin,
+        perTrade: (pr.perTrade || []).map(o => ({
+          ...o
+        }))
       }
     };
   };
   const cmUpdate = mut => setProfC(p => {
     const cur = p.cazaManual && (Array.isArray(p.cazaManual.assemblies) || Array.isArray(p.cazaManual.materials)) ? p.cazaManual : CAZA_MANUAL_DEFAULT;
     const lab = cmLabOf(cur);
+    const pr = cmPriceOf(cur);
     const base = {
       assemblies: (cur.assemblies || []).map(a => ({
         ...a,
@@ -8006,6 +8055,14 @@ function App() {
         defaultRate: num(lab.defaultRate) || 50,
         crewRates: (lab.crewRates || []).map(c => ({
           ...c
+        }))
+      },
+      pricing: {
+        marginStd: num(pr.marginStd) || 30,
+        marginFloor: num(pr.marginFloor) || 0,
+        jobMin: num(pr.jobMin) || 0,
+        perTrade: (pr.perTrade || []).map(o => ({
+          ...o
         }))
       }
     };
@@ -8069,6 +8126,25 @@ function App() {
   });
   const cmCrewDel = i => cmUpdate(m => {
     m.labor.crewRates = m.labor.crewRates.filter((_, j) => j !== i);
+  });
+  const cmPriceSet = (field, val) => cmUpdate(m => {
+    m.pricing[field] = num(val);
+  });
+  const cmPtSet = (i, field, val) => cmUpdate(m => {
+    m.pricing.perTrade = m.pricing.perTrade.map((o, j) => j === i ? {
+      ...o,
+      [field]: field === "margin" ? num(val) : val
+    } : o);
+  });
+  const cmPtAdd = () => cmUpdate(m => {
+    m.pricing.perTrade = [...m.pricing.perTrade, {
+      id: "cm_p_" + rid(),
+      trade: "",
+      margin: num(m.pricing.marginStd) || 30
+    }];
+  });
+  const cmPtDel = i => cmUpdate(m => {
+    m.pricing.perTrade = m.pricing.perTrade.filter((_, j) => j !== i);
   });
   const cmList = s => String(s || "").split(";").map(x => x.trim()).filter(Boolean);
   const cmCsv = s => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
@@ -11678,7 +11754,97 @@ function App() {
       style: {
         marginTop: 4
       }
-    }, "First matching trade wins (order specific → general). Production rates (man-hours/unit) live in your price/rate book and are already used; the calibration loop sharpens them from logged actuals."));
+    }, "First matching trade wins (order specific → general). Production rates (man-hours/unit) live in your price/rate book and are already used; the calibration loop sharpens them from logged actuals."), /*#__PURE__*/React.createElement("div", {
+      className: "seclabel",
+      style: {
+        marginTop: 12
+      }
+    }, "Pricing rules ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "standard margin applies on build; the estimate flags below-floor / below-min")), /*#__PURE__*/React.createElement("div", {
+      className: "estfields"
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Standard gross margin %"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "90",
+      value: man.pricing.marginStd,
+      onChange: e => cmPriceSet("marginStd", e.target.value),
+      placeholder: "30"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Margin floor % ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "never below")), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      max: "90",
+      value: man.pricing.marginFloor,
+      onChange: e => cmPriceSet("marginFloor", e.target.value),
+      placeholder: "22"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Job minimum $ ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "0 = none")), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      min: "0",
+      value: man.pricing.jobMin,
+      onChange: e => cmPriceSet("jobMin", e.target.value),
+      placeholder: "0"
+    }))), /*#__PURE__*/React.createElement("div", {
+      className: "seclabel",
+      style: {
+        marginTop: 8
+      }
+    }, "Per-trade margin overrides ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "optional — matched to the primary trade")), (man.pricing.perTrade || []).map((o, i) => /*#__PURE__*/React.createElement("div", {
+      key: o.id || i,
+      style: {
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "in",
+      style: {
+        flex: 1
+      },
+      value: o.trade,
+      onChange: e => cmPtSet(i, "trade", e.target.value),
+      placeholder: "trade match (e.g. standing seam, siding)"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "todollar",
+      title: "gross margin %"
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "tocost",
+      type: "number",
+      min: "0",
+      max: "90",
+      value: o.margin,
+      onChange: e => cmPtSet(i, "margin", e.target.value)
+    }), "%"), /*#__PURE__*/React.createElement("button", {
+      className: "todel",
+      onClick: () => cmPtDel(i)
+    }, /*#__PURE__*/React.createElement(X, {
+      size: 14
+    })))), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      style: {
+        marginTop: 6
+      },
+      onClick: cmPtAdd
+    }, /*#__PURE__*/React.createElement(Plus, {
+      size: 14
+    }), " Add per-trade margin"), /*#__PURE__*/React.createElement("p", {
+      className: "hint",
+      style: {
+        marginTop: 4
+      }
+    }, "Delivery / mobilization charge is set above (cost book); good/better/best tier pricing is automatic in the proposal."));
   })(), /*#__PURE__*/React.createElement("label", {
     className: "fld",
     style: {
@@ -13227,7 +13393,43 @@ function App() {
       className: "hint"
     }, "profit ", $0(profit)), /*#__PURE__*/React.createElement("span", null, "50%")), /*#__PURE__*/React.createElement("div", {
       className: "sellprice"
-    }, /*#__PURE__*/React.createElement("span", null, "Your price"), /*#__PURE__*/React.createElement("b", null, $0(sell))))));
+    }, /*#__PURE__*/React.createElement("span", null, "Your price"), /*#__PURE__*/React.createElement("b", null, $0(sell))), (() => {
+      const floor = cazaMarginFloor(profC.cazaManual),
+        jobMin = cazaJobMin(profC.cazaManual),
+        std = cazaMarginStd(trades, profC.cazaManual);
+      const belowFloor = floor > 0 && estMargin < floor,
+        belowMin = jobMin > 0 && sell < jobMin;
+      if (!belowFloor && !belowMin) return /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 6,
+          fontSize: 12,
+          color: "#1B7A3D",
+          fontWeight: 600
+        }
+      }, "✓ Within your Caza pricing rules — ", std, "% standard", floor ? ", " + floor + "% floor" : "", jobMin ? ", " + $0(jobMin) + " min" : "");
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 8,
+          padding: "8px 11px",
+          background: "#FFF7E6",
+          border: "1px solid #F2C98A",
+          borderRadius: 10,
+          fontSize: 12.5,
+          color: "#8A5A12"
+        }
+      }, belowFloor && /*#__PURE__*/React.createElement("div", null, "⚑ Margin ", estMargin, "% is below your Caza floor of ", floor, "%. ", /*#__PURE__*/React.createElement("button", {
+        className: "linkbtn",
+        style: {
+          color: "#8A5A12",
+          fontWeight: 700
+        },
+        onClick: () => setEstMargin(std)
+      }, "Use ", std, "% standard")), belowMin && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: belowFloor ? 4 : 0
+        }
+      }, "⚑ Price ", $0(sell), " is below your Caza job minimum of ", $0(jobMin), "."));
+    })())));
   })(), whSpecs && /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
