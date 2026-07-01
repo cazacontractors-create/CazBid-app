@@ -1084,6 +1084,27 @@ function cazaMarginStd(trades, manual) {
 }
 function cazaMarginFloor(manual) { return num(cazaPricing(manual).marginFloor) || 0; }
 function cazaJobMin(manual) { return num(cazaPricing(manual).jobMin) || 0; }
+// SCOPE INTEGRITY (Leak B) — material FAMILY of a system/product string. Good/better/best tiers
+// must stay in the job's specified family (cedar/wood → wood options, never vinyl). "" = unknown
+// (don't false-flag a generic brand). Only CLEAR cross-family keywords are flagged off-family.
+function materialFamily(s) {
+  const t = (s || "").toLowerCase();
+  if (/standing.?seam|metal panel|steel panel|ag panel|snap.?lock|metal roof|kynar|\bpvdf\b/.test(t)) return "metal";
+  if (/\btpo\b|\bepdm\b|\bpvc\b membrane|single.?ply|membrane|\bbur\b|modified bitumen|flat roof/.test(t)) return "membrane";
+  if (/\bslate\b/.test(t)) return "slate";
+  if (/\btile\b|clay tile|concrete tile/.test(t)) return "tile";
+  if (/asphalt|architectural|3-?tab|laminate shingle|\bshingle\b/.test(t) && !/cedar|wood shake/.test(t)) return "shingle";
+  if (/cedar|\bwood\b|clapboard|\bbevel\b|lp smartside|smartside|redwood|cypress|shake/.test(t)) return "wood";
+  if (/fiber.?cement|hardie|hardi\b/.test(t)) return "fibercement";
+  if (/\bvinyl\b/.test(t)) return "vinyl";
+  return "";
+}
+// A tier option is off-family when its material family is KNOWN and DIFFERENT from the job's family.
+function tierOffFamily(jobFamily, optName) {
+  if (!jobFamily) return false;
+  const of = materialFamily(optName);
+  return of !== "" && of !== jobFamily;
+}
 // Use the contractor's edited manual if present, else the seeded default.
 function cazaManualOf(manual) { return (manual && (Array.isArray(manual.assemblies) || Array.isArray(manual.materials))) ? manual : CAZA_MANUAL_DEFAULT; }
 // Pick the assemblies whose job-type matches this scope; materials always travel (small list).
@@ -1946,6 +1967,7 @@ function App() {
   const [enginePB, setEnginePB] = useState([]); // [{id,trade,category,material,unit,unitCost,source}] — feeds the deterministic price waterfall
   const [whPbOpen, setWhPbOpen] = useState(false);
   const [whDims, setWhDims] = useState("");        // extracted measurements for the house flow
+  const [whScopeLines, setWhScopeLines] = useState({}); // SCOPE PARTITION: per-trade slice from AL (each item owned by one block)
   const [whReportBusy, setWhReportBusy] = useState(false);
   const [whPhotos, setWhPhotos] = useState([]);    // jobsite photos (Photo button)
   const [whMeasuredOpen, setWhMeasuredOpen] = useState(false); // "Measured" get-measured links
@@ -2913,9 +2935,10 @@ function App() {
     "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " +
     "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " +
     "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " +
+    "SCOPE PARTITION (critical — each physical item belongs to EXACTLY ONE trade, never counted in two): when one physical item could touch several trades, assign it to ONE owning trade and do NOT also list it under others. The cedar boards on a cedar-siding job belong to Siding ONLY — not also Trim or Paint. A PVC drain line belongs to Plumbing ONLY — not also Trim. A gutter splash-guard / drainage piece with no dedicated trade → assign it to ONE block, don't scatter it. Do NOT stand up a finish/paint trade unless the contractor EXPLICITLY asked to paint or finish — never invent a phantom 'repaint'. For each trade you put in `select`, also set `scope` to a short line describing ONLY that trade's slice of the work (e.g. Siding scope: 'cedar bevel siding + cedar starter, 120 SF') so each block bids only what it owns, exactly once. " +
     "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
-    "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\"}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\", \"scope\": one-line description of THIS trade's slice of the work only (else \"\")}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
   };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
@@ -3139,6 +3162,7 @@ function App() {
           let type = (s && s.type && String(s.type).trim()) ? String(s.type).trim() : true;
           if (type !== true && HOUSE_TYPES[key]) { const opt = HOUSE_TYPES[key].find((o) => { const lo = o.toLowerCase(), lt = String(type).toLowerCase(); return lo === lt || lo.indexOf(lt) >= 0 || lt.indexOf(lo.split(" ")[0]) >= 0; }); if (opt) type = opt; }
           houseSelect(key, type); setActiveTrade(key);
+          if (s && s.scope && String(s.scope).trim()) setWhScopeLines((prev) => ({ ...prev, [key]: String(s.scope).trim().slice(0, 200) })); // this block's slice — feeds the build so it bids only what it owns
           if (h) setHouseView(h.state);
         });
         setSelStep("ready");
@@ -3240,9 +3264,9 @@ function App() {
   // Opus pre-flight + labor + calibration). Pure-ish: takes the scope/desc/dims/
   // photos as params and RETURNS the trade object (no setState) so the unified
   // flow can build one OR many trades into a single combined estimate.
-  const buildOneTrade = async ({ scope, desc, dims, photos, panelW, aiTrade, tierPref }) => {
+  const buildOneTrade = async ({ scope, desc, dims, photos, panelW, aiTrade, tierPref, excludeList }) => {
     {
-      scope = scope || ""; desc = desc || ""; dims = dims || ""; photos = photos || []; panelW = panelW || 0; aiTrade = aiTrade || null;
+      scope = scope || ""; desc = desc || ""; dims = dims || ""; photos = photos || []; panelW = panelW || 0; aiTrade = aiTrade || null; excludeList = excludeList || "";
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
       // The relevant Caza trade manual loads SERVER-SIDE (the Netlify function injects it as a
       // system prompt based on this trade key) — no browser fetch, no CORS, all 12 manuals available.
@@ -3256,6 +3280,7 @@ function App() {
         "JOB: " + (desc.trim() || "(see photos)") + "\n" +
         (dims ? dims + "\n" : "") +
         (scope ? "WORK TYPE: " + scope + "\n" : "") +
+        (excludeList ? "SCOPE BOUNDARY — OTHER trades on this job already own the following; do NOT include, re-bid, or price ANY of these here (each is billed by its own block, so counting it again double-bills the customer): " + excludeList + ". Bid ONLY this trade's own materials and labor.\n" : "") +
         (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") +
         EV_FORMULAS +
         "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" +
@@ -3274,10 +3299,11 @@ function App() {
         "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map((m) => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" +
         "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
         "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" +
+        "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" +
         ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
         cazaManualBlock(scope, desc, profC.cazaManual) +
         (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") +
-        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": [].\n" +
+        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" +
         "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
         ...photos.slice(0, 3).map((ph) => {
@@ -3369,9 +3395,12 @@ function App() {
           }
         }
       }
+      // FAMILY-LOCK backstop (Leak B): mark any tier whose material family clearly differs from the
+      // job's specified primary (e.g. vinyl on a cedar job) — flagged in the UI, never silently dropped.
+      const __jobFamily = materialFamily(scope + " " + desc);
       let primaryOptions = Array.isArray(d.primaryOptions) ? d.primaryOptions.slice(0, 3).map((o) => ({
         tier: String(o.tier || ""), name: String(o.name || ""), why: String(o.why || ""),
-        cost: Math.round(num(o.cost) || 0), url: String(o.url || ""),
+        cost: Math.round(num(o.cost) || 0), url: String(o.url || ""), offFamily: tierOffFamily(__jobFamily, String(o.name || "")),
       })).filter((o) => o.name) : [];
       // Flat commercial: replace the LLM options with the 3 engine assemblies (each carries its
       // full assembly so picking a tier or pricing the proposal swaps membrane+insulation+labor).
@@ -3461,11 +3490,14 @@ function App() {
         const dimBits = [];
         if (spec && whInputs[pbk]) spec.inputs.forEach((inp) => { const v = whInputs[pbk][inp.name]; if (v != null && v !== "" && !(typeof v === "number" && v === 0)) dimBits.push(inp.label + ": " + v + (inp.unit ? " " + inp.unit : "")); });
         const dims = [whDims, dimBits.join("; ")].filter(Boolean).join(" · ");
-        const desc = scope + (type ? " (" + type + ")" : "");
+        // Part 2: feed this block ITS slice (from AL's partition) so it bids only what it owns; fall back to label+type.
+        const desc = whScopeLines[t] ? whScopeLines[t] : (scope + (type ? " (" + type + ")" : ""));
+        // Part 3: tell this block what the OTHER selected blocks own, so it doesn't re-bid shared pieces.
+        const excludeList = sel.filter((x) => x !== t).map((x) => { const xl = (HOUSE_HOTSPOTS.find((h) => h.trade === x) || {}).label || x; const xt = (houseScope[x] && houseScope[x] !== true) ? String(houseScope[x]) : ""; return xl + (xt ? " (" + xt + ")" : "") + (whScopeLines[x] ? ": " + whScopeLines[x] : ""); }).filter(Boolean).join("; ");
         const aiT = aiTrades.find((x) => x.trade.toLowerCase() === String(label).toLowerCase() || x.trade.toLowerCase() === String(t).toLowerCase()) || null;
         try {
           const __cat = tierPrefCategory(t, scope + " " + desc);
-          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (__cat && profC.tierPrefs && profC.tierPrefs[__cat]) || null });
+          const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (__cat && profC.tierPrefs && profC.tierPrefs[__cat]) || null, excludeList: excludeList });
           r.phaseSys = scope + " " + desc; // remember the system so phases stay type-specific on edit/reopen
           r.phases = allocatePhases(t, r.laborHours, r.phaseSys); // per-phase BID hours, keyed to the material/system
           results.push(Object.assign({ tradeKey: t, label: label }, r));
@@ -3750,7 +3782,7 @@ function App() {
   // Build the full reopenable payload from current state.
   const currentEstPayload = () => ({
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
-    estMargin: estMargin, estMiles: estMiles, estMobOn: estMobOn, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whPhotos: whPhotos, houseView: houseView,
+    estMargin: estMargin, estMiles: estMiles, estMobOn: estMobOn, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whScopeLines: whScopeLines, whPhotos: whPhotos, houseView: houseView,
     colors: (estResult && estResult.colors) || {}, proposalTier: (estResult && estResult.proposalTier) || "",
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
@@ -3774,7 +3806,7 @@ function App() {
     const p = rec.payload;
     setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30); setEstMiles(num(p.estMiles) || 0); setEstMobOn(p.estMobOn === true); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
-    setWhDims(p.whDims || ""); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
+    setWhDims(p.whDims || ""); setWhScopeLines(p.whScopeLines || {}); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
     setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "" });
   };
@@ -3796,7 +3828,7 @@ function App() {
     await persistCurrent();
     setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
     setEstMiles(0); setEstMobOn(true);
-    setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
+    setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhScopeLines({}); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
   const addDimRow = (label, unit) => setEstDimRows((d) => [...d, { id: rid(), label: label || "", value: "", unit: unit || "" }]);
@@ -6198,9 +6230,10 @@ function App() {
                             <div className="seclabel">Popular local options <span className="hint">good · better · best — tap to use</span></div>
                             <div className="tiergrid">
                               {t.primaryOptions.map((o, i) => (
-                                <div className={"tiercard" + (t.chosenTier === o.tier ? " on" : "")} key={i}>
+                                <div className={"tiercard" + (t.chosenTier === o.tier ? " on" : "")} key={i} style={o.offFamily ? { borderColor: "#F2C98A", background: "#FFF7E6" } : undefined}>
                                   <div className="tiertop"><span className="tierbadge">{o.tier}</span><span className="tiercost">{$0(o.cost)}</span></div>
                                   <div className="tiername">{o.name}</div>
+                                  {o.offFamily && <div style={{ fontSize: 11.5, color: "#8A5A12", fontWeight: 700, marginTop: 2 }}>⚠️ Off-family — not the job's material. Verify before offering.</div>}
                                   {o.why && <div className="tierwhy">{o.why}</div>}
                                   <div className="tieract">
                                     <button className={"btn " + (t.chosenTier === o.tier ? "primary" : "ghost") + " grow1"} onClick={() => estPickTier(ti, o)}>{t.chosenTier === o.tier ? "✓ Using" : "Use this"}</button>
