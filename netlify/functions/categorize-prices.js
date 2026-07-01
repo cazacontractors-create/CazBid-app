@@ -7,7 +7,8 @@
 // confidence rows in the mandatory review step (2c). Forced tool use = clean
 // structured output. Regular (fast) function — caller should chunk big imports.
 
-const TRADES = ["framing", "drywall", "insulation", "trim", "siding", "concrete", "electrical", "plumbing", "hvac", "other"];
+// Keep in sync with PRICE_BOOK_TRADES in app.src.jsx. Roofing is the flagship — it MUST be here.
+const TRADES = ["roofing", "siding", "framing", "trim", "drywall", "insulation", "concrete", "decks", "flooring", "interior", "cabinetry", "electrical", "plumbing", "hvac", "other"];
 
 const HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -42,10 +43,16 @@ const TOOL = {
 
 const SYSTEM =
   "You classify residential construction MATERIALS into the trade that buys/installs them and a short product category. " +
-  "Trades and what they cover: framing (dimensional lumber, studs, plates, sheathing/OSB, trusses, joists, framing fasteners, house wrap), " +
+  "Trades and what they cover: roofing (asphalt/architectural shingles, standing-seam & metal roof panels + clips/cleats/panel fasteners, drip edge, rake/eave metal, ice & water shield, synthetic/felt underlayment, ridge cap & hip/ridge, ridge/soffit vent, valley metal, step/pipe flashing, pipe boots, TPO/EPDM/PVC membrane, polyiso, coverboard, starter), " +
+  "framing (dimensional lumber, studs, plates, sheathing/OSB, trusses, joists, framing fasteners, house wrap), " +
   "drywall (gypsum board, joint compound/mud, tape, drywall screws, corner bead), insulation (batts, blown-in, rigid board, rim insulation), " +
-  "trim (baseboard, casing, interior doors, crown, door hardware), siding (lap/vinyl/fiber-cement field, starter, J-channel, corner posts, soffit, fascia), " +
-  "concrete (ready-mix, rebar, wire mesh, vapor barrier, forms, anchor bolts, gravel base), electrical (Romex/wire, devices/receptacles/switches, light fixtures, breakers, panel), " +
+  "trim (baseboard, casing, interior doors, crown, door hardware), siding (lap/vinyl/fiber-cement/cedar field, starter, J-channel, corner posts, soffit, fascia), " +
+  "concrete (ready-mix, rebar, wire mesh, vapor barrier, forms, anchor bolts, gravel base), " +
+  "decks (PT/composite/cedar decking boards, joist hangers, deck screws/hidden fasteners, railing, posts, ledger, flashing tape), " +
+  "flooring (LVP/laminate/hardwood/tile flooring, underlayment, thinset, grout, transitions, trowel), " +
+  "interior (primer, paint, stain, caulk, patch/spackle, rollers/brushes — interior/exterior painting & finish), " +
+  "cabinetry (cabinets, countertops, cabinet hardware/pulls, fillers, toe kick), " +
+  "electrical (Romex/wire, devices/receptacles/switches, light fixtures, breakers, panel), " +
   "plumbing (toilets/sinks/tubs fixtures, PEX supply, DWV pipe, water heater), hvac (furnace/AC/heat-pump equipment, ductwork, registers, thermostat, lineset). " +
   "Return EXACTLY one row per input material, each with its 0-based index. Set confidence below 0.6 when the material name is ambiguous or could belong to multiple trades.";
 
