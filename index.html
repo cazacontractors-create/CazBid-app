@@ -4405,6 +4405,57 @@ const PB_TRADE_KEY = {
   electrical: "electrical",
   plumbing: "plumbing"
 };
+// PRICE-BOOK categories (Material Pricing Hub, Part 1) — DECOUPLED from the deterministic-engine
+// trade list (whSpecs / PB_TRADE_KEY). Roofing is the flagship trade and MUST be here even though
+// it has no deterministic spec; committed roofing prices flow into the by-name books concat that
+// priceRoofTakeoff prices from. Adds the other missing trades too. This is the importer dropdown +
+// the categorizer target list — keep in sync with categorize-prices.js TRADES.
+const PRICE_BOOK_TRADES = [{
+  trade: "roofing",
+  label: "Roofing"
+}, {
+  trade: "siding",
+  label: "Siding"
+}, {
+  trade: "framing",
+  label: "Framing"
+}, {
+  trade: "trim",
+  label: "Trim / millwork"
+}, {
+  trade: "drywall",
+  label: "Drywall"
+}, {
+  trade: "insulation",
+  label: "Insulation"
+}, {
+  trade: "concrete",
+  label: "Concrete / masonry"
+}, {
+  trade: "decks",
+  label: "Decking"
+}, {
+  trade: "flooring",
+  label: "Flooring"
+}, {
+  trade: "interior",
+  label: "Interior / paint"
+}, {
+  trade: "cabinetry",
+  label: "Cabinetry"
+}, {
+  trade: "electrical",
+  label: "Electrical"
+}, {
+  trade: "plumbing",
+  label: "Plumbing"
+}, {
+  trade: "hvac",
+  label: "HVAC"
+}, {
+  trade: "other",
+  label: "Other"
+}];
 // PER-PHASE LABOR (time-audit Part 1). Each trade's bid hours allocate across ~4–6 phase
 // buckets by typical proportion (rough now; the calibration loop refines splits later).
 // names + split arrays are index-aligned; splits ~sum to 1.
@@ -5340,7 +5391,7 @@ function App() {
   };
   const pbAdd = () => saveEnginePB([...enginePB, {
     id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-    trade: whSpecs && whSpecs[0] && whSpecs[0].trade || "framing",
+    trade: PRICE_BOOK_TRADES[0].trade,
     category: "",
     material: "",
     unit: "",
@@ -13913,7 +13964,7 @@ function App() {
   }, /*#__PURE__*/React.createElement("span", null, "Trade"), /*#__PURE__*/React.createElement("select", {
     value: e.trade,
     onChange: ev => pbSet(e.id, "trade", ev.target.value)
-  }, whSpecs.map(t => /*#__PURE__*/React.createElement("option", {
+  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
     key: t.trade,
     value: t.trade
   }, t.label)))), /*#__PURE__*/React.createElement("label", {
@@ -14059,7 +14110,7 @@ function App() {
   }, /*#__PURE__*/React.createElement("span", null, "Trade ", r.confidence < 0.6 ? "⚠️" : ""), /*#__PURE__*/React.createElement("select", {
     value: r.trade,
     onChange: e => csvReviewSet(i, "trade", e.target.value)
-  }, (whSpecs || []).map(t => /*#__PURE__*/React.createElement("option", {
+  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
     key: t.trade,
     value: t.trade
   }, t.label)), /*#__PURE__*/React.createElement("option", {

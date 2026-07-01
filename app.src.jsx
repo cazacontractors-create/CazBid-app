@@ -1594,6 +1594,28 @@ const HOUSE_HOTSPOTS = [
 // Map a house trade to a price-book trade key (only the 9 deterministic engine
 // trades have one — others fall back to suggested materials).
 const PB_TRADE_KEY = { framing: "framing", siding: "siding", concrete: "concrete", drywall: "drywall", trim: "trim", insulation: "insulation", hvac: "hvac", electrical: "electrical", plumbing: "plumbing" };
+// PRICE-BOOK categories (Material Pricing Hub, Part 1) — DECOUPLED from the deterministic-engine
+// trade list (whSpecs / PB_TRADE_KEY). Roofing is the flagship trade and MUST be here even though
+// it has no deterministic spec; committed roofing prices flow into the by-name books concat that
+// priceRoofTakeoff prices from. Adds the other missing trades too. This is the importer dropdown +
+// the categorizer target list — keep in sync with categorize-prices.js TRADES.
+const PRICE_BOOK_TRADES = [
+  { trade: "roofing", label: "Roofing" },
+  { trade: "siding", label: "Siding" },
+  { trade: "framing", label: "Framing" },
+  { trade: "trim", label: "Trim / millwork" },
+  { trade: "drywall", label: "Drywall" },
+  { trade: "insulation", label: "Insulation" },
+  { trade: "concrete", label: "Concrete / masonry" },
+  { trade: "decks", label: "Decking" },
+  { trade: "flooring", label: "Flooring" },
+  { trade: "interior", label: "Interior / paint" },
+  { trade: "cabinetry", label: "Cabinetry" },
+  { trade: "electrical", label: "Electrical" },
+  { trade: "plumbing", label: "Plumbing" },
+  { trade: "hvac", label: "HVAC" },
+  { trade: "other", label: "Other" },
+];
 // PER-PHASE LABOR (time-audit Part 1). Each trade's bid hours allocate across ~4–6 phase
 // buckets by typical proportion (rough now; the calibration loop refines splits later).
 // names + split arrays are index-aligned; splits ~sum to 1.
@@ -2073,7 +2095,7 @@ function App() {
   };
   // ---- engine price book (manual entry) ----
   const saveEnginePB = (next) => { setEnginePB(next); pSet(ENGINE_PB_KEY, next); };
-  const pbAdd = () => saveEnginePB([...enginePB, { id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), trade: (whSpecs && whSpecs[0] && whSpecs[0].trade) || "framing", category: "", material: "", unit: "", unitCost: 0, source: { method: "manual", date: new Date().toISOString().slice(0, 10) } }]);
+  const pbAdd = () => saveEnginePB([...enginePB, { id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), trade: PRICE_BOOK_TRADES[0].trade, category: "", material: "", unit: "", unitCost: 0, source: { method: "manual", date: new Date().toISOString().slice(0, 10) } }]);
   const pbSet = (id, field, val) => saveEnginePB(enginePB.map((e) => (e.id === id ? { ...e, [field]: val } : e)));
   const pbDel = (id) => saveEnginePB(enginePB.filter((e) => e.id !== id));
   // Convert the manual price book to the engine's expected shape (valid rows only).
@@ -6389,7 +6411,7 @@ function App() {
                   <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
                   <label className="estf"><span>Trade</span>
                     <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
-                      {whSpecs.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                      {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
                     </select>
                   </label>
                   <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
@@ -6441,7 +6463,7 @@ function App() {
                         <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
                         <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
                           <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
-                            {(whSpecs || []).map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                            {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
                             <option value="other">other (skip)</option>
                           </select>
                         </label>
