@@ -1008,6 +1008,47 @@ function stripCrossSystem(items, sysStr) {
   return items.filter((it) => !banned.test(String(it && it.name || "")));
 }
 
+// ===== THE CAZA MANUAL (Parts 1+2: standard assemblies + material specs) =====
+// The company's standards the Opus PREFLIGHT verifies each reasoned estimate against. The
+// CONVERSATION stays unconstrained — the manual is checked at the build/commit gate, and
+// deviations are FLAGGED (never silently forced or hard-blocked). Seeded with sensible
+// defaults; every entry is editable in Profile, and adding a standard is a data entry, not
+// a code change. Part 1 = assemblies (what a Caza job includes); Part 2 = material specs/subs.
+const CAZA_MANUAL_DEFAULT = {
+  assemblies: [
+    { id: "cm_a_shingle", match: "shingle|asphalt|architectural", includes: ["Tear-off + haul-away", "Ice & water shield (eaves + valleys)", "Synthetic underlayment", "Owens Corning Duration shingles", "Starter strip", "Hip & ridge cap", "Ridge / intake ventilation", "Step + pipe flashing", "Drip edge", "Cleanup / magnetic sweep"], excludes: [], note: "Owens Corning Total Protection system." },
+    { id: "cm_a_cedar", match: "cedar", includes: ["Cedar field siding", "Cedar fascia / rake", "Metal J-channel", "Cedar starter course", "Building paper / WRB", "Stainless / hot-dipped fasteners"], excludes: ["vinyl j-channel", "vinyl fascia"], note: "Cedar takes metal trim, never vinyl." },
+    { id: "cm_a_vinylsoffit", match: "soffit", includes: ["Vinyl soffit", "Aluminum or vinyl fascia (per standard)", "Drip edge"], excludes: ["wall opening", "window opening"], note: "Soffit is eave trim — no wall-opening lines." },
+    { id: "cm_a_standingseam", match: "standing.?seam|snap.?lock|metal panel|metal roof", includes: ["Standing-seam panels", "Metal valley / eave / rake trim", "Metal step + chimney flashing", "High-temp underlayment", "Concealed clips"], excludes: ["asphalt flashing", "rubber gutter"], note: "All-metal system." },
+    { id: "cm_a_tpo", match: "\\btpo\\b|flat roof|membrane", includes: ["TPO membrane", "Polyiso insulation (fully adhered)", "TPO-compatible flashing", "TPO fasteners / plates", "Edge metal / coping"], excludes: ["EPDM fasteners", "BUR flashing"], note: "TPO single-ply assembly." },
+  ],
+  materials: [
+    { id: "cm_m_shingle", role: "Shingle", standard: "Owens Corning Duration", subs: ["GAF Timberline HDZ", "CertainTeed Landmark"], note: "OC Total Protection system." },
+    { id: "cm_m_underlay", role: "Underlayment", standard: "Synthetic underlayment + ice & water at eaves/valleys", subs: [], note: "" },
+    { id: "cm_m_pipeflash", role: "Pipe flashing", standard: "Lifetime Tool pipe flashing", subs: [], note: "" },
+    { id: "cm_m_cedartrim", role: "Cedar siding trim / J-channel", standard: "Metal J-channel (copper / bronze / aluminum)", subs: [], note: "No vinyl trim on cedar." },
+    { id: "cm_m_soffitfascia", role: "Fascia (vinyl soffit job)", standard: "Aluminum fascia", subs: ["Vinyl fascia"], note: "" },
+  ],
+};
+// Use the contractor's edited manual if present, else the seeded default.
+function cazaManualOf(manual) { return (manual && (Array.isArray(manual.assemblies) || Array.isArray(manual.materials))) ? manual : CAZA_MANUAL_DEFAULT; }
+// Pick the assemblies whose job-type matches this scope; materials always travel (small list).
+function cazaManualFor(scope, desc, manual) {
+  const m = cazaManualOf(manual);
+  const ctx = ((scope || "") + " " + (desc || "")).toLowerCase();
+  const asm = (m.assemblies || []).filter((a) => { try { return new RegExp(a.match || "", "i").test(ctx); } catch (e) { return ctx.indexOf(String(a.match || "").toLowerCase()) >= 0; } });
+  return { assemblies: asm, materials: m.materials || [] };
+}
+// Format the matched manual for the Opus preflight prompt.
+function cazaManualBlock(scope, desc, manual) {
+  const sel = cazaManualFor(scope, desc, manual);
+  if (!sel.assemblies.length && !sel.materials.length) return "";
+  let s = "THE CAZA MANUAL — verify this estimate against THIS company's standards. FLAG every deviation in \"deviations\" below; do NOT silently change or remove anything.\n";
+  if (sel.assemblies.length) s += "CAZA STANDARD ASSEMBLY for this job type (what a Caza job includes end-to-end):\n" + sel.assemblies.map((a) => "- includes [" + (a.includes || []).join("; ") + "]" + ((a.excludes && a.excludes.length) ? "; NEVER [" + a.excludes.join("; ") + "]" : "") + (a.note ? " — " + a.note : "")).join("\n") + "\n";
+  if (sel.materials.length) s += "CAZA STANDARD MATERIALS (role → Caza standard; acceptable subs in parens):\n" + sel.materials.map((mm) => "- " + mm.role + " → " + mm.standard + ((mm.subs && mm.subs.length) ? " (subs ok: " + mm.subs.join(", ") + ")" : "") + (mm.note ? " — " + mm.note : "")).join("\n") + "\n";
+  return s;
+}
+
 // CALIBRATION (Feature B): turn logged job actuals into a per-trade labor factor.
 // Damped so one job can't swing estimates — a single job applies 1/3 of the
 // correction, 3+ jobs the full average (actual ÷ estimated) ratio.
@@ -1716,7 +1757,7 @@ function HouseVisual({ view, selected, activeTrade, onChipTap, onChipRemove, onA
 function App() {
   const [me, setMe] = useState({ uidH: "", uidC: "", role: "", plan: "", passed: [], mine: [], cele: null, readMsgs: {}, seenAt: 0 });
   const [profH, setProfH] = useState({ name: "", contact: "", town: "", address: "", bio: "", avatar: "" });
-  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [], tierPrefs: {}, mobBase: 350, mobTruckPerMi: 0.7 });
+  const [profC, setProfC] = useState({ name: "", company: "", trades: "", town: "", base: "", radius: 30, bio: "", prefMaterials: "", avatar: "", posts: [], tierPrefs: {}, mobBase: 350, mobTruckPerMi: 0.7, cazaManual: null });
   const [tab, setTab] = useState("post");
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
@@ -1811,6 +1852,7 @@ function App() {
   const [estMiles, setEstMiles] = useState(0); // round-trip delivery/mobilization miles (manual entry first)
   const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
   const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
+  const [cmOpen, setCmOpen] = useState(false); // Caza Manual editor (Profile) expanded
   const [propOpen, setPropOpen] = useState(false);  // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
   const [timerView, setTimerView] = useState("");   // "" | "timer" | "closeout" — on-site per-phase time audit
@@ -2305,9 +2347,9 @@ function App() {
     clearTimeout(profTimer.current);
     profTimer.current = setTimeout(() => pSet(PROFDRAFT_KEY, {
       h: profH,
-      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar, tierPrefs: profC.tierPrefs, mobBase: profC.mobBase, mobTruckPerMi: profC.mobTruckPerMi },
+      c: { name: profC.name, company: profC.company, trades: profC.trades, town: profC.town, base: profC.base, radius: profC.radius, bio: profC.bio, prefMaterials: profC.prefMaterials, avatar: profC.avatar, tierPrefs: profC.tierPrefs, mobBase: profC.mobBase, mobTruckPerMi: profC.mobTruckPerMi, cazaManual: profC.cazaManual },
     }), 800);
-  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs, profC.mobBase, profC.mobTruckPerMi]); // eslint-disable-line
+  }, [profH, profC.name, profC.company, profC.trades, profC.town, profC.base, profC.radius, profC.bio, profC.avatar, profC.prefMaterials, profC.tierPrefs, profC.mobBase, profC.mobTruckPerMi, profC.cazaManual]); // eslint-disable-line
 
   /* ----- profiles ----- */
   const saveProfileQuiet = async (role) => {
@@ -3167,8 +3209,9 @@ function App() {
         "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
         "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" +
         ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
-        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array.\n" +
-        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+        cazaManualBlock(scope, desc, profC.cazaManual) +
+        "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, or an EXCLUDED item that is present. Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": [].\n" +
+        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\", \"item\": exact takeoff line name this concerns (for a MISSING piece, the Caza standard name to add), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this, \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
         ...photos.slice(0, 3).map((ph) => {
           const mt = ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg";
@@ -3270,6 +3313,11 @@ function App() {
         ndl: tt.ndl, membrane: tt.membrane, mil: tt.mil, attachLabel: tt.attachLabel, isoR: tt.isoR, coverboard: tt.coverboard,
         assembly: { items: tt.items, laborHours: tt.laborHours, matCost: tt.matCost },
       }));
+      // CAZA MANUAL preflight deviations — flagged (not auto-applied); contractor accepts/overrides.
+      const cazaDeviations = Array.isArray(d.deviations) ? d.deviations.slice(0, 8).map((x) => ({
+        kind: (["material", "missing", "extra"].indexOf(String(x.kind || "")) >= 0 ? String(x.kind) : "material"),
+        item: String(x.item || ""), found: String(x.found || ""), standard: String(x.standard || ""), note: String(x.note || ""), status: "",
+      })).filter((x) => x.item || x.standard) : [];
       const crewN = num(d.crew) || 2, daysN = num(d.days) || 1;
       let laborHours = Math.round(num(d.laborHours) || 0);
       let laborRate = Math.round(num(d.laborRate) || 0);
@@ -3307,6 +3355,8 @@ function App() {
         title: String(d.title || "Estimate"), trade: String(d.trade || "general").toLowerCase(),
         items, primaryOptions, chosenTier: __flatTiers ? FLAT_DEFAULT_TIER : null,
         flatTier: !!__flatTiers, membrane: __flatTiers ? __flatTiers.membrane : null,
+        cazaDeviations: __flatTiers ? [] : cazaDeviations, // flat tiers replace the takeoff deterministically — Opus's deviations would be against discarded items
+
         laborHours: laborHours, laborRate: laborRate, laborSource: laborSrc,
         rateFloor: __rateFloor, rateFloored: __rateFloored, burdened: true,
         equipment: Math.round(num(d.equipment) || 0), taxRate: num(d.taxRate) || 0.08,
@@ -3351,7 +3401,7 @@ function App() {
       if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); if (voiceRef.current) speakAL("That didn't build — let's try again."); return; }
       setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1 });
       // hands-free payoff: speak the price + that it saved (the auto-save effect persists it)
-      if (voiceRef.current) { const price = sellOf(jobCostOf(ok), estMargin); speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars."); }
+      if (voiceRef.current) { const price = sellOf(jobCostOf(ok), estMargin); const nDev = ok.reduce((a, t) => a + ((t.cazaDeviations || []).length), 0); speakAL("Built and saved" + (estCustomer.trim() ? " for " + estCustomer.trim() : "") + ". Your price is about " + (Math.round(price / 100) * 100).toLocaleString() + " dollars." + (nDev > 0 ? " Heads up — I flagged " + nDev + " thing" + (nDev === 1 ? "" : "s") + " that differ from your Caza standard. Take a look." : "")); }
     } catch (e) { flash("Estimate failed: " + errMsg(e)); }
     setEstBusy("");
   };
@@ -3391,7 +3441,38 @@ function App() {
       return { ...tr, items, chosenTier: opt.tier };
     }) };
   });
+  // CAZA MANUAL deviation — accept (conform the estimate to the standard) or override (keep custom).
+  // Never silently auto-corrects: the contractor's call is captured + persisted on the trade.
+  const estManualResolve = (ti, di, action) => setEstResult((r) => {
+    if (!r) return r;
+    return { ...r, trades: r.trades.map((tr, k) => {
+      if (k !== ti) return tr;
+      const dev = (tr.cazaDeviations || [])[di];
+      let items = tr.items;
+      if (action === "accepted" && dev) {
+        const want = (dev.item || dev.found || "").toLowerCase().trim();
+        const tok = want.split(/\s+/).filter((t) => t.length > 3);
+        const idx = items.findIndex((it) => { const n = (it.name || "").toLowerCase(); return want && (n.indexOf(want) >= 0 || want.indexOf(n) >= 0 || tok.some((t) => n.indexOf(t) >= 0)); });
+        if (dev.kind === "extra") { if (idx >= 0) items = items.filter((_, x) => x !== idx); }
+        else if (dev.kind === "missing") { items = [...items, { name: dev.standard || dev.item, qty: 1, unit: "", unitPrice: 0, cost: 0, unpriced: true, placeholder: true, priceTier: "seed", matchType: null }]; }
+        else if (idx >= 0 && dev.standard) { items = items.map((it, x) => x === idx ? { ...it, name: dev.standard } : it); } // material → conform the line name to Caza's standard
+      }
+      const cazaDeviations = (tr.cazaDeviations || []).map((d, j) => j === di ? { ...d, status: action } : d);
+      return { ...tr, items, cazaDeviations };
+    }) };
+  });
   const estItemDel = (ti, i) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => k === ti ? { ...tr, items: tr.items.filter((_, idx) => idx !== i) } : tr) } : r);
+  // CAZA MANUAL editor (Profile) — edits profC.cazaManual; seeds an editable copy from the default on first touch.
+  const cmManual = () => { const m = profC.cazaManual; return (m && (Array.isArray(m.assemblies) || Array.isArray(m.materials))) ? { assemblies: m.assemblies || [], materials: m.materials || [] } : { assemblies: CAZA_MANUAL_DEFAULT.assemblies.map((a) => ({ ...a, includes: [...a.includes], excludes: [...a.excludes] })), materials: CAZA_MANUAL_DEFAULT.materials.map((x) => ({ ...x, subs: [...x.subs] })) }; };
+  const cmUpdate = (mut) => setProfC((p) => { const cur = (p.cazaManual && (Array.isArray(p.cazaManual.assemblies) || Array.isArray(p.cazaManual.materials))) ? p.cazaManual : CAZA_MANUAL_DEFAULT; const base = { assemblies: (cur.assemblies || []).map((a) => ({ ...a, includes: [...(a.includes || [])], excludes: [...(a.excludes || [])] })), materials: (cur.materials || []).map((x) => ({ ...x, subs: [...(x.subs || [])] })) }; mut(base); return { ...p, cazaManual: base }; });
+  const cmAsmSet = (i, field, val) => cmUpdate((m) => { m.assemblies = m.assemblies.map((a, j) => j === i ? { ...a, [field]: val } : a); });
+  const cmAsmAdd = () => cmUpdate((m) => { m.assemblies = [...m.assemblies, { id: "cm_a_" + rid(), match: "", includes: [], excludes: [], note: "" }]; });
+  const cmAsmDel = (i) => cmUpdate((m) => { m.assemblies = m.assemblies.filter((_, j) => j !== i); });
+  const cmMatSet = (i, field, val) => cmUpdate((m) => { m.materials = m.materials.map((x, j) => j === i ? { ...x, [field]: val } : x); });
+  const cmMatAdd = () => cmUpdate((m) => { m.materials = [...m.materials, { id: "cm_m_" + rid(), role: "", standard: "", subs: [], note: "" }]; });
+  const cmMatDel = (i) => cmUpdate((m) => { m.materials = m.materials.filter((_, j) => j !== i); });
+  const cmList = (s) => String(s || "").split(";").map((x) => x.trim()).filter(Boolean);
+  const cmCsv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
   const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => { if (k !== ti) return tr; const nt = { ...tr, [field]: val }; if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || ""); return nt; }) } : r);
   // ===== PART 1: on-site PER-PHASE TIMER (transition-based, forgiving) =====
   // Actuals are MAN-HOURS = clock-time × that phase's crew. Each phase carries committed
@@ -5416,7 +5497,40 @@ function App() {
               <label className="estf"><span>Truck $/mile</span><input type="number" min="0" step="0.05" value={profC.mobTruckPerMi} onChange={(e) => setProfC({ ...profC, mobTruckPerMi: num(e.target.value) })} placeholder="0.70" /></label>
             </div>
             <p className="hint" style={{ marginTop: 2 }}>Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate.</p>
-            <label className="fld"><span>About your company</span>
+            {/* CAZA MANUAL — your standard assemblies + material specs; the Opus preflight flags deviations. */}
+            <button className="btn ghost full" style={{ marginTop: 8 }} onClick={() => setCmOpen((o) => !o)}>{cmOpen ? "▾ Hide Caza Manual" : "▸ Caza Manual — your standards"} <span className="hint">what AL checks the estimate against</span></button>
+            {cmOpen && (() => { const man = cmManual(); return (
+              <div style={{ marginTop: 6 }}>
+                <p className="hint" style={{ marginTop: 0 }}>AL reasons freely during the conversation, then the Opus preflight checks each estimate against THIS — flagging anything off your standard for you to accept or override. Edit freely; adding a standard is just a new entry.</p>
+                <div className="seclabel" style={{ marginTop: 8 }}>Standard assemblies <span className="hint">what a Caza job includes, by job type</span></div>
+                {man.assemblies.map((a, i) => (
+                  <div key={a.id || i} className="card" style={{ padding: 10, marginBottom: 6 }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input className="in" style={{ flex: 1 }} value={a.match} onChange={(e) => cmAsmSet(i, "match", e.target.value)} placeholder="job-type match (e.g. cedar, shingle, soffit)" />
+                      <button className="todel" onClick={() => cmAsmDel(i)}><X size={14} /></button>
+                    </div>
+                    <textarea className="desc" rows={2} style={{ marginTop: 6 }} value={(a.includes || []).join("; ")} onChange={(e) => cmAsmSet(i, "includes", cmList(e.target.value))} placeholder="includes (semicolon-separated): Tear-off; Synthetic underlayment; …" />
+                    <input className="in" style={{ marginTop: 6 }} value={(a.excludes || []).join("; ")} onChange={(e) => cmAsmSet(i, "excludes", cmList(e.target.value))} placeholder="never includes (semicolon-separated): vinyl j-channel; …" />
+                    <input className="in" style={{ marginTop: 6 }} value={a.note || ""} onChange={(e) => cmAsmSet(i, "note", e.target.value)} placeholder="note (e.g. Owens Corning Total Protection system)" />
+                  </div>
+                ))}
+                <button className="btn ghost full" onClick={cmAsmAdd}><Plus size={14} /> Add standard assembly</button>
+                <div className="seclabel" style={{ marginTop: 12 }}>Material specs &amp; subs <span className="hint">role → your standard (acceptable subs)</span></div>
+                {man.materials.map((x, i) => (
+                  <div key={x.id || i} className="card" style={{ padding: 10, marginBottom: 6 }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input className="in" style={{ flex: 1 }} value={x.role} onChange={(e) => cmMatSet(i, "role", e.target.value)} placeholder="role (e.g. Shingle, Underlayment, Pipe flashing)" />
+                      <button className="todel" onClick={() => cmMatDel(i)}><X size={14} /></button>
+                    </div>
+                    <input className="in" style={{ marginTop: 6 }} value={x.standard} onChange={(e) => cmMatSet(i, "standard", e.target.value)} placeholder="Caza standard (e.g. Owens Corning Duration)" />
+                    <input className="in" style={{ marginTop: 6 }} value={(x.subs || []).join(", ")} onChange={(e) => cmMatSet(i, "subs", cmCsv(e.target.value))} placeholder="acceptable subs (comma-separated)" />
+                    <input className="in" style={{ marginTop: 6 }} value={x.note || ""} onChange={(e) => cmMatSet(i, "note", e.target.value)} placeholder="note" />
+                  </div>
+                ))}
+                <button className="btn ghost full" onClick={cmMatAdd}><Plus size={14} /> Add material spec</button>
+              </div>
+            ); })()}
+            <label className="fld" style={{ marginTop: 8 }}><span>About your company</span>
               <textarea className="desc" rows={3} value={profC.bio} onChange={(e) => setProfC({ ...profC, bio: e.target.value })}
                 placeholder="e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will." /></label>
             <button className="btn primary full" disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
@@ -5876,6 +5990,28 @@ function App() {
                             {t.checks.map((c2, i) => (<div key={i} style={{ fontSize: 12.5, color: "#2F4A39", lineHeight: 1.45 }}>• {c2}</div>))}
                           </div>
                         )}
+                        {/* CAZA MANUAL — preflight deviations flagged vs the company standard; accept (conform) or override (keep). */}
+                        {Array.isArray(t.cazaDeviations) && (t.cazaDeviations.length > 0 ? (
+                          <div style={{ margin: "9px 0 5px", padding: "9px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700, color: "#8A5A12", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>⚑ Caza Manual — {t.cazaDeviations.length} flagged vs your standard</div>
+                            {t.cazaDeviations.map((dv, di) => (
+                              <div key={di} style={{ fontSize: 12.5, color: "#5a4a2a", lineHeight: 1.4, padding: "5px 0", borderTop: di ? "1px solid #f0e2c4" : "none" }}>
+                                <div><b>{dv.kind === "missing" ? "Missing: " : dv.kind === "extra" ? "Shouldn't be here: " : "Off-spec: "}</b>{dv.found && dv.found !== "—" ? dv.found + " → " : ""}<b>{dv.standard || dv.item}</b></div>
+                                {dv.note && <div className="hint" style={{ marginTop: 1 }}>{dv.note}</div>}
+                                {dv.status ? (
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: dv.status === "accepted" ? "#1B7A3D" : "#8A5A12", marginTop: 3 }}>{dv.status === "accepted" ? "✓ Conformed to Caza standard" : "↪ Kept as-is (override)"}</div>
+                                ) : (
+                                  <div style={{ display: "flex", gap: 6, marginTop: 5 }}>
+                                    <button className="btn primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => estManualResolve(ti, di, "accepted")}>Use Caza standard</button>
+                                    <button className="btn ghost" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => estManualResolve(ti, di, "overridden")}>Keep custom</button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: "#1B7A3D", margin: "6px 0 2px", fontWeight: 600 }}>✓ Matches your Caza standard</div>
+                        ))}
                         {t.primaryOptions && t.primaryOptions.length > 0 && (
                           <>
                             <div className="seclabel">Popular local options <span className="hint">good · better · best — tap to use</span></div>
