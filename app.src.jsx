@@ -1949,6 +1949,8 @@ function App() {
   const [estAddress, setEstAddress] = useState("");   // job address on the current estimate
   const [estEmail, setEstEmail] = useState("");       // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
   const [estStatus, setEstStatus] = useState("draft");// draft | sent | won | lost
+  const [estNotes, setEstNotes] = useState("");       // free-text job notes saved with the job
+  const [estJobPhotos, setEstJobPhotos] = useState([]);// job/documentation photos saved with the job (separate from AI inspection photos)
   const [savedOpen, setSavedOpen] = useState(false);  // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
   // ---- Whole House / Addition (deterministic multi-trade) ----
@@ -2420,7 +2422,7 @@ function App() {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return;
     clearTimeout(estSaveTimer.current);
     estSaveTimer.current = setTimeout(() => { persistCurrent(); }, 600);
-  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus]);
+  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus, estNotes, estJobPhotos]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -2892,6 +2894,20 @@ function App() {
     if (!file) return;
     try { const u = await imageToJpeg(file, 1600); setWhPhotos((p) => [...p, u].slice(0, 6)); }
     catch (e) { flash("Couldn't add that photo."); }
+  };
+  // Accept ONE or MANY files (library multi-select or a single camera shot) — add each.
+  const onWhPhotos = async (files) => { const list = Array.from(files || []); for (const f of list) { await onWhPhoto(f); } };
+  // Job/documentation photos saved WITH the job record (library or camera, multi). Separate from AI
+  // inspection photos. Compressed + capped at 12 — these live in local storage (best-effort), so a
+  // huge gallery could exceed quota; keep it to key documentation shots.
+  const JOB_PHOTO_MAX = 12;
+  const onJobPhotos = async (files) => {
+    const list = Array.from(files || []);
+    for (const f of list) {
+      if (!f) continue;
+      if (estJobPhotos.length >= JOB_PHOTO_MAX) { flash("Up to " + JOB_PHOTO_MAX + " job photos (local storage limit) — remove one to add more."); break; }
+      try { const u = await imageToJpeg(f, 1200); setEstJobPhotos((p) => [...p, u].slice(0, JOB_PHOTO_MAX)); } catch (e) { flash("Couldn't add that photo."); }
+    }
   };
   // AL's next question = first unfilled REQUIRED input across the selected
   // deterministic trades (one at a time; skips anything already answered).
@@ -3784,6 +3800,7 @@ function App() {
     trades: (estResult && estResult.trades) || [], multi: !!(estResult && estResult.multi), errors: (estResult && estResult.errors) || [],
     estMargin: estMargin, estMiles: estMiles, estMobOn: estMobOn, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whScopeLines: whScopeLines, whPhotos: whPhotos, houseView: houseView,
     colors: (estResult && estResult.colors) || {}, proposalTier: (estResult && estResult.proposalTier) || "",
+    jobNotes: estNotes, jobPhotos: estJobPhotos,
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async (extra) => {
@@ -3807,6 +3824,7 @@ function App() {
     setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30); setEstMiles(num(p.estMiles) || 0); setEstMobOn(p.estMobOn === true); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhScopeLines(p.whScopeLines || {}); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
+    setEstNotes(p.jobNotes || ""); setEstJobPhotos(Array.isArray(p.jobPhotos) ? p.jobPhotos : []);
     setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
     setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "" });
   };
@@ -3827,7 +3845,7 @@ function App() {
   const startNewEstimate = async () => {
     await persistCurrent();
     setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
-    setEstMiles(0); setEstMobOn(true);
+    setEstMiles(0); setEstMobOn(true); setEstNotes(""); setEstJobPhotos([]);
     setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhScopeLines({}); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
   };
@@ -5935,7 +5953,7 @@ function App() {
                       {estimates.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))).map((rec) => (
                         <div key={rec.id} className="costrow" style={{ alignItems: "center", gap: 6 }}>
                           <span style={{ flex: 1, minWidth: 0 }}>
-                            <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.customerName || "(no name)"}{rec.status && rec.status !== "draft" ? " · " + rec.status : ""}</b>
+                            <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.customerName || "(no name)"}{rec.status && rec.status !== "draft" ? " · " + rec.status : ""}{rec.payload && rec.payload.jobNotes ? " 📝" : ""}{rec.payload && rec.payload.jobPhotos && rec.payload.jobPhotos.length ? " 📷" + rec.payload.jobPhotos.length : ""}</b>
                             <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[rec.jobAddress, rec.title, (rec.updatedAt || "").slice(0, 10)].filter(Boolean).join(" · ")}</span>
                           </span>
                           <b style={{ whiteSpace: "nowrap" }}>{$0(rec.price || 0)}</b>
@@ -6044,8 +6062,9 @@ function App() {
               </section>
 
               <div style={{ display: "flex", gap: 6 }}>
-                <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Photo
-                  <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; onWhPhoto(f); }} />
+                {/* No capture attr + multiple → the OS offers Camera AND Photo Library, and lets you pick several. */}
+                <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Photos
+                  <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; e.target.value = ""; onWhPhotos(fs); }} />
                 </label>
                 <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center", opacity: whReportBusy ? 0.6 : 1 }}>📄 Report
                   <input type="file" accept="image/*,application/pdf,.pdf" disabled={whReportBusy} style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; handleWhReport(f); }} />
@@ -6162,6 +6181,22 @@ function App() {
                       </label>
                     </div>
                     <p className="hint" style={{ marginTop: 4 }}>💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.</p>
+                  </section>
+                  {/* JOB NOTES & PHOTOS — saved with this job (auto-saves). Photos: library or camera, multi-select. */}
+                  <section className="card" style={{ marginBottom: 4 }}>
+                    <div className="seclabel">📝 Job notes &amp; photos <span className="hint">saved with this job</span></div>
+                    <textarea className="desc" rows={3} value={estNotes} onChange={(e) => setEstNotes(e.target.value)} placeholder="Notes on this job — access, colors, change orders, punch list, reminders…" />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <label className="btn ghost" style={{ flex: 1, cursor: "pointer", textAlign: "center" }}>📷 Add job photos
+                        <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => { const fs = e.target.files; e.target.value = ""; onJobPhotos(fs); }} />
+                      </label>
+                    </div>
+                    {estJobPhotos.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                        {estJobPhotos.map((p, i) => (<div className="thumb" key={i}><img src={p} alt={"Job photo " + (i + 1)} /><button onClick={() => setEstJobPhotos((a) => a.filter((_, idx) => idx !== i))}>×</button></div>))}
+                      </div>
+                    )}
+                    <p className="hint" style={{ marginTop: 6 }}>{estJobPhotos.length} photo{estJobPhotos.length === 1 ? "" : "s"} · from your library or the camera.</p>
                   </section>
                   <div className="h1" style={{ marginBottom: 2 }}>{trades.length === 1 ? trades[0].title : "Combined estimate — " + trades.length + " trades"}</div>
                   {estResult.errors && estResult.errors.length > 0 && <p className="hint">Couldn't build: {estResult.errors.map((e) => e.label).join(", ")} — tap Back to retry.</p>}
