@@ -5129,6 +5129,8 @@ function App() {
   const [estAddress, setEstAddress] = useState(""); // job address on the current estimate
   const [estEmail, setEstEmail] = useState(""); // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
   const [estStatus, setEstStatus] = useState("draft"); // draft | sent | won | lost
+  const [estNotes, setEstNotes] = useState(""); // free-text job notes saved with the job
+  const [estJobPhotos, setEstJobPhotos] = useState([]); // job/documentation photos saved with the job (separate from AI inspection photos)
   const [savedOpen, setSavedOpen] = useState(false); // "Saved estimates" list expanded
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
   // ---- Whole House / Addition (deterministic multi-trade) ----
@@ -6022,7 +6024,7 @@ function App() {
     estSaveTimer.current = setTimeout(() => {
       persistCurrent();
     }, 600);
-  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus]);
+  }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus, estNotes, estJobPhotos]);
   useEffect(() => {
     if (!loaded.current) return;
     clearTimeout(draftTimer.current);
@@ -6785,6 +6787,33 @@ function App() {
       setWhPhotos(p => [...p, u].slice(0, 6));
     } catch (e) {
       flash("Couldn't add that photo.");
+    }
+  };
+  // Accept ONE or MANY files (library multi-select or a single camera shot) — add each.
+  const onWhPhotos = async files => {
+    const list = Array.from(files || []);
+    for (const f of list) {
+      await onWhPhoto(f);
+    }
+  };
+  // Job/documentation photos saved WITH the job record (library or camera, multi). Separate from AI
+  // inspection photos. Compressed + capped at 12 — these live in local storage (best-effort), so a
+  // huge gallery could exceed quota; keep it to key documentation shots.
+  const JOB_PHOTO_MAX = 12;
+  const onJobPhotos = async files => {
+    const list = Array.from(files || []);
+    for (const f of list) {
+      if (!f) continue;
+      if (estJobPhotos.length >= JOB_PHOTO_MAX) {
+        flash("Up to " + JOB_PHOTO_MAX + " job photos (local storage limit) — remove one to add more.");
+        break;
+      }
+      try {
+        const u = await imageToJpeg(f, 1200);
+        setEstJobPhotos(p => [...p, u].slice(0, JOB_PHOTO_MAX));
+      } catch (e) {
+        flash("Couldn't add that photo.");
+      }
     }
   };
   // AL's next question = first unfilled REQUIRED input across the selected
@@ -8732,7 +8761,9 @@ function App() {
     whPhotos: whPhotos,
     houseView: houseView,
     colors: estResult && estResult.colors || {},
-    proposalTier: estResult && estResult.proposalTier || ""
+    proposalTier: estResult && estResult.proposalTier || "",
+    jobNotes: estNotes,
+    jobPhotos: estJobPhotos
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
   const persistCurrent = async extra => {
@@ -8777,6 +8808,8 @@ function App() {
     setWhScopeLines(p.whScopeLines || {});
     setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []);
     setHouseView(p.houseView || "exterior");
+    setEstNotes(p.jobNotes || "");
+    setEstJobPhotos(Array.isArray(p.jobPhotos) ? p.jobPhotos : []);
     setActiveTrade(null);
     setSelStep("ready");
     setSavedOpen(false);
@@ -8824,6 +8857,8 @@ function App() {
     setEstStatus("draft");
     setEstMiles(0);
     setEstMobOn(true);
+    setEstNotes("");
+    setEstJobPhotos([]);
     setHouseScope({});
     setHousePanelW({});
     setWhDims("");
@@ -12648,7 +12683,7 @@ function App() {
       overflow: "hidden",
       textOverflow: "ellipsis"
     }
-  }, rec.customerName || "(no name)", rec.status && rec.status !== "draft" ? " · " + rec.status : ""), /*#__PURE__*/React.createElement("span", {
+  }, rec.customerName || "(no name)", rec.status && rec.status !== "draft" ? " · " + rec.status : "", rec.payload && rec.payload.jobNotes ? " 📝" : "", rec.payload && rec.payload.jobPhotos && rec.payload.jobPhotos.length ? " 📷" + rec.payload.jobPhotos.length : ""), /*#__PURE__*/React.createElement("span", {
     className: "hint",
     style: {
       display: "block",
@@ -12956,17 +12991,17 @@ function App() {
       cursor: "pointer",
       textAlign: "center"
     }
-  }, "📷 Photo", /*#__PURE__*/React.createElement("input", {
+  }, "📷 Photos", /*#__PURE__*/React.createElement("input", {
     type: "file",
     accept: "image/*",
-    capture: "environment",
+    multiple: true,
     style: {
       display: "none"
     },
     onChange: e => {
-      const f = e.target.files && e.target.files[0];
+      const fs = e.target.files;
       e.target.value = "";
-      onWhPhoto(f);
+      onWhPhotos(fs);
     }
   })), /*#__PURE__*/React.createElement("label", {
     className: "btn ghost",
@@ -13258,7 +13293,67 @@ function App() {
       style: {
         marginTop: 4
       }
-    }, "💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.")), /*#__PURE__*/React.createElement("div", {
+    }, "💾 Auto-saved on this device. Local only — not a backup yet; export/PDF anything you send.")), /*#__PURE__*/React.createElement("section", {
+      className: "card",
+      style: {
+        marginBottom: 4
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "seclabel"
+    }, "📝 Job notes & photos ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "saved with this job")), /*#__PURE__*/React.createElement("textarea", {
+      className: "desc",
+      rows: 3,
+      value: estNotes,
+      onChange: e => setEstNotes(e.target.value),
+      placeholder: "Notes on this job — access, colors, change orders, punch list, reminders…"
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "btn ghost",
+      style: {
+        flex: 1,
+        cursor: "pointer",
+        textAlign: "center"
+      }
+    }, "📷 Add job photos", /*#__PURE__*/React.createElement("input", {
+      type: "file",
+      accept: "image/*",
+      multiple: true,
+      style: {
+        display: "none"
+      },
+      onChange: e => {
+        const fs = e.target.files;
+        e.target.value = "";
+        onJobPhotos(fs);
+      }
+    }))), estJobPhotos.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        marginTop: 8
+      }
+    }, estJobPhotos.map((p, i) => /*#__PURE__*/React.createElement("div", {
+      className: "thumb",
+      key: i
+    }, /*#__PURE__*/React.createElement("img", {
+      src: p,
+      alt: "Job photo " + (i + 1)
+    }), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setEstJobPhotos(a => a.filter((_, idx) => idx !== i))
+    }, "×")))), /*#__PURE__*/React.createElement("p", {
+      className: "hint",
+      style: {
+        marginTop: 6
+      }
+    }, estJobPhotos.length, " photo", estJobPhotos.length === 1 ? "" : "s", " · from your library or the camera.")), /*#__PURE__*/React.createElement("div", {
       className: "h1",
       style: {
         marginBottom: 2
