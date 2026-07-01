@@ -1105,6 +1105,13 @@ function tierOffFamily(jobFamily, optName) {
   const of = materialFamily(optName);
   return of !== "" && of !== jobFamily;
 }
+// MATERIAL PRICING HUB (Parts 4/5) — price staleness. A row is STALE when its last-updated date is
+// MISSING (unknown age reads as stale, never fresh — honesty rule) or older than PRICE_STALE_DAYS.
+const PRICE_STALE_DAYS = 30;
+function priceDate(e) { return (e && e.source && e.source.date) ? String(e.source.date) : ""; }
+function priceSupplier(e) { return (e && e.source && e.source.supplier) ? String(e.source.supplier) : ""; }
+function priceIsStale(e) { const d = priceDate(e); if (!d) return true; const t = Date.parse(d); if (isNaN(t)) return true; return (Date.now() - t) > PRICE_STALE_DAYS * 86400000; }
+function priceUpdatedLabel(e) { const d = priceDate(e), sup = priceSupplier(e); return (d ? "updated " + d : "age unknown") + (sup ? " · " + sup : ""); }
 // Use the contractor's edited manual if present, else the seeded default.
 function cazaManualOf(manual) { return (manual && (Array.isArray(manual.assemblies) || Array.isArray(manual.materials))) ? manual : CAZA_MANUAL_DEFAULT; }
 // Pick the assemblies whose job-type matches this scope; materials always travel (small list).
@@ -2036,6 +2043,7 @@ function App() {
   const audioUnlockedRef = useRef(false);            // <audio> element unlocked by a gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
+  const [staleSheetOpen, setStaleSheetOpen] = useState(false); // "reprice run" print view (stale prices)
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
   const [csvMap, setCsvMap] = useState({ material: -1, cost: -1, unit: -1, category: -1 });
   const [csvReview, setCsvReview] = useState(null); // [{material,unit,cost,trade,category,confidence}]
@@ -2095,6 +2103,26 @@ function App() {
   };
   // ---- engine price book (manual entry) ----
   const saveEnginePB = (next) => { setEnginePB(next); pSet(ENGINE_PB_KEY, next); };
+  // PART 5 — stale export ("reprice run" list). Rows stale per priceIsStale, grouped supplier → trade.
+  const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const downloadText = (text, filename, mime) => {
+    try { const url = URL.createObjectURL(new Blob([text], { type: mime || "text/plain" })); const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100); }
+    catch (e) { flash("Couldn't download the file."); }
+  };
+  const staleRows = () => enginePB.filter(priceIsStale).slice().sort((a, b) => { const sa = priceSupplier(a) || "zzz", sb = priceSupplier(b) || "zzz"; if (sa !== sb) return sa.localeCompare(sb); if (a.trade !== b.trade) return String(a.trade).localeCompare(String(b.trade)); return String(a.material).localeCompare(String(b.material)); });
+  const exportStalePricesCSV = () => {
+    const rows = staleRows();
+    if (!rows.length) { flash("No stale prices — everything's up to date."); return; }
+    const csv = ["Supplier,Trade,Material,Unit,Last price,Last updated"].concat(rows.map((e) => [priceSupplier(e) || "(unknown)", e.trade || "", e.material || "", e.unit || "", num(e.unitCost) || 0, priceDate(e) || "unknown"].map(csvCell).join(","))).join("\n");
+    downloadText(csv, "caza-stale-prices-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
+  };
+  const openStaleSheet = () => { if (!staleRows().length) { flash("No stale prices — everything's up to date."); return; } setStaleSheetOpen(true); };
+  const printStaleSheet = () => {
+    const prev = document.title; document.title = "Caza — prices to reprice (" + new Date().toISOString().slice(0, 10) + ")";
+    let done = false; const restore = () => { if (done) return; done = true; document.title = prev; window.removeEventListener("afterprint", restore); };
+    window.addEventListener("afterprint", restore); setTimeout(restore, 3000);
+    setTimeout(() => { try { window.print(); } catch (e) { restore(); flash("Use Share → Print to save the PDF."); } }, 60);
+  };
   const pbAdd = () => saveEnginePB([...enginePB, { id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), trade: PRICE_BOOK_TRADES[0].trade, category: "", material: "", unit: "", unitCost: 0, source: { method: "manual", date: new Date().toISOString().slice(0, 10) } }]);
   const pbSet = (id, field, val) => saveEnginePB(enginePB.map((e) => (e.id === id ? { ...e, [field]: val } : e)));
   const pbDel = (id) => saveEnginePB(enginePB.filter((e) => e.id !== id));
@@ -6400,27 +6428,40 @@ function App() {
           )}
           {/* PRICING DETAILS / PRICE BOOK — hidden from the main flow (bottom toggle) */}
           {whSpecs && (
-            <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book"} <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}</span></button>
+            <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book"} <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}{(() => { const n = enginePB.filter(priceIsStale).length; return n ? " · " : ""; })()}</span>{(() => { const n = enginePB.filter(priceIsStale).length; return n ? <span style={{ background: "#F2C98A", color: "#5a4a2a", fontWeight: 700, fontSize: 11, borderRadius: 8, padding: "1px 7px", marginLeft: 2 }}>{n} stale</span> : null; })()}</button>
           )}
           {whSpecs && whPbOpen && (
             <div className="card" style={{ marginTop: 10 }}>
               <p className="hint">Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range.</p>
               {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
-              {enginePB.map((e) => (
-                <div className="estfields" key={e.id} style={{ alignItems: "end" }}>
-                  <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
-                  <label className="estf"><span>Trade</span>
-                    <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
-                      {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
-                    </select>
-                  </label>
-                  <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
-                  <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
-                  <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
-                  <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+              {enginePB.map((e) => { const stale = priceIsStale(e); return (
+                <div key={e.id} style={stale ? { background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 8, padding: "6px 8px", marginBottom: 4 } : { marginBottom: 2 }}>
+                  <div className="estfields" style={{ alignItems: "end" }}>
+                    <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
+                    <label className="estf"><span>Trade</span>
+                      <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
+                        {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
+                    <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
+                    <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
+                    <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+                  </div>
+                  <div className="hint" style={{ marginTop: 1, color: stale ? "#8A5A12" : undefined, fontWeight: stale ? 600 : 400 }}>{stale ? "⚠️ " : ""}{priceUpdatedLabel(e)}</div>
                 </div>
-              ))}
+              ); })}
               <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
+              {/* PART 5 — stale export ("reprice run"): rows with no date or >30 days old. */}
+              {(() => { const n = enginePB.filter(priceIsStale).length; return n > 0 ? (
+                <div style={{ marginTop: 10, padding: "9px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10 }}>
+                  <div style={{ fontWeight: 700, color: "#8A5A12", fontSize: 12.5 }}>⚠️ {n} price{n === 1 ? "" : "s"} stale <span className="hint" style={{ fontWeight: 400 }}>(no date or over {PRICE_STALE_DAYS} days) — your reprice-run list</span></div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button className="btn ghost grow1" onClick={exportStalePricesCSV}>⬇ Export CSV</button>
+                    <button className="btn ghost grow1" onClick={openStaleSheet}>🖨 Print / PDF</button>
+                  </div>
+                </div>
+              ) : (enginePB.length ? <p className="hint" style={{ marginTop: 8, color: "#1B7A3D", fontWeight: 600 }}>✓ All prices fresh (updated within {PRICE_STALE_DAYS} days).</p> : null); })()}
 
               <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
                 <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
@@ -6598,6 +6639,32 @@ function App() {
         </div>
       )}
 
+      {/* STALE PRICES "reprice run" print view — grouped supplier → trade; @media print isolates .stalesheet. */}
+      {staleSheetOpen && (
+        <div className="stalesheet" style={{ position: "fixed", inset: 0, zIndex: 80, background: "#f4f6f8", overflowY: "auto" }}>
+          <div style={{ maxWidth: 640, margin: "0 auto", padding: 16 }}>
+            <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              <button className="btn primary grow1" onClick={printStaleSheet}>🖨 Print / Save as PDF</button>
+              <button className="btn ghost grow1" onClick={exportStalePricesCSV}>⬇ CSV</button>
+              <button className="btn ghost" onClick={() => setStaleSheetOpen(false)}>Done</button>
+            </div>
+            <div className="h1" style={{ margin: 0 }}>Prices to reprice</div>
+            <p className="hint">{(profC.company || "Caza Contractors")} · {new Date().toISOString().slice(0, 10)} · {staleRows().length} stale (no date or over {PRICE_STALE_DAYS} days)</p>
+            {(() => {
+              const rows = staleRows(); const groups = {};
+              rows.forEach((e) => { const s = priceSupplier(e) || "(unknown supplier)"; (groups[s] = groups[s] || []).push(e); });
+              return Object.keys(groups).map((sup) => (
+                <section className="card" key={sup} style={{ marginTop: 10 }}>
+                  <div className="h2">{sup}</div>
+                  {groups[sup].map((e) => (
+                    <div key={e.id} className="costrow"><span>{e.material}{e.trade ? " · " + e.trade : ""}{e.unit ? " · " + e.unit : ""}</span><b>{$0(e.unitCost)} <span className="hint">· {priceDate(e) || "age unknown"}</span></b></div>
+                  ))}
+                </section>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
       {me.role === "contractor" && tab === "estimator" && propOpen && estResult && estResult.trades && (() => {
         const tiers = proposalTiers();
         const chosen = estResult.proposalTier || (tiers.length === 3 ? tiers[1].tier : (tiers[0] && tiers[0].tier));
@@ -7314,10 +7381,10 @@ button{cursor:pointer;font:inherit}
 @media print {
   @page { margin: 12mm; }
   html, body { background:#fff !important; }
-  .app > *:not(.propsheet) { display:none !important; }
-  .propsheet { position:static !important; inset:auto !important; width:auto !important; background:#fff !important; overflow:visible !important; z-index:auto !important; }
-  .propsheet .no-print { display:none !important; }
-  .propsheet .card { box-shadow:none !important; border:1px solid #e0e4e8 !important; break-inside:avoid; }
+  .app > *:not(.propsheet):not(.stalesheet) { display:none !important; }
+  .propsheet, .stalesheet { position:static !important; inset:auto !important; width:auto !important; background:#fff !important; overflow:visible !important; z-index:auto !important; }
+  .propsheet .no-print, .stalesheet .no-print { display:none !important; }
+  .propsheet .card, .stalesheet .card { box-shadow:none !important; border:1px solid #e0e4e8 !important; break-inside:avoid; }
   .propsheet img { max-width:100% !important; }
   * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
 }
