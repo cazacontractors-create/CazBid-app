@@ -5725,7 +5725,7 @@ function App() {
               <span>Open <b>Business profile</b> below, add your company name and trades, and tap Save &amp; publish.</span>
             </section>
           )}
-          <button type="button" className={"secgroup accord" + (gOpen.business ? " open" : "")} onClick={() => toggleGroup("business")}>Business profile <span className="hint">what homeowners see — name, company, service area, bio</span><span className="accchev">{gOpen.business ? "▾" : "▸"}</span></button>
+          <button type="button" className={"secgroup accord" + (gOpen.business ? " open" : "")} onClick={() => toggleGroup("business")}>Business profile <span className="hint">public — what homeowners see · Save &amp; publish</span><span className="accchev">{gOpen.business ? "▾" : "▸"}</span></button>
           <div id="prof-business" className="secbody" style={{ display: gOpen.business ? undefined : "none" }}>
           <section className="card">
             <div className="profedit">
@@ -5769,7 +5769,7 @@ function App() {
 
           </div>
           {/* PROFILE REORG Part 2 — Caza Manual split OUT of the Business card into its own private group. */}
-          <button type="button" className={"secgroup accord" + (gOpen.manual ? " open" : "")} onClick={() => toggleGroup("manual")}>Caza Manual <span className="hint">your standards + cost book — private, auto-saves</span><span className="accchev">{gOpen.manual ? "▾" : "▸"}</span></button>
+          <button type="button" className={"secgroup accord" + (gOpen.manual ? " open" : "")} onClick={() => toggleGroup("manual")}>Caza Manual <span className="hint">private — your standards + cost book · auto-saves</span><span className="accchev">{gOpen.manual ? "▾" : "▸"}</span></button>
           <div id="prof-manual" className="secbody" style={{ display: gOpen.manual ? undefined : "none" }}>
           <section className="card">
             <p className="hint" style={{ marginTop: 0 }}>Private — never shown to homeowners. Edits here auto-save; there's no publish button.</p>
@@ -5887,7 +5887,7 @@ function App() {
             ); })()}
           </section>
           </div>
-          <button type="button" className={"secgroup accord" + (gOpen.al ? " open" : "")} onClick={() => toggleGroup("al")}>Assistant <span className="hint">who reads your estimates back</span><span className="accchev">{gOpen.al ? "▾" : "▸"}</span></button>
+          <button type="button" className={"secgroup accord" + (gOpen.al ? " open" : "")} onClick={() => toggleGroup("al")}>Assistant <span className="hint">private — your estimate voice · auto-saves</span><span className="accchev">{gOpen.al ? "▾" : "▸"}</span></button>
           <div id="prof-al" className="secbody" style={{ display: gOpen.al ? undefined : "none" }}>
           <section className="card">
             <div className="h2">Assistant voice <span className="hint">who talks &amp; helps you estimate</span></div>
@@ -5919,7 +5919,7 @@ function App() {
           </section>
 
           </div>
-          <button type="button" className={"secgroup accord" + (gOpen.pricing ? " open" : "")} onClick={() => toggleGroup("pricing")}>Pricing &amp; cost data <span className="hint">your real costs — homeowners only ever see a range</span><span className="accchev">{gOpen.pricing ? "▾" : "▸"}</span></button>
+          <button type="button" className={"secgroup accord" + (gOpen.pricing ? " open" : "")} onClick={() => toggleGroup("pricing")}>Pricing &amp; cost data <span className="hint">your real costs; homeowners see only a range · auto-saves</span>{(() => { const n = enginePB.filter(priceIsStale).length; return n ? <span style={{ background: "#F2C98A", color: "#5a4a2a", fontWeight: 700, fontSize: 11, borderRadius: 8, padding: "1px 7px", marginLeft: 6 }}>{n} stale</span> : null; })()}<span className="accchev">{gOpen.pricing ? "▾" : "▸"}</span></button>
           <div id="prof-pricing" className="secbody" style={{ display: gOpen.pricing ? undefined : "none" }}>
           {/* MATERIAL PRICING — governed book editor + ALL intakes (CSV · photo/PDF · supplier feed), moved here from the estimator (FIX 1). */}
           <section className="card">

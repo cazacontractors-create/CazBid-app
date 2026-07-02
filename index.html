@@ -11870,7 +11870,7 @@ function App() {
     onClick: () => toggleGroup("business")
   }, "Business profile ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "what homeowners see — name, company, service area, bio"), /*#__PURE__*/React.createElement("span", {
+  }, "public — what homeowners see · Save & publish"), /*#__PURE__*/React.createElement("span", {
     className: "accchev"
   }, gOpen.business ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-business",
@@ -12014,7 +12014,7 @@ function App() {
     onClick: () => toggleGroup("manual")
   }, "Caza Manual ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your standards + cost book — private, auto-saves"), /*#__PURE__*/React.createElement("span", {
+  }, "private — your standards + cost book · auto-saves"), /*#__PURE__*/React.createElement("span", {
     className: "accchev"
   }, gOpen.manual ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-manual",
@@ -12544,7 +12544,7 @@ function App() {
     onClick: () => toggleGroup("al")
   }, "Assistant ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "who reads your estimates back"), /*#__PURE__*/React.createElement("span", {
+  }, "private — your estimate voice · auto-saves"), /*#__PURE__*/React.createElement("span", {
     className: "accchev"
   }, gOpen.al ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-al",
@@ -12658,7 +12658,20 @@ function App() {
     onClick: () => toggleGroup("pricing")
   }, "Pricing & cost data ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your real costs — homeowners only ever see a range"), /*#__PURE__*/React.createElement("span", {
+  }, "your real costs; homeowners see only a range · auto-saves"), (() => {
+    const n = enginePB.filter(priceIsStale).length;
+    return n ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        background: "#F2C98A",
+        color: "#5a4a2a",
+        fontWeight: 700,
+        fontSize: 11,
+        borderRadius: 8,
+        padding: "1px 7px",
+        marginLeft: 6
+      }
+    }, n, " stale") : null;
+  })(), /*#__PURE__*/React.createElement("span", {
     className: "accchev"
   }, gOpen.pricing ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-pricing",
