@@ -8568,6 +8568,20 @@ function App() {
   const cmBrandDel = i => cmUpdate(m => {
     m.vendors.brands = m.vendors.brands.filter((_, j) => j !== i);
   });
+  // PROFILE reorg Part 3 — DUAL-WRITE: setting a good/better/best tier line also registers that brand
+  // in the Caza Manual's preferred list, so the GENERATION side (tierPrefs) and the PREFLIGHT side
+  // (cmManual brands) can never disagree. One entry, both consumers.
+  const cmBrandUpsert = name => {
+    const nm = String(name || "").trim();
+    if (!nm) return;
+    cmUpdate(m => {
+      if (!(m.vendors.brands || []).some(b => String(b.name || "").toLowerCase() === nm.toLowerCase())) m.vendors.brands = [...m.vendors.brands, {
+        id: "cm_b_" + rid(),
+        name: nm,
+        note: "from your tiers"
+      }];
+    });
+  };
   const cmList = s => String(s || "").split(";").map(x => x.trim()).filter(Boolean);
   const cmCsv = s => String(s || "").split(",").map(x => x.trim()).filter(Boolean);
   const estTradeField = (ti, field, val) => setEstResult(r => r ? {
@@ -12052,10 +12066,98 @@ function App() {
     style: {
       marginTop: 2
     }
-  }, "Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate."), /*#__PURE__*/React.createElement("button", {
+  }, "Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate."), /*#__PURE__*/React.createElement("div", {
+    className: "seclabel",
+    style: {
+      marginTop: 12
+    }
+  }, "Brands & tiers ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "AL builds good/better/best around these — one place, feeds generation + preflight")), /*#__PURE__*/React.createElement("textarea", {
+    className: "desc",
+    rows: 3,
+    value: profC.prefMaterials,
+    onChange: e => setProfC({
+      ...profC,
+      prefMaterials: e.target.value
+    }),
+    placeholder: "Preferred brands, plain text — e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      margin: "8px 0 4px"
+    }
+  }, TIER_CATS.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c.key,
+    className: "btn " + (prefCat === c.key ? "primary" : "ghost"),
+    style: {
+      padding: "4px 10px",
+      fontSize: 12
+    },
+    onClick: () => setPrefCat(c.key)
+  }, c.label))), ["good", "better", "best"].map(tier => {
+    const cur = profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier] || "";
+    const opts = TIER_OPTIONS[prefCat][tier];
+    const setTier = val => setProfC(p => ({
+      ...p,
+      tierPrefs: Object.assign({}, p.tierPrefs, {
+        [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], {
+          [tier]: val
+        })
+      })
+    }));
+    return /*#__PURE__*/React.createElement("div", {
+      key: tier,
+      style: {
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        textTransform: "capitalize",
+        fontSize: 13
+      }
+    }, tier), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, opts.map(o => /*#__PURE__*/React.createElement("button", {
+      key: o,
+      className: "btn " + (cur === o ? "primary" : "ghost"),
+      style: {
+        padding: "4px 9px",
+        fontSize: 12
+      },
+      onClick: () => {
+        const v = cur === o ? "" : o;
+        setTier(v);
+        if (v) cmBrandUpsert(v);
+      }
+    }, cur === o ? "✓ " : "", o))), /*#__PURE__*/React.createElement("input", {
+      className: "in",
+      style: {
+        marginTop: 4,
+        width: "100%"
+      },
+      value: opts.includes(cur) ? "" : cur,
+      onChange: e => setTier(e.target.value),
+      onBlur: e => cmBrandUpsert(e.target.value),
+      placeholder: "…or type your own line for this tier"
+    }));
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Set a category's three lines — AL builds your good/better/best around them, the proposal shows that brand's colors, AND the preflight treats them as your preferred brands. Auto-saves."), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
-      marginTop: 8
+      marginTop: 12
     },
     onClick: () => setCmOpen(o => !o)
   }, cmOpen ? "▾ Hide Caza Manual" : "▸ Caza Manual — your standards", " ", /*#__PURE__*/React.createElement("span", {
@@ -12437,122 +12539,6 @@ function App() {
       size: 14
     }), " Add brand"));
   })())), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: "secgroup accord" + (gOpen.brands ? " open" : ""),
-    onClick: () => toggleGroup("brands")
-  }, "Your preferences ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "brands & tiers AL builds around — private"), /*#__PURE__*/React.createElement("span", {
-    className: "accchev"
-  }, gOpen.brands ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
-    id: "prof-brands",
-    className: "secbody",
-    style: {
-      display: gOpen.brands ? undefined : "none"
-    }
-  }, /*#__PURE__*/React.createElement("section", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "h2"
-  }, "Preferred material brands"), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: -2
-    }
-  }, "AL leans on these as defaults in your estimates and good/better/best options."), /*#__PURE__*/React.createElement("textarea", {
-    className: "desc",
-    rows: 3,
-    value: profC.prefMaterials,
-    onChange: e => setProfC({
-      ...profC,
-      prefMaterials: e.target.value
-    }),
-    placeholder: "e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum"
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 14,
-      borderTop: "1px solid #eee",
-      paddingTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "seclabel"
-  }, "Good / better / best lines ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "your tiers — AL builds estimates around these")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: 6,
-      margin: "6px 0"
-    }
-  }, TIER_CATS.map(c => /*#__PURE__*/React.createElement("button", {
-    key: c.key,
-    className: "btn " + (prefCat === c.key ? "primary" : "ghost"),
-    style: {
-      padding: "4px 10px",
-      fontSize: 12
-    },
-    onClick: () => setPrefCat(c.key)
-  }, c.label))), ["good", "better", "best"].map(tier => {
-    const cur = profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier] || "";
-    const opts = TIER_OPTIONS[prefCat][tier];
-    const setTier = val => setProfC(p => ({
-      ...p,
-      tierPrefs: Object.assign({}, p.tierPrefs, {
-        [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], {
-          [tier]: val
-        })
-      })
-    }));
-    return /*#__PURE__*/React.createElement("div", {
-      key: tier,
-      style: {
-        marginTop: 8
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontWeight: 700,
-        textTransform: "capitalize",
-        fontSize: 13
-      }
-    }, tier), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 6,
-        marginTop: 4
-      }
-    }, opts.map(o => /*#__PURE__*/React.createElement("button", {
-      key: o,
-      className: "btn " + (cur === o ? "primary" : "ghost"),
-      style: {
-        padding: "4px 9px",
-        fontSize: 12
-      },
-      onClick: () => setTier(cur === o ? "" : o)
-    }, cur === o ? "✓ " : "", o))), /*#__PURE__*/React.createElement("input", {
-      className: "in",
-      style: {
-        marginTop: 4,
-        width: "100%"
-      },
-      value: opts.includes(cur) ? "" : cur,
-      onChange: e => setTier(e.target.value),
-      placeholder: "…or type your own line for this tier"
-    }));
-  }), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 6
-    }
-  }, "Set a category's three lines and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.")), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    style: {
-      marginTop: 12
-    },
-    disabled: busy === "prof",
-    onClick: () => saveProfile("contractor")
-  }, busy === "prof" ? "Saving…" : "Save preferences"))), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "secgroup accord" + (gOpen.al ? " open" : ""),
     onClick: () => toggleGroup("al")
