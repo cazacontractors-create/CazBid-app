@@ -3724,6 +3724,10 @@ function App() {
   const cmBrandSet = (i, field, val) => cmUpdate((m) => { m.vendors.brands = m.vendors.brands.map((b, j) => j === i ? { ...b, [field]: val } : b); });
   const cmBrandAdd = () => cmUpdate((m) => { m.vendors.brands = [...m.vendors.brands, { id: "cm_b_" + rid(), name: "", note: "" }]; });
   const cmBrandDel = (i) => cmUpdate((m) => { m.vendors.brands = m.vendors.brands.filter((_, j) => j !== i); });
+  // PROFILE reorg Part 3 — DUAL-WRITE: setting a good/better/best tier line also registers that brand
+  // in the Caza Manual's preferred list, so the GENERATION side (tierPrefs) and the PREFLIGHT side
+  // (cmManual brands) can never disagree. One entry, both consumers.
+  const cmBrandUpsert = (name) => { const nm = String(name || "").trim(); if (!nm) return; cmUpdate((m) => { if (!(m.vendors.brands || []).some((b) => String(b.name || "").toLowerCase() === nm.toLowerCase())) m.vendors.brands = [...m.vendors.brands, { id: "cm_b_" + rid(), name: nm, note: "from your tiers" }]; }); };
   const cmList = (s) => String(s || "").split(";").map((x) => x.trim()).filter(Boolean);
   const cmCsv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
   const estTradeField = (ti, field, val) => setEstResult((r) => r ? { ...r, trades: r.trades.map((tr, k) => { if (k !== ti) return tr; const nt = { ...tr, [field]: val }; if (field === "laborHours") nt.phases = allocatePhases(tr.tradeKey, val, tr.phaseSys || tr.title || ""); return nt; }) } : r);
@@ -5776,8 +5780,35 @@ function App() {
               <label className="estf"><span>Truck $/mile</span><input type="number" min="0" step="0.05" value={profC.mobTruckPerMi} onChange={(e) => setProfC({ ...profC, mobTruckPerMi: num(e.target.value) })} placeholder="0.70" /></label>
             </div>
             <p className="hint" style={{ marginTop: 2 }}>Each estimate adds: base + round-trip miles × crew drive-time (at the job's burdened rate) + miles × truck $/mi. Enter round-trip miles per job on the estimate.</p>
+            {/* BRANDS & TIERS (Part 3) — merged from the old "Your preferences" card. Dual-writes: tierPrefs
+                (AL generation + proposal colors) AND cmManual brands (preflight flag) so they can't disagree. */}
+            <div className="seclabel" style={{ marginTop: 12 }}>Brands &amp; tiers <span className="hint">AL builds good/better/best around these — one place, feeds generation + preflight</span></div>
+            <textarea className="desc" rows={3} value={profC.prefMaterials} onChange={(e) => setProfC({ ...profC, prefMaterials: e.target.value })}
+              placeholder="Preferred brands, plain text — e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex" />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "8px 0 4px" }}>
+              {TIER_CATS.map((c) => (
+                <button key={c.key} className={"btn " + (prefCat === c.key ? "primary" : "ghost")} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => setPrefCat(c.key)}>{c.label}</button>
+              ))}
+            </div>
+            {["good", "better", "best"].map((tier) => {
+              const cur = (profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier]) || "";
+              const opts = TIER_OPTIONS[prefCat][tier];
+              const setTier = (val) => setProfC((p) => ({ ...p, tierPrefs: Object.assign({}, p.tierPrefs, { [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], { [tier]: val }) }) }));
+              return (
+                <div key={tier} style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 700, textTransform: "capitalize", fontSize: 13 }}>{tier}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                    {opts.map((o) => (
+                      <button key={o} className={"btn " + (cur === o ? "primary" : "ghost")} style={{ padding: "4px 9px", fontSize: 12 }} onClick={() => { const v = cur === o ? "" : o; setTier(v); if (v) cmBrandUpsert(v); }}>{cur === o ? "✓ " : ""}{o}</button>
+                    ))}
+                  </div>
+                  <input className="in" style={{ marginTop: 4, width: "100%" }} value={opts.includes(cur) ? "" : cur} onChange={(e) => setTier(e.target.value)} onBlur={(e) => cmBrandUpsert(e.target.value)} placeholder="…or type your own line for this tier" />
+                </div>
+              );
+            })}
+            <p className="hint" style={{ marginTop: 6 }}>Set a category's three lines — AL builds your good/better/best around them, the proposal shows that brand's colors, AND the preflight treats them as your preferred brands. Auto-saves.</p>
             {/* CAZA MANUAL — your standard assemblies + material specs; the Opus preflight flags deviations. */}
-            <button className="btn ghost full" style={{ marginTop: 8 }} onClick={() => setCmOpen((o) => !o)}>{cmOpen ? "▾ Hide Caza Manual" : "▸ Caza Manual — your standards"} <span className="hint">what AL checks the estimate against</span></button>
+            <button className="btn ghost full" style={{ marginTop: 12 }} onClick={() => setCmOpen((o) => !o)}>{cmOpen ? "▾ Hide Caza Manual" : "▸ Caza Manual — your standards"} <span className="hint">what AL checks the estimate against</span></button>
             {cmOpen && (() => { const man = cmManual(); return (
               <div style={{ marginTop: 6 }}>
                 <p className="hint" style={{ marginTop: 0 }}>AL reasons freely during the conversation, then the Opus preflight checks each estimate against THIS — flagging anything off your standard for you to accept or override. Edit freely; adding a standard is just a new entry.</p>
@@ -5855,46 +5886,6 @@ function App() {
               </div>
             ); })()}
           </section>
-          </div>
-          <button type="button" className={"secgroup accord" + (gOpen.brands ? " open" : "")} onClick={() => toggleGroup("brands")}>Your preferences <span className="hint">brands &amp; tiers AL builds around — private</span><span className="accchev">{gOpen.brands ? "▾" : "▸"}</span></button>
-          <div id="prof-brands" className="secbody" style={{ display: gOpen.brands ? undefined : "none" }}>
-          <section className="card">
-            <div className="h2">Preferred material brands</div>
-            <p className="hint" style={{ marginTop: -2 }}>AL leans on these as defaults in your estimates and good/better/best options.</p>
-            <textarea className="desc" rows={3} value={profC.prefMaterials} onChange={(e) => setProfC({ ...profC, prefMaterials: e.target.value })}
-              placeholder="e.g. Roofing: GAF Timberline HDZ · Siding: James Hardie · Decking: Trex · Gutters: 6in seamless aluminum" />
-
-            <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 12 }}>
-              <div className="seclabel">Good / better / best lines <span className="hint">your tiers — AL builds estimates around these</span></div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "6px 0" }}>
-                {TIER_CATS.map((c) => (
-                  <button key={c.key} className={"btn " + (prefCat === c.key ? "primary" : "ghost")} style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => setPrefCat(c.key)}>{c.label}</button>
-                ))}
-              </div>
-              {["good", "better", "best"].map((tier) => {
-                const cur = (profC.tierPrefs && profC.tierPrefs[prefCat] && profC.tierPrefs[prefCat][tier]) || "";
-                const opts = TIER_OPTIONS[prefCat][tier];
-                const setTier = (val) => setProfC((p) => ({ ...p, tierPrefs: Object.assign({}, p.tierPrefs, { [prefCat]: Object.assign({}, (p.tierPrefs || {})[prefCat], { [tier]: val }) }) }));
-                return (
-                  <div key={tier} style={{ marginTop: 8 }}>
-                    <div style={{ fontWeight: 700, textTransform: "capitalize", fontSize: 13 }}>{tier}</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                      {opts.map((o) => (
-                        <button key={o} className={"btn " + (cur === o ? "primary" : "ghost")} style={{ padding: "4px 9px", fontSize: 12 }} onClick={() => setTier(cur === o ? "" : o)}>{cur === o ? "✓ " : ""}{o}</button>
-                      ))}
-                    </div>
-                    <input className="in" style={{ marginTop: 4, width: "100%" }} value={opts.includes(cur) ? "" : cur} onChange={(e) => setTier(e.target.value)} placeholder="…or type your own line for this tier" />
-                  </div>
-                );
-              })}
-              <p className="hint" style={{ marginTop: 6 }}>Set a category's three lines and AL builds your good/better/best around them — and the proposal shows that brand's colors when a tier is chosen.</p>
-            </div>
-
-            <button className="btn primary full" style={{ marginTop: 12 }} disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
-              {busy === "prof" ? "Saving…" : "Save preferences"}
-            </button>
-          </section>
-
           </div>
           <button type="button" className={"secgroup accord" + (gOpen.al ? " open" : "")} onClick={() => toggleGroup("al")}>Assistant <span className="hint">who reads your estimates back</span><span className="accchev">{gOpen.al ? "▾" : "▸"}</span></button>
           <div id="prof-al" className="secbody" style={{ display: gOpen.al ? undefined : "none" }}>
