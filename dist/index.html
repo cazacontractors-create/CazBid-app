@@ -2590,14 +2590,272 @@ function parseMeas(dims) {
     pens: g(/(\d+)\s*penetr/) || g(/penetrations?\s*(\d+)/)
   };
 }
-// Roofing SYSTEM from the type/desc. Drives a DIFFERENT material takeoff per type.
+// Roofing PROFILE from the type/desc. Drives a DIFFERENT material takeoff per profile.
+// DEFECT B: classify on PROFILE words, never on FINISH words. SMP / Kynar / PVDF / galvalume are
+// paint finishes that appear on BOTH standing-seam AND exposed-fastener panels — they must not
+// decide the profile. Tests run most-specific -> generic so a string naming both a finish and a
+// profile ("26-ga SMP standing seam") resolves to the explicit profile (standing seam), and a
+// finish/gauge-only string ("26G SMP") stays "metal" (Caza's clip standing-seam standard) rather
+// than defaulting into screw-down AG panel.
 function roofTypeOf(sys) {
   const s = (sys || "").toLowerCase();
-  if (/ag panel|ag-panel|exposed.?fastener|panel rib|rib panel|ribbed panel|corrugated|r-?panel\b|u-?panel\b|\bsmp\b/.test(s)) return "agpanel"; // exposed-fastener / ribbed (NOT standing seam)
-  if (/standing.?seam|snap.?lock|\blok\b|metal panel|steel panel|metal roof|\d+\s*ga\b|kynar/.test(s)) return "metal";
+  // explicit STANDING SEAM (concealed-clip) — beats the generic AG-panel terms below
+  if (/standing.?seam|snap.?lock|mechanical.?lock|nu-?lok|\blok\b/.test(s)) return "metal";
+  // explicit EXPOSED-FASTENER / ribbed AG panel (through-screwed, NO concealed clips)
+  if (/ag[ -]?panel|exposed.?fastener|through.?fasten|panel rib|rib panel|ribbed panel|corrugated|r-?panel\b|u-?panel\b/.test(s)) return "agpanel";
+  // generic metal (only "metal roof" / a gauge, no profile word) -> clip standing-seam assembly
+  if (/metal panel|steel panel|metal roof|\b(?:22|24|26|28|29)\s*ga(?:uge)?\b|\b(?:22|24|26|28|29)\s*g\b/.test(s)) return "metal";
   if (/\btpo\b|\bepdm\b|\bpvc\b|flat roof|single.?ply|membrane|\bbur\b|modified bitumen/.test(s)) return "flat";
   if (/\btile\b|clay tile|concrete tile/.test(s)) return "tile";
   return "shingle";
+}
+// Shingle-family terms (for MIXED-system detection). A roof whose description names BOTH a
+// non-shingle profile (metal/agpanel/flat/tile) AND a shingle field is a MIXED system.
+const ROOF_SHINGLE_RE = /shingle|asphalt|architect|3-?tab|dimensional|laminat|\bduration\b|timberline|landmark|\bhdz\b/;
+// DEFECT A: mixed = roofTypeOf saw a non-shingle profile AND the string also carries shingle terms
+// (e.g. "26-ga standing-seam eave band + OC Duration shingle upper field"). Mixed jobs keep the
+// LLM's verified two-system takeoff — they are NOT rebuilt-and-replaced as one system.
+function roofIsMixed(sys) {
+  const s = (sys || "").toLowerCase();
+  return roofTypeOf(s) !== "shingle" && ROOF_SHINGLE_RE.test(s);
+}
+// Infer a takeoff category KEY from a line name (for category-assisted book matching, Defect C).
+function roofLineKey(name) {
+  const s = String(name || "").toLowerCase();
+  if (/\bpanel\b|standing.?seam/.test(s)) return "panel";
+  if (/clip|cleat/.test(s)) return "clip";
+  if (/screw|fastener/.test(s)) return "screw";
+  if (/drip|eave (trim|metal)|edge metal/.test(s)) return "drip";
+  if (/rake|gable/.test(s)) return "rake";
+  if (/valley/.test(s)) return "valley";
+  if (/ridge|hip/.test(s)) return "ridge";
+  if (/closure/.test(s)) return "closure";
+  if (/underlay|ice|high.?temp|synthetic|felt/.test(s)) return "iw";
+  if (/shingle|membrane|\btpo\b|\bepdm\b|tile/.test(s)) return "field";
+  return "";
+}
+// Category regexes that let a governed (enginePB) book row price a takeoff line by CATEGORY when
+// the SKU name shares no tokens (e.g. book "26G SMP A1101" cat "metal roofing panel" prices a
+// "panel" line). Keyed by takeoff line key.
+const ROOF_KEY_CATEGORY = {
+  panel: /panel|standing.?seam|metal roof/,
+  clip: /clip|cleat/,
+  screw: /screw|fastener/,
+  drip: /drip|eave|edge metal/,
+  rake: /rake|gable/,
+  valley: /valley/,
+  ridge: /ridge|hip/,
+  closure: /closure/,
+  iw: /underlay|ice|high.?temp/,
+  field: /shingle|membrane|tpo|epdm|tile/
+};
+// ===== unit-aware, category-assisted price matching (DEFECT C) =====
+// Normalize a unit string to a coarse family so a per-LF line never silently takes a per-stick $.
+function canonUnit(u) {
+  const s = String(u || "").toLowerCase().replace(/[^a-z0-9/' .-]/g, " ").trim();
+  if (!s) return "";
+  if (/\bsq\b|square/.test(s) && !/sq\s*ft|sqft|\bsf\b/.test(s)) return "sq";
+  if (/lin(?:eal|ear)?\.?\s*(?:ft|foot|feet)|\blf\b|\/\s*lf|ln\s*ft|per\s*(?:ft|foot|lineal)/.test(s)) return "lf";
+  if (/\bft\b|feet|foot/.test(s)) return "lf";
+  if (/bundle|\bbdl\b|bndl/.test(s)) return "bundle";
+  if (/\broll\b/.test(s)) return "roll";
+  if (/bucket|pail/.test(s)) return "bucket";
+  if (/\bbox\b/.test(s)) return "box";
+  if (/stick|length|piece|\bpc\b|\bpcs\b|\bea\b|each/.test(s)) return "ea";
+  return s;
+}
+// Pull a stock length in feet from a name/unit ("16'", "10 ft", "12 foot", "10-ft stick").
+function parseLenFt(str) {
+  const s = String(str || "").toLowerCase();
+  let m = s.match(/(\d+(?:\.\d+)?)\s*(?:'|ft\b|foot|feet)/);
+  if (m) return Number(m[1]) || 0;
+  return 0;
+}
+// Best NAME-overlap book row (the original token-overlap logic, returning the row + score).
+function bestBookRowByName(name, books) {
+  const stem = t => t.length > 3 && t.charAt(t.length - 1) === "s" && t.charAt(t.length - 2) !== "s" ? t.slice(0, -1) : t;
+  const toks = x => String(x || "").toLowerCase().replace(/[^a-z0-9/ ]/g, " ").split(/\s+/).filter(t => t.length > 1 && !["the", "and", "for", "per", "ft", "of"].includes(t)).map(stem);
+  const want = new Set(toks(name));
+  if (!want.size) return null;
+  let best = null,
+    bestScore = 0;
+  for (const b of books) {
+    const c = Number(b && b.cost);
+    if (!(c > 0)) continue;
+    const bt = toks(b.name);
+    if (!bt.length) continue;
+    const bs = new Set(bt);
+    let inter = 0;
+    for (const t of want) if (bs.has(t)) inter++;
+    const score = inter / Math.min(want.size, bs.size);
+    if (inter >= 1 && score > bestScore) {
+      bestScore = score;
+      best = b;
+    }
+  }
+  return best && bestScore >= 0.34 ? {
+    row: best,
+    score: bestScore
+  } : null;
+}
+// Category-assisted match for a governed (roofing) book row when the name failed.
+function bookRowByCategory(key, books) {
+  const re = ROOF_KEY_CATEGORY[key];
+  if (!re) return null;
+  for (const b of books) {
+    const cat = String(b && b.cat || "").toLowerCase();
+    const tr = String(b && b.trade || "").toLowerCase();
+    if (!cat || !(Number(b.cost) > 0)) continue;
+    if (tr && tr !== "roofing") continue;
+    if (re.test(cat)) return b;
+  }
+  return null;
+}
+// The one unit-aware matcher. Returns { unitPrice, note, source, via } when it can price the line
+// in the TAKEOFF's own unit; { mismatch, bookUnit, wantUnit } when it found a name/category match
+// but the units don't reconcile (caller FLAGS — never silently applies); { unmatched } otherwise.
+function matchBookLine(line, books) {
+  if (!Array.isArray(books) || !books.length) return {
+    unmatched: true
+  };
+  const wantUnit = canonUnit(line.unit);
+  let row = null,
+    via = null;
+  const bn = bestBookRowByName(line.name, books);
+  if (bn) {
+    row = bn.row;
+    via = "name";
+  }
+  if (!row && line.key) {
+    const cr = bookRowByCategory(line.key, books);
+    if (cr) {
+      row = cr;
+      via = "category";
+    }
+  }
+  if (!row) return {
+    unmatched: true
+  };
+  const cost = Number(row.cost);
+  if (!(cost > 0)) return {
+    unmatched: true
+  };
+  const bookUnit = canonUnit(row.unit);
+  // same unit (or either side unit-less) -> use as-is
+  if (!bookUnit || !wantUnit || bookUnit === wantUnit) return {
+    unitPrice: cost,
+    source: "book",
+    via: via
+  };
+  // known conversion: per-stick/piece (ea) <-> per-LF, using a length on the book/line name or unit
+  if (wantUnit === "lf" && bookUnit === "ea") {
+    const L = parseLenFt(row.name) || parseLenFt(row.unit);
+    if (L > 0) {
+      const per = Math.round(cost / L * 100) / 100;
+      return {
+        unitPrice: per,
+        source: "book",
+        via: via,
+        note: "$" + cost + "/" + (row.unit || "stick") + " / " + L + "' = $" + per + "/LF"
+      };
+    }
+  }
+  if (wantUnit === "ea" && bookUnit === "lf") {
+    const L = parseLenFt(line.name);
+    if (L > 0) {
+      const per = Math.round(cost * L * 100) / 100;
+      return {
+        unitPrice: per,
+        source: "book",
+        via: via,
+        note: "$" + cost + "/LF x " + L + "' = $" + per + "/" + (line.unit || "ea")
+      };
+    }
+  }
+  // no safe conversion -> do NOT apply a per-{bookUnit} price to a per-{wantUnit} line
+  return {
+    mismatch: true,
+    bookUnit: row.unit || bookUnit,
+    wantUnit: line.unit || wantUnit
+  };
+}
+// Back-compat: number-or-null lookup (now unit-aware via matchBookLine).
+function priceFromBook(name, books) {
+  const r = matchBookLine({
+    name: name,
+    unit: ""
+  }, books);
+  return r && r.unitPrice != null ? r.unitPrice : null;
+}
+// Price a deterministic roof takeoff: cost book first (unit-aware), then (for lines the book
+// lacks) the LLM's own per-unit estimate for that line — NOT hardcoded. Lines neither source can
+// price, AND lines the book matched but in an unconvertible unit, are FLAGGED (visible, never $0
+// silently, never a per-stick $ silently applied per-LF).
+function priceRoofTakeoff(lines, books, llmItems) {
+  const llmBook = Array.isArray(llmItems) ? llmItems.map(it => {
+    const u = Number(it.unitPrice) > 0 ? Number(it.unitPrice) : Number(it.qty) > 0 ? Number(it.cost) / Number(it.qty) : Number(it.cost);
+    return {
+      name: it.name,
+      unit: it.unit,
+      cost: u
+    };
+  }).filter(x => x.cost > 0) : [];
+  return (lines || []).map(l => {
+    let r = matchBookLine(l, books);
+    let src = r && r.unitPrice != null ? "book" : null;
+    let note = r && r.note || "";
+    const mismatch = !!(r && r.mismatch);
+    if (!r || r.unitPrice == null) {
+      const r2 = matchBookLine({
+        name: l.name,
+        unit: l.unit
+      }, llmBook); // LLM fallback: name+unit only
+      if (r2 && r2.unitPrice != null) {
+        r = r2;
+        src = "ai";
+        note = r2.note || note;
+      }
+    }
+    const up = r && r.unitPrice != null ? r.unitPrice : null;
+    return {
+      name: l.name,
+      qty: l.qty,
+      unit: l.unit,
+      unitPrice: up != null ? up : 0,
+      cost: up != null ? Math.round(up * l.qty) : 0,
+      unpriced: up == null,
+      priceSrc: src,
+      priceNote: note || (up == null && mismatch ? "book price is per " + r.bookUnit + " — takeoff needs per " + r.wantUnit + "; tap to set" : "")
+    };
+  });
+}
+// MIXED-system reprice (DEFECT A): keep the LLM's item lines + quantities (the preflight verified
+// them) and run a PRICE-ONLY pass — book-first + unit-aware + category-assisted. A clean book match
+// wins; otherwise the LLM's own price is kept (never zeroed), with a note if a unit mismatch blocked
+// the book row.
+function repriceLlmItems(items, books) {
+  return (items || []).map(it => {
+    const qty = Number(it.qty) || 0;
+    const line = {
+      name: it.name,
+      unit: it.unit,
+      key: roofLineKey(it.name)
+    };
+    const r = matchBookLine(line, books);
+    if (r && r.unitPrice != null) {
+      return Object.assign({}, it, {
+        unitPrice: r.unitPrice,
+        cost: Math.round(r.unitPrice * qty),
+        unpriced: false,
+        priceSrc: "book",
+        priceNote: r.note || ""
+      });
+    }
+    if (r && r.mismatch) return Object.assign({}, it, {
+      priceNote: "book has $/" + r.bookUnit + " (needs $/" + r.wantUnit + ") — kept AI price; tap to set"
+    });
+    return it;
+  });
 }
 // Token-overlap fuzzy price lookup against the contractor's cost book(s).
 // books: [{name, unit, cost}]. Returns a unit cost or null (caller flags null).
@@ -3271,6 +3529,10 @@ function burdenedRateFloor(scope, desc) {
 function stripCrossSystem(items, sysStr) {
   if (!Array.isArray(items)) return items || [];
   const s = (sysStr || "").toLowerCase();
+  // DEFECT A: a MIXED roof (non-shingle profile band + shingle field) legitimately carries BOTH
+  // systems' lines — do NOT ban either side, or the shingle half is stripped before the takeoff
+  // pricer ever sees it. roofIsMixed(s) is the same detection the override uses.
+  if (roofIsMixed(s)) return items;
   const metal = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|metal roof/.test(s);
   const shingle = /shingle|asphalt|architectural|3-tab|laminate/.test(s) && !metal;
   const tpo = /\btpo\b/.test(s),
@@ -5316,6 +5578,13 @@ function App() {
   const audioUnlockedRef = useRef(false); // <audio> element unlocked by a gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
   const [pbImportOpen, setPbImportOpen] = useState(false);
+  // FIX 4 — grouped, collapsible price-book view (trade -> category), search, closed by default.
+  const [pbSearch, setPbSearch] = useState("");
+  const [pbGrpOpen, setPbGrpOpen] = useState({}); // keys: "t:<trade>" and "c:<trade>|<category>"
+  const togglePbGrp = k => setPbGrpOpen(o => ({
+    ...o,
+    [k]: !o[k]
+  }));
   const [staleSheetOpen, setStaleSheetOpen] = useState(false); // "reprice run" print view (stale prices)
   const [csvParsed, setCsvParsed] = useState(null); // { headers:[], rows:[[]] }
   const [csvMap, setCsvMap] = useState({
@@ -5426,7 +5695,9 @@ function App() {
   const contractorPriceBook = () => {
     const seen = new Set(),
       out = [];
-    const add = (name, unit, cost) => {
+    // carry cat/trade (from the FIRST, enginePB-first occurrence) so the takeoff pricer can do
+    // category-assisted matching (Defect C) — governed rows win the tie, so their category wins too.
+    const add = (name, unit, cost, cat, trade) => {
       const nm = String(name || "").trim(),
         key = nm.toLowerCase();
       if (!nm || !(num(cost) > 0) || seen.has(key)) return;
@@ -5434,12 +5705,14 @@ function App() {
       out.push({
         name: nm,
         unit: unit || "",
-        cost: num(cost)
+        cost: num(cost),
+        cat: cat || "",
+        trade: trade || ""
       });
     };
-    (enginePB || []).forEach(e => add(e.material, e.unit, e.unitCost));
-    (matCosts || []).forEach(m => add(m.name, m.unit, m.cost));
-    (priceBook || []).forEach(p => add(p.name, p.unit, p.price));
+    (enginePB || []).forEach(e => add(e.material, e.unit, e.unitCost, e.category, e.trade));
+    (matCosts || []).forEach(m => add(m.name, m.unit, m.cost, "", ""));
+    (priceBook || []).forEach(p => add(p.name, p.unit, p.price, p.cat, ""));
     return out;
   };
   // Formatted, capped-for-tokens view of the merged book for LLM prompt injection.
@@ -5511,10 +5784,11 @@ function App() {
       }
     }, 60);
   };
-  const pbAdd = () => saveEnginePB([...enginePB, {
+  // FIX 4: optional trade/category pre-fill so "+ add to {trade}" inside a group lands in that group.
+  const pbAdd = (trade, category) => saveEnginePB([...enginePB, {
     id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-    trade: PRICE_BOOK_TRADES[0].trade,
-    category: "",
+    trade: typeof trade === "string" && trade ? trade : PRICE_BOOK_TRADES[0].trade,
+    category: typeof category === "string" ? category : "",
     material: "",
     unit: "",
     unitCost: 0,
@@ -5918,10 +6192,14 @@ function App() {
     // NON-shingle types (metal/flat/tile) the LLM under-itemizes ($295 panels bug) —
     // so build the complete deterministic takeoff and price it from the cost book.
     if (isRoof && whDims) {
-      const q = computeRoofQuantities(whDims, sysStr, 0);
-      if (q && q.length) {
+      const books = contractorPriceBook();
+      // DEFECT A: MIXED roof — keep the LLM's verified two-system lines/quantities; price-only pass.
+      const __mixed = roofIsMixed(sysStr);
+      const q = __mixed ? null : computeRoofQuantities(whDims, sysStr, 0);
+      if (__mixed) {
+        items = repriceLlmItems(items, books);
+      } else if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
-          const books = contractorPriceBook();
           items = priceRoofTakeoff(q, books, items);
         } else {
           const matchers = [{
@@ -7835,9 +8113,16 @@ function App() {
       }
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic && !__flatTiers) {
-        const q = computeRoofQuantities(dims, sysStr, num(panelW));
         const books = contractorPriceBook();
-        if (q && q.length) {
+        const __mixed = roofIsMixed(sysStr);
+        // DEFECT A: MIXED roof (e.g. metal eave band + shingle upper field) — the LLM built BOTH
+        // halves and the preflight verified the quantities. Do NOT rebuild-and-replace one system
+        // over the whole roof (that silently drops the other half); keep the LLM's lines/quantities
+        // and run a PRICE-ONLY pass (book-first, unit-aware, category-assisted).
+        const q = __mixed ? null : computeRoofQuantities(dims, sysStr, num(panelW));
+        if (__mixed) {
+          items = repriceLlmItems(items, books);
+        } else if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
             // price it from the cost book (the LLM under-itemizes these → the $295 bug).
@@ -7849,7 +8134,8 @@ function App() {
               cost: it.cost,
               unpriced: it.unpriced,
               priceTier: null,
-              matchType: null
+              matchType: null,
+              priceNote: it.priceNote || ""
             }));
           } else {
             const matchers = [{
@@ -7913,7 +8199,12 @@ function App() {
               if (matched[key]) return;
               const cq = q.find(x => x.key === key);
               if (!cq) return;
-              const up = priceFromBook(cq.name, books);
+              const mb = matchBookLine({
+                name: cq.name,
+                unit: cq.unit,
+                key: cq.key
+              }, books);
+              const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
               items.push({
                 name: cq.name,
                 qty: cq.qty,
@@ -7922,7 +8213,8 @@ function App() {
                 cost: up != null ? Math.round(up * cq.qty) : 0,
                 unpriced: up == null,
                 priceTier: null,
-                matchType: null
+                matchType: null,
+                priceNote: mb && mb.note || ""
               });
             });
           }
@@ -7968,6 +8260,19 @@ function App() {
         note: String(x.note || ""),
         status: ""
       })).filter(x => x.item || x.standard) : [];
+      // ORDERING RULE: the preflight ran on the LLM JSON; items[] was mutated after (mixed reprice,
+      // deterministic rebuild, backfill). Re-check the deviations against the FINAL items so a
+      // "missing" flag can't point at a line that actually exists (phantom I&W flag on a kept line).
+      const __devHasItem = name => {
+        const w = String(name || "").toLowerCase().trim();
+        if (!w) return false;
+        const tok = w.split(/\s+/).filter(t => t.length > 3);
+        return items.some(it => {
+          const n = (it.name || "").toLowerCase();
+          return n.indexOf(w) >= 0 || w.indexOf(n) >= 0 || tok.some(t => n.indexOf(t) >= 0);
+        });
+      };
+      const cazaDeviationsFinal = cazaDeviations.filter(x => !(x.kind === "missing" && (__devHasItem(x.standard) || __devHasItem(x.item))));
       // OFF-MANUAL flags — offManual is CLIENT-SIDE truth (no standard assembly); assumptions/questions from Opus.
       const assumptions = __offManual && !__flatTiers && Array.isArray(d.assumptions) ? d.assumptions.slice(0, 6).map(x => String(x)).filter(Boolean) : [];
       const questions = __offManual && !__flatTiers && Array.isArray(d.questions) ? d.questions.slice(0, 4).map(x => String(x)).filter(Boolean) : [];
@@ -8032,8 +8337,8 @@ function App() {
         chosenTier: __flatTiers ? FLAT_DEFAULT_TIER : null,
         flatTier: !!__flatTiers,
         membrane: __flatTiers ? __flatTiers.membrane : null,
-        cazaDeviations: __flatTiers ? [] : __rateFloored ? cazaDeviations.filter(dv => dv.kind !== "labor") : cazaDeviations,
-        // flat tiers own the takeoff; a floored rate is already conformed to Caza's — drop the redundant labor flag
+        cazaDeviations: __flatTiers ? [] : __rateFloored ? cazaDeviationsFinal.filter(dv => dv.kind !== "labor") : cazaDeviationsFinal,
+        // flat tiers own the takeoff; a floored rate is already conformed to Caza's — drop the redundant labor flag; cazaDeviationsFinal drops phantom "missing" flags for lines that exist
         offManual: __flatTiers ? false : __offManual,
         offManualKey: (scope || desc || "").toLowerCase().trim().slice(0, 48),
         assumptions: assumptions,
@@ -12720,22 +13025,34 @@ function App() {
         fontSize: 12.5
       }
     }, "✓ all fresh");
-  })()), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
+  })()), /*#__PURE__*/React.createElement("div", {
     style: {
+      display: "flex",
+      gap: 6,
       marginTop: 8
-    },
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost grow1",
     onClick: () => {
       setWhPbOpen(true);
       setPbImportOpen(true);
     }
-  }, "＋ Add prices ", /*#__PURE__*/React.createElement("span", {
-    className: "hint",
-    style: {
-      color: "#fff",
-      opacity: .85
+  }, "📄 CSV"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost grow1",
+    onClick: () => {
+      setWhPbOpen(true);
+      setPbImportOpen(true);
     }
-  }, "CSV · 📷 photo/PDF · 🔗 supplier feed")), /*#__PURE__*/React.createElement("button", {
+  }, "📷 Photo / PDF"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost grow1",
+    onClick: () => {
+      setWhPbOpen(true);
+      setPbImportOpen(true);
+    }
+  }, "🔗 Supplier feed")), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 6
@@ -12750,77 +13067,190 @@ function App() {
     className: "hint"
   }, "Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range."), enginePB.length === 0 && /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.map(e => {
-    const stale = priceIsStale(e);
-    return /*#__PURE__*/React.createElement("div", {
-      key: e.id,
-      style: stale ? {
-        background: "#FFF7E6",
-        border: "1px solid #F2C98A",
-        borderRadius: 8,
-        padding: "6px 8px",
-        marginBottom: 4
-      } : {
-        marginBottom: 2
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "estfields",
+  }, "No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.length > 0 && (() => {
+    const q = pbSearch.trim().toLowerCase();
+    const matchRow = e => !q || String(e.material || "").toLowerCase().includes(q) || String(e.category || "").toLowerCase().includes(q) || String(e.trade || "").toLowerCase().includes(q);
+    const rows = enginePB.filter(matchRow);
+    const order = PRICE_BOOK_TRADES.map(t => t.trade);
+    const tradeLabel = tr => {
+      const f = PRICE_BOOK_TRADES.find(x => x.trade === tr);
+      return f ? f.label : tr ? tr.charAt(0).toUpperCase() + tr.slice(1) : "Other";
+    };
+    const badge = n => n ? /*#__PURE__*/React.createElement("span", {
       style: {
-        alignItems: "end"
+        background: "#F2C98A",
+        color: "#5a4a2a",
+        fontWeight: 700,
+        fontSize: 10.5,
+        borderRadius: 7,
+        padding: "0 6px",
+        marginLeft: 6
       }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
-      value: e.material,
-      onChange: ev => pbSet(e.id, "material", ev.target.value),
-      placeholder: "e.g. 2x4x8 SPF"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Trade"), /*#__PURE__*/React.createElement("select", {
-      value: e.trade,
-      onChange: ev => pbSet(e.id, "trade", ev.target.value)
-    }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
-      key: t.trade,
-      value: t.trade
-    }, t.label)))), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
-      value: e.category,
-      onChange: ev => pbSet(e.id, "category", ev.target.value),
-      placeholder: "lumber"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
-      value: e.unit,
-      onChange: ev => pbSet(e.id, "unit", ev.target.value),
-      placeholder: "EA"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      step: "0.01",
-      value: e.unitCost,
-      onChange: ev => pbSet(e.id, "unitCost", num(ev.target.value))
-    })), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost",
+    }, n, " stale") : null;
+    const barStyle = sub => ({
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      width: "100%",
+      textAlign: "left",
+      border: "1px solid #e6e6e6",
+      background: sub ? "#fafafa" : "#f2f5f3",
+      borderRadius: 8,
+      padding: sub ? "5px 9px" : "7px 10px",
+      marginBottom: 4,
+      fontWeight: sub ? 600 : 700,
+      fontSize: sub ? 12.5 : 13.5,
+      cursor: "pointer"
+    });
+    const rowEditor = e => {
+      const stale = priceIsStale(e);
+      return /*#__PURE__*/React.createElement("div", {
+        key: e.id,
+        style: stale ? {
+          background: "#FFF7E6",
+          border: "1px solid #F2C98A",
+          borderRadius: 8,
+          padding: "6px 8px",
+          marginBottom: 4
+        } : {
+          marginBottom: 2
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "estfields",
+        style: {
+          alignItems: "end"
+        }
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
+        value: e.material,
+        onChange: ev => pbSet(e.id, "material", ev.target.value),
+        placeholder: "e.g. 2x4x8 SPF"
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Trade"), /*#__PURE__*/React.createElement("select", {
+        value: e.trade,
+        onChange: ev => pbSet(e.id, "trade", ev.target.value)
+      }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
+        key: t.trade,
+        value: t.trade
+      }, t.label)))), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
+        value: e.category,
+        onChange: ev => pbSet(e.id, "category", ev.target.value),
+        placeholder: "lumber"
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
+        value: e.unit,
+        onChange: ev => pbSet(e.id, "unit", ev.target.value),
+        placeholder: "EA"
+      })), /*#__PURE__*/React.createElement("label", {
+        className: "estf"
+      }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
+        type: "number",
+        step: "0.01",
+        value: e.unitCost,
+        onChange: ev => pbSet(e.id, "unitCost", num(ev.target.value))
+      })), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost",
+        style: {
+          alignSelf: "center"
+        },
+        onClick: () => pbDel(e.id)
+      }, "✕")), /*#__PURE__*/React.createElement("div", {
+        className: "hint",
+        style: {
+          marginTop: 1,
+          color: stale ? "#8A5A12" : undefined,
+          fontWeight: stale ? 600 : 400
+        }
+      }, stale ? "⚠️ " : "", priceUpdatedLabel(e)));
+    };
+    const byTrade = {};
+    rows.forEach(e => {
+      const tr = e.trade || "other";
+      (byTrade[tr] = byTrade[tr] || []).push(e);
+    });
+    const trades = Object.keys(byTrade).sort((a, b) => {
+      const ia = order.indexOf(a),
+        ib = order.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("input", {
+      className: "in",
       style: {
-        alignSelf: "center"
+        marginBottom: 8
       },
-      onClick: () => pbDel(e.id)
-    }, "✕")), /*#__PURE__*/React.createElement("div", {
-      className: "hint",
-      style: {
-        marginTop: 1,
-        color: stale ? "#8A5A12" : undefined,
-        fontWeight: stale ? 600 : 400
-      }
-    }, stale ? "⚠️ " : "", priceUpdatedLabel(e)));
-  }), /*#__PURE__*/React.createElement("button", {
+      value: pbSearch,
+      onChange: ev => setPbSearch(ev.target.value),
+      placeholder: "🔍 Search materials, category, or trade…"
+    }), !rows.length && /*#__PURE__*/React.createElement("p", {
+      className: "hint"
+    }, "No prices match “", pbSearch, "”."), trades.map(tr => {
+      const list = byTrade[tr];
+      const tKey = "t:" + tr,
+        tOpen = !!pbGrpOpen[tKey] || !!q;
+      const byCat = {};
+      list.forEach(e => {
+        const c = (e.category || "").trim() || "Uncategorized";
+        (byCat[c] = byCat[c] || []).push(e);
+      });
+      const cats = Object.keys(byCat).sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
+      return /*#__PURE__*/React.createElement("div", {
+        key: tr
+      }, /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => togglePbGrp(tKey),
+        style: barStyle(false)
+      }, /*#__PURE__*/React.createElement("span", null, tOpen ? "▾ " : "▸ ", tradeLabel(tr)), /*#__PURE__*/React.createElement("span", {
+        className: "hint",
+        style: {
+          fontWeight: 600
+        }
+      }, list.length, badge(list.filter(priceIsStale).length))), tOpen && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginLeft: 8
+        }
+      }, cats.map(c => {
+        const clist = byCat[c].slice().sort((a, b) => String(a.material || "").toLowerCase() < String(b.material || "").toLowerCase() ? -1 : 1);
+        const cKey = "c:" + tr + "|" + c,
+          cOpen = !!pbGrpOpen[cKey] || !!q;
+        return /*#__PURE__*/React.createElement("div", {
+          key: c
+        }, /*#__PURE__*/React.createElement("button", {
+          type: "button",
+          onClick: () => togglePbGrp(cKey),
+          style: barStyle(true)
+        }, /*#__PURE__*/React.createElement("span", null, cOpen ? "▾ " : "▸ ", c), /*#__PURE__*/React.createElement("span", {
+          className: "hint",
+          style: {
+            fontWeight: 600
+          }
+        }, clist.length, badge(clist.filter(priceIsStale).length))), cOpen && /*#__PURE__*/React.createElement("div", {
+          style: {
+            marginLeft: 6,
+            marginBottom: 6
+          }
+        }, clist.map(rowEditor), /*#__PURE__*/React.createElement("button", {
+          className: "btn ghost full",
+          onClick: () => pbAdd(tr, c === "Uncategorized" ? "" : c)
+        }, "+ add to ", c === "Uncategorized" ? tradeLabel(tr) : c)));
+      }), /*#__PURE__*/React.createElement("button", {
+        className: "btn ghost full",
+        style: {
+          marginBottom: 6
+        },
+        onClick: () => pbAdd(tr, "")
+      }, "+ add to ", tradeLabel(tr))));
+    }));
+  })(), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 8
     },
-    onClick: pbAdd
+    onClick: () => pbAdd()
   }, "+ Add a price"), (() => {
     const n = enginePB.filter(priceIsStale).length;
     return n > 0 ? /*#__PURE__*/React.createElement("div", {
@@ -13038,22 +13468,22 @@ function App() {
   }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost",
     onClick: csvResetImport
-  }, "Cancel"))))), /*#__PURE__*/React.createElement("section", {
+  }, "Cancel"))))), matCosts.length > 0 && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
-  }, "Your material price list ", /*#__PURE__*/React.createElement("span", {
+  }, "Older flat price list ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "CSV")), /*#__PURE__*/React.createElement("p", {
+  }, "legacy — being retired")), /*#__PURE__*/React.createElement("p", {
     className: "hint",
     style: {
       marginTop: -2
     }
-  }, "Upload a CSV of your real material costs and your estimates will use YOUR prices instead of estimates. Columns: ", /*#__PURE__*/React.createElement("b", null, "name, unit, cost"), " (a header row is fine)."), matCosts.length > 0 ? /*#__PURE__*/React.createElement("div", {
+  }, "An older CSV list with no trades or dates. Consolidate it into your governed price book (above) so these prices get trades, dedup, and staleness tracking — then this card goes away."), /*#__PURE__*/React.createElement("div", {
     className: "matsummary"
   }, /*#__PURE__*/React.createElement("div", {
     className: "matcount"
-  }, "✓ ", matCosts.length, " material price", matCosts.length !== 1 ? "s" : "", " loaded"), /*#__PURE__*/React.createElement("div", {
+  }, "✓ ", matCosts.length, " legacy price", matCosts.length !== 1 ? "s" : ""), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "8px 11px",
       background: "#FFF7E6",
@@ -13082,41 +13512,10 @@ function App() {
     className: "hint"
   }, "…and ", matCosts.length - 5, " more")), /*#__PURE__*/React.createElement("div", {
     className: "btnrow"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "btn ghost grow1"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: ".csv,text/csv",
-    style: {
-      display: "none"
-    },
-    onChange: e => {
-      handleMatCsv(e.target.files[0]);
-      e.target.value = "";
-    }
-  }), "Replace CSV"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("button", {
     className: "btn ghost grow1",
     onClick: clearMatCosts
-  }, "Clear list"))) : /*#__PURE__*/React.createElement("label", {
-    className: "dropzone slim"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: ".csv,text/csv",
-    style: {
-      display: "none"
-    },
-    onChange: e => {
-      handleMatCsv(e.target.files[0]);
-      e.target.value = "";
-    }
-  }), /*#__PURE__*/React.createElement("b", null, matCostBusy ? "Reading…" : "⬆ Upload material cost CSV")), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 8
-    }
-  }, "Example row: ", /*#__PURE__*/React.createElement("span", {
-    className: "mono"
-  }, "GAF Timberline HDZ, square, 118.50"))), /*#__PURE__*/React.createElement("section", {
+  }, "Clear list")))), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("button", {
     className: "bookhead",
@@ -13126,15 +13525,15 @@ function App() {
     style: {
       margin: 0
     }
-  }, "Price book ", /*#__PURE__*/React.createElement("span", {
+  }, "Seed defaults ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, priceBook.length, " items")), /*#__PURE__*/React.createElement("span", {
+  }, "fallback prices · ", priceBook.length, " items")), /*#__PURE__*/React.createElement("span", {
     className: "bookchev"
   }, bookOpen === "price" ? "▲" : "▼")), bookOpen === "price" && /*#__PURE__*/React.createElement("div", {
     className: "bookbody"
   }, /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Your material unit costs. The estimator uses these when a takeoff line matches. Edit any price to YOUR supplier pricing."), [...new Set(priceBook.map(m => m.cat))].map(cat => /*#__PURE__*/React.createElement("div", {
+  }, "Built-in fallback unit costs — used only when a takeoff line has no match in ", /*#__PURE__*/React.createElement("b", null, "your"), " Material Pricing book above. Edit any price toward your market, or add your real costs above so these are never reached."), [...new Set(priceBook.map(m => m.cat))].map(cat => /*#__PURE__*/React.createElement("div", {
     key: cat,
     className: "bookcat"
   }, /*#__PURE__*/React.createElement("div", {
@@ -14264,9 +14663,10 @@ function App() {
         className: "hint"
       }, "tap any field to edit")), /*#__PURE__*/React.createElement("div", {
         className: "takeoff"
-      }, t.items.map((it, i) => /*#__PURE__*/React.createElement("div", {
-        className: "toitem",
+      }, t.items.map((it, i) => /*#__PURE__*/React.createElement(React.Fragment, {
         key: i
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "toitem"
       }, /*#__PURE__*/React.createElement("input", {
         className: "toname",
         value: it.name,
@@ -14291,13 +14691,21 @@ function App() {
         onChange: e => estItemSet(ti, i, "unitPrice", e.target.value)
       })), /*#__PURE__*/React.createElement("b", {
         className: "tolinecost",
-        title: it.unpriced ? "No price in your cost book — add this material's price" : it.placeholder || it.priceTier === "seed" ? "Placeholder/seed price — not your real cost yet; tune it before this rolls into a sell price" : it.priceTier === "pricebook" ? "Priced from your price book" : it.priceTier === "retail" ? "HD/Lowe's retail — verify" : ""
+        title: (it.priceNote ? it.priceNote + " · " : "") + (it.unpriced ? "No price in your cost book — add this material's price" : it.placeholder || it.priceTier === "seed" ? "Placeholder/seed price — not your real cost yet; tune it before this rolls into a sell price" : it.priceTier === "pricebook" ? "Priced from your price book" : it.priceTier === "retail" ? "HD/Lowe's retail — verify" : "")
       }, it.unpriced ? "⚠️ " : it.placeholder || it.priceTier === "seed" ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : "", $0(it.cost)), /*#__PURE__*/React.createElement("button", {
         className: "todel",
         onClick: () => estItemDel(ti, i)
       }, /*#__PURE__*/React.createElement(X, {
         size: 14
-      })))), /*#__PURE__*/React.createElement("button", {
+      }))), it.priceNote ? /*#__PURE__*/React.createElement("div", {
+        className: "tonote",
+        style: {
+          fontSize: 11,
+          lineHeight: 1.3,
+          margin: "-2px 0 4px 2px",
+          color: /tap to set/.test(it.priceNote) ? "#8A5A12" : "#6b7280"
+        }
+      }, /tap to set/.test(it.priceNote) ? "⚠️ " : "≈ ", it.priceNote) : null)), /*#__PURE__*/React.createElement("button", {
         className: "btn ghost full",
         onClick: () => estItemAdd(ti)
       }, /*#__PURE__*/React.createElement(Plus, {
