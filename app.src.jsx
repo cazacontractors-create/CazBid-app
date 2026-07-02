@@ -2103,6 +2103,18 @@ function App() {
   };
   // ---- engine price book (manual entry) ----
   const saveEnginePB = (next) => { setEnginePB(next); pSet(ENGINE_PB_KEY, next); };
+  // MATERIAL PRICING HUB Part 2 — ONE canonical price list for the LLM prompt. Unions the governed
+  // enginePB (trade/date/dedup) FIRST, then the legacy matCosts + seed priceBook, deduped by name,
+  // capped for token safety. Fixes the gap where enginePB prices never reached the prompt (only the
+  // by-name takeoff concat + deterministic engine saw them). The by-name concat stays a union too.
+  const contractorPriceLines = () => {
+    const seen = new Set(), out = [];
+    const add = (name, unit, cost) => { const nm = String(name || "").trim(), key = nm.toLowerCase(); if (!nm || !(num(cost) > 0) || seen.has(key)) return; seen.add(key); out.push("- " + nm + (unit ? " (" + unit + ")" : "") + ": $" + (num(cost)) ); };
+    (enginePB || []).forEach((e) => add(e.material, e.unit, e.unitCost));
+    (matCosts || []).forEach((m) => add(m.name, m.unit, m.cost));
+    (priceBook || []).forEach((p) => add(p.name, p.unit, p.price));
+    return out.slice(0, 120);
+  };
   // PART 5 — stale export ("reprice run" list). Rows stale per priceIsStale, grouped supplier → trade.
   const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const downloadText = (text, filename, mime) => {
@@ -2248,13 +2260,32 @@ function App() {
     let added = 0, updated = 0;
     valid.forEach((r) => {
       const idx = next.findIndex((e) => e.trade === r.trade && sim(e.material, r.material) >= 0.8);
-      const entry = { trade: r.trade, category: r.category || "", material: r.material, unit: r.unit || "", unitCost: num(r.cost), source: { method: csvMethod || "csv", supplier: csvSupplier || "", date: date } };
+      // LEGACY migration keeps NO date — an unknown age must LOOK stale, not falsely fresh.
+      const entry = { trade: r.trade, category: r.category || "", material: r.material, unit: r.unit || "", unitCost: num(r.cost), source: { method: csvMethod || "csv", supplier: csvSupplier || "", date: csvMethod === "legacy" ? "" : date } };
       if (idx >= 0) { next[idx] = { ...next[idx], ...entry }; updated++; }
       else { next.push({ id: "pb" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ...entry }); added++; }
     });
     saveEnginePB(next);
+    if (csvMethod === "legacy") { setMatCosts([]); pSet(MATCOST_KEY, []); } // retire the ungoverned store once folded in
     csvResetImport(); setPbImportOpen(false);
     flash("Committed " + added + " new + " + updated + " updated to your price book.");
+  };
+  // MIGRATION (Part 2) — fold the ungoverned legacy matCosts into the canonical book via the SAME
+  // categorize → review → commit gate. Rows land as source.method="legacy" with NO date (looks stale).
+  const migrateLegacyPrices = async () => {
+    if (!matCosts.length) { flash("No legacy CSV prices to consolidate."); return; }
+    setCsvBusy(true);
+    try {
+      const batch = matCosts.slice(0, 120);
+      const res = await fetch("/.netlify/functions/categorize-prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ materials: batch.map((m) => m.name) }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+      setCsvMethod("legacy"); setCsvSupplier("");
+      setCsvReview(batch.map((m, i) => { const c = (d.rows && d.rows[i]) || {}; return { material: m.name, unit: m.unit || "", cost: num(m.cost), trade: c.trade || "other", category: c.category || "", confidence: c.confidence != null ? c.confidence : 0 }; }));
+      setWhPbOpen(true); setPbImportOpen(true);
+      flash("Review these " + batch.length + " legacy prices, set any 'other' trades, then commit.");
+    } catch (e) { flash("Consolidate failed: " + errMsg(e)); }
+    setCsvBusy(false);
   };
   // One non-deterministic house trade (roofing, windows, kitchen, …) → an LLM
   // estimate via the SAME server path the categories estimator uses, then a
@@ -3361,8 +3392,7 @@ function App() {
         "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" +
         "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" +
         (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") +
-        (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map((m) => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") +
-        "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map((m) => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" +
+        (contractorPriceLines().length ? "THIS CONTRACTOR'S PRICE BOOK — their REAL material unit costs. Use THESE exact costs when a takeoff line matches (match by name loosely); they override your estimates and are more accurate than any guess:\n" + contractorPriceLines().join("\n") + "\n" : "") +
         "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
         "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" +
         "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" +
@@ -5676,12 +5706,19 @@ function App() {
       {me.role === "contractor" && tab === "settings" && !overlay && (
         <main className="page">
           <div className="pagetitle">Profile &amp; Settings</div>
+          {/* PROFILE REORG Part 1 — jump-nav to the five groups (one scrollable page; no routes change). */}
+          <div className="profnav">
+            {[["Business", "prof-business"], ["Preferences", "prof-brands"], ["Assistant", "prof-al"], ["Pricing", "prof-pricing"], ["Account", "prof-app"]].map(([label, gid]) => (
+              <button key={gid} className="profchip" onClick={() => { const el = document.getElementById(gid); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{label}</button>
+            ))}
+          </div>
           {needsSetup && (
             <section className="card setupbanner">
               <b>Welcome! Set up your profile first</b>
               <span>Add your company name and trades below and tap Save profile. Homeowners pick contractors from their profiles, so this is your first impression.</span>
             </section>
           )}
+          <div id="prof-business" className="secgroup">Business &amp; standards <span className="hint">your company details (public) + your Caza Manual, cost book &amp; rates (private) — split coming next</span></div>
           <section className="card">
             <div className="profedit">
               <Avatar user={profC} size="xl" onTap={() => document.getElementById("avc").click()} />
@@ -5807,25 +5844,8 @@ function App() {
             <ReviewList uid={me.uidC} role="contractor" emptyText="No written reviews yet — finish jobs and they'll show up here." />
           </section>
 
-          <section className="card">
-            <div className="h2">Subscription <span className="hint">demo — no real billing</span></div>
-            <div className="plangrid">
-              {PLANS.map((pl) => (
-                <button key={pl.id} className={"plan" + (me.plan === pl.id ? " on" : "")} onClick={() => setMe({ ...me, plan: pl.id })}>
-                  <b>{pl.name}</b>
-                  <span className="planprice">${pl.price}<i>/mo</i></span>
-                  <span className="hint">{pl.blurb}</span>
-                  {me.plan === pl.id && <span className="planon">✓ Active</span>}
-                </button>
-              ))}
-            </div>
-            {myPlan && myPlan.limit > 0 && <p className="hint" style={{ marginTop: 8 }}>{monthApps} of {myPlan.limit} applications used this month.</p>}
-            <p className="hint" style={{ marginTop: 6 }}>Flat fee, no cut of your jobs — homeowners pay you directly.</p>
-          </section>
-          <div className="chooserbtns">
-            <button className="btn ghost grow1" onClick={shareApp}><Share size={15} /> Invite someone</button>
-            <button className="btn ghost grow1" onClick={sendFeedback}><MessageSquare size={15} /> Send feedback</button>
-          </div>
+          {/* PROFILE REORG Part 1 — Subscription + Invite/feedback moved to the ACCOUNT & APP group at the bottom (out of the estimating-setup flow). */}
+          <div id="prof-brands" className="secgroup">Your preferences <span className="hint">brands &amp; tiers AL builds around — private, never shown to homeowners</span></div>
           <section className="card">
             <div className="h2">Preferred material brands</div>
             <p className="hint" style={{ marginTop: -2 }}>AL leans on these as defaults in your estimates and good/better/best options.</p>
@@ -5863,6 +5883,7 @@ function App() {
             </button>
           </section>
 
+          <div id="prof-al" className="secgroup">Assistant</div>
           <section className="card">
             <div className="h2">Assistant voice <span className="hint">who talks &amp; helps you estimate</span></div>
             <p className="hint" style={{ marginTop: -2 }}>Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, set its speed, then Use.</p>
@@ -5892,12 +5913,18 @@ function App() {
             <p className="hint" style={{ marginTop: 8 }}>Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.</p>
           </section>
 
+          <div id="prof-pricing" className="secgroup">Pricing &amp; cost data <span className="hint">your real costs — homeowners only ever see a range</span></div>
           <section className="card">
             <div className="h2">Your material price list <span className="hint">CSV</span></div>
             <p className="hint" style={{ marginTop: -2 }}>Upload a CSV of your real material costs and your estimates will use YOUR prices instead of estimates. Columns: <b>name, unit, cost</b> (a header row is fine).</p>
             {matCosts.length > 0 ? (
               <div className="matsummary">
                 <div className="matcount">✓ {matCosts.length} material price{matCosts.length !== 1 ? "s" : ""} loaded</div>
+                {/* Part 2: fold this ungoverned legacy list into the ONE governed price book (trades + dates + dedup). */}
+                <div style={{ padding: "8px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10, marginBottom: 8 }}>
+                  <div style={{ fontSize: 12.5, color: "#8A5A12" }}>These are an <b>older flat list</b> (no trade, no dates). Consolidate them into your governed price book so they get trades, dedup, and staleness tracking.</div>
+                  <button className="btn primary full" style={{ marginTop: 6 }} disabled={csvBusy} onClick={migrateLegacyPrices}>{csvBusy ? "Sorting…" : "⇪ Consolidate into my price book"}</button>
+                </div>
                 <div className="matpreview">
                   {matCosts.slice(0, 5).map((m, i) => (
                     <div className="matrow" key={i}><span>{m.name}{m.unit ? " (" + m.unit + ")" : ""}</span><b>{$0(m.cost)}</b></div>
@@ -5972,6 +5999,28 @@ function App() {
               </div>
             )}
           </section>
+
+          {/* ACCOUNT & APP — moved here from the middle so it doesn't interrupt the estimating-setup flow. */}
+          <div id="prof-app" className="secgroup">Account &amp; app</div>
+          <section className="card">
+            <div className="h2">Subscription <span className="hint">demo — no real billing</span></div>
+            <div className="plangrid">
+              {PLANS.map((pl) => (
+                <button key={pl.id} className={"plan" + (me.plan === pl.id ? " on" : "")} onClick={() => setMe({ ...me, plan: pl.id })}>
+                  <b>{pl.name}</b>
+                  <span className="planprice">${pl.price}<i>/mo</i></span>
+                  <span className="hint">{pl.blurb}</span>
+                  {me.plan === pl.id && <span className="planon">✓ Active</span>}
+                </button>
+              ))}
+            </div>
+            {myPlan && myPlan.limit > 0 && <p className="hint" style={{ marginTop: 8 }}>{monthApps} of {myPlan.limit} applications used this month.</p>}
+            <p className="hint" style={{ marginTop: 6 }}>Flat fee, no cut of your jobs — homeowners pay you directly.</p>
+          </section>
+          <div className="chooserbtns">
+            <button className="btn ghost grow1" onClick={shareApp}><Share size={15} /> Invite someone</button>
+            <button className="btn ghost grow1" onClick={sendFeedback}><MessageSquare size={15} /> Send feedback</button>
+          </div>
         </main>
       )}
 
@@ -6471,6 +6520,19 @@ function App() {
                     <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
                     {csvBusy && <p className="hint">Reading the price sheet…</p>}
                     <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
+                    {/* Part 3 — supplier quick-pick: your Caza Manual vendors + common suppliers, tags the import's source.supplier. */}
+                    {(() => {
+                      const ven = cazaManualOf(profC.cazaManual).vendors;
+                      const list = [...new Set((((ven && ven.preferred) || []).map((v) => v.name).filter(Boolean)).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+                      return list.length ? (
+                        <div style={{ marginBottom: 6 }}>
+                          <div className="hint">Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                            {list.map((s) => (<button key={s} type="button" className="btn ghost" style={{ padding: "3px 10px", fontSize: 12, fontWeight: csvSupplier === s ? 700 : 400, borderColor: csvSupplier === s ? "#14a04a" : undefined }} onClick={() => setCsvSupplier(s)}>{csvSupplier === s ? "✓ " : ""}{s}</button>))}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
                     <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
                     <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
                     <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
@@ -7108,6 +7170,12 @@ button{cursor:pointer;font:inherit}
 .bkval{width:72px;text-align:right;flex-shrink:0}
 .matsummary{margin-top:6px}
 .matcount{font-weight:600;color:#157F3D;font-size:14px;margin-bottom:8px}
+/* Profile reorg — group headers + jump-nav chips */
+.secgroup{font-family:'Barlow Condensed';font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:19px;color:#0a7d36;margin:18px 2px 4px;scroll-margin-top:12px}
+.secgroup .hint{text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;color:#667085;display:block}
+.profnav{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.profchip{background:#fff;border:1.5px solid #cfe6d8;color:#0a7d36;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.profchip:active{background:#0a7d36;color:#fff}
 .matpreview{border:1px solid #EEF0F3;border-radius:10px;padding:8px 10px;margin-bottom:10px}
 .matrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0}
 .matrow b{font-family:'JetBrains Mono',monospace}
