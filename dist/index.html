@@ -5411,6 +5411,25 @@ function App() {
     setEnginePB(next);
     pSet(ENGINE_PB_KEY, next);
   };
+  // MATERIAL PRICING HUB Part 2 — ONE canonical price list for the LLM prompt. Unions the governed
+  // enginePB (trade/date/dedup) FIRST, then the legacy matCosts + seed priceBook, deduped by name,
+  // capped for token safety. Fixes the gap where enginePB prices never reached the prompt (only the
+  // by-name takeoff concat + deterministic engine saw them). The by-name concat stays a union too.
+  const contractorPriceLines = () => {
+    const seen = new Set(),
+      out = [];
+    const add = (name, unit, cost) => {
+      const nm = String(name || "").trim(),
+        key = nm.toLowerCase();
+      if (!nm || !(num(cost) > 0) || seen.has(key)) return;
+      seen.add(key);
+      out.push("- " + nm + (unit ? " (" + unit + ")" : "") + ": $" + num(cost));
+    };
+    (enginePB || []).forEach(e => add(e.material, e.unit, e.unitCost));
+    (matCosts || []).forEach(m => add(m.name, m.unit, m.cost));
+    (priceBook || []).forEach(p => add(p.name, p.unit, p.price));
+    return out.slice(0, 120);
+  };
   // PART 5 — stale export ("reprice run" list). Rows stale per priceIsStale, grouped supplier → trade.
   const csvCell = v => {
     const s = String(v == null ? "" : v);
@@ -5753,6 +5772,7 @@ function App() {
       updated = 0;
     valid.forEach(r => {
       const idx = next.findIndex(e => e.trade === r.trade && sim(e.material, r.material) >= 0.8);
+      // LEGACY migration keeps NO date — an unknown age must LOOK stale, not falsely fresh.
       const entry = {
         trade: r.trade,
         category: r.category || "",
@@ -5762,7 +5782,7 @@ function App() {
         source: {
           method: csvMethod || "csv",
           supplier: csvSupplier || "",
-          date: date
+          date: csvMethod === "legacy" ? "" : date
         }
       };
       if (idx >= 0) {
@@ -5780,9 +5800,55 @@ function App() {
       }
     });
     saveEnginePB(next);
+    if (csvMethod === "legacy") {
+      setMatCosts([]);
+      pSet(MATCOST_KEY, []);
+    } // retire the ungoverned store once folded in
     csvResetImport();
     setPbImportOpen(false);
     flash("Committed " + added + " new + " + updated + " updated to your price book.");
+  };
+  // MIGRATION (Part 2) — fold the ungoverned legacy matCosts into the canonical book via the SAME
+  // categorize → review → commit gate. Rows land as source.method="legacy" with NO date (looks stale).
+  const migrateLegacyPrices = async () => {
+    if (!matCosts.length) {
+      flash("No legacy CSV prices to consolidate.");
+      return;
+    }
+    setCsvBusy(true);
+    try {
+      const batch = matCosts.slice(0, 120);
+      const res = await fetch("/.netlify/functions/categorize-prices", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          materials: batch.map(m => m.name)
+        })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
+      setCsvMethod("legacy");
+      setCsvSupplier("");
+      setCsvReview(batch.map((m, i) => {
+        const c = d.rows && d.rows[i] || {};
+        return {
+          material: m.name,
+          unit: m.unit || "",
+          cost: num(m.cost),
+          trade: c.trade || "other",
+          category: c.category || "",
+          confidence: c.confidence != null ? c.confidence : 0
+        };
+      }));
+      setWhPbOpen(true);
+      setPbImportOpen(true);
+      flash("Review these " + batch.length + " legacy prices, set any 'other' trades, then commit.");
+    } catch (e) {
+      flash("Consolidate failed: " + errMsg(e));
+    }
+    setCsvBusy(false);
   };
   // One non-deterministic house trade (roofing, windows, kitchen, …) → an LLM
   // estimate via the SAME server path the categories estimator uses, then a
@@ -7688,7 +7754,7 @@ function App() {
       // general knowledge, but flags LOWER confidence, asks for the contractor's real numbers, and
       // surfaces assumptions. (Materials/brands/labor rates still travel; only a standard assembly = "in-manual".)
       const __offManual = cazaManualFor(scope, desc, profC.cazaManual).assemblies.length === 0;
-      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (excludeList ? "SCOPE BOUNDARY — OTHER trades on this job already own the following; do NOT include, re-bid, or price ANY of these here (each is billed by its own block, so counting it again double-bills the customer): " + excludeList + ". Bid ONLY this trade's own materials and labor.\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (matCosts.length ? "THIS CONTRACTOR'S OWN MATERIAL PRICE LIST (use THESE exact unit costs when a line matches — they are real supplier prices, more accurate than any estimate; match by name loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (these are THEIR material unit costs — use them when a takeoff line matches, match by name loosely; they override your estimates):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" + (tierPref && (tierPref.good || tierPref.better || tierPref.best) ? "THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map(k => tierPref[k] ? k + "=" + tierPref[k] : "").filter(Boolean).join(", ") + ".\n" : "") + cazaManualBlock(scope, desc, profC.cazaManual) + (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+      const prompt = "You are a senior estimator for an established, fully-insured exterior/roofing contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand to a customer.\n" + "JOB: " + (desc.trim() || "(see photos)") + "\n" + (dims ? dims + "\n" : "") + (scope ? "WORK TYPE: " + scope + "\n" : "") + (excludeList ? "SCOPE BOUNDARY — OTHER trades on this job already own the following; do NOT include, re-bid, or price ANY of these here (each is billed by its own block, so counting it again double-bills the customer): " + excludeList + ". Bid ONLY this trade's own materials and labor.\n" : "") + (photos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL figures: burdened labor rate per man-hour (small-market rate, ~$45-70/hr for most trades, not inflated metro/union numbers), real material unit costs (contractor pricing), local sales tax rate, equipment/disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE, itemized materials takeoff with quantity, unit, and total cost per line. The FIRST item must be the PRIMARY material (slate/shingle/metal for roofing, siding product for siding, decking for decks).\n" + TRADE_BASE_RULES + tradeModuleFor(scope, desc) + (aiTrade && aiTrade.trade === scope ? aiTradeModule(aiTrade) : "") + "Use the measured dimensions above and (for roofing) the EagleView formulas to set quantities. A typical full job has 8-15+ line items, not two. Suggest a sensible crew size and resulting days on site.\n" + "LABOR - FOLLOW THIS PROCEDURE IN ORDER, DO NOT SKIP STEP 1:\n" + "STEP 1 (REQUIRED FIRST): Look in the CONTRACTOR PRODUCTION RATES list below for the rate(s) that match the labor tasks in this job (match by name loosely - a standing seam job matches \"Standing seam panel install\", a slate job matches \"Slate / Nu-Lok install\", plus tear-off, flashing, ridge, etc.). For EACH matching task compute hours = quantity x that MH/unit rate, then ADD them up. These are the contractor REAL numbers and ALWAYS take priority over your own per-square guesses.\n" + "STEP 2 (ONE combined difficulty multiplier, do NOT stack several): pick a SINGLE factor for the whole job based on the hardest condition, and CAP it at 1.5. Guide: easy/walkable = 1.0; moderate (6-8/12 or somewhat cut up) = 1.15-1.25; steep AND complex (8/12+ with many facets/valleys) = 1.35-1.5 MAX. Do not multiply steep x complex x access together - choose one combined number in that range. Apply it to the INSTALL labor only, not to tear-off, flashing, or trim lines.\n" + "STEP 3 (fallback ONLY if nothing matched): if and ONLY if NO task in the rate book matches, estimate from benchmarks - asphalt re-roof ~1.5-2.5 MH/sq; steep/complex/tear-off/specialty much higher (slate or standing seam 4-12+ MH/sq). Never return 0 or a token number like 16 hours for a big roof.\n" + "Set laborHours = TOTAL man-hours after multipliers. Set laborSource to \"ratebook\" if ANY hours came from STEP 1, or \"estimate\" only if you used STEP 3 for everything. Set a burdened rate per man-hour and days = laborHours / (crew x ~8).\n" + (profC.prefMaterials && profC.prefMaterials.trim() ? "THIS CONTRACTOR'S PREFERRED BRANDS (favor these in the takeoff and in the options below when they fit the job): " + profC.prefMaterials.trim() + "\n" : "") + (contractorPriceLines().length ? "THIS CONTRACTOR'S PRICE BOOK — their REAL material unit costs. Use THESE exact costs when a takeoff line matches (match by name loosely); they override your estimates and are more accurate than any guess:\n" + contractorPriceLines().join("\n") + "\n" : "") + "CONTRACTOR'S PRODUCTION RATES (man-hours per unit, sq = 100 sqft — use these to compute labor hours for matching tasks):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "ALSO provide a GOOD / BETTER / BEST set of 3 popular, commonly-stocked PRIMARY-material options for this region (real product lines a local supplier like ABC Supply, SRS, Beacon, Home Depot or Lowe's actually carries — e.g. for roofing: a 3-tab or builder shingle, a mid architectural like GAF Timberline HDZ, and a premium/designer line). For each give a name, a one-line why, the total material cost for THIS job's primary-material quantity at that tier, and a real search URL (a manufacturer product page or a supplier/Home Depot/Lowe's search URL). Do not invent fake URLs — use a real product or a search link like https://www.homedepot.com/s/timberline%20hdz.\n" + "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" + (tierPref && (tierPref.good || tierPref.better || tierPref.best) ? "THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map(k => tierPref[k] ? k + "=" + tierPref[k] : "").filter(Boolean).join(", ") + ".\n" : "") + cazaManualBlock(scope, desc, profC.cazaManual) + (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") + "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" + "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [...photos.slice(0, 3).map(ph => {
         const mt = ph.startsWith("data:") ? ph.substring(5, ph.indexOf(";")) || "image/jpeg" : "image/jpeg";
         return {
@@ -11786,9 +11852,26 @@ function App() {
     className: "page"
   }, /*#__PURE__*/React.createElement("div", {
     className: "pagetitle"
-  }, "Profile & Settings"), needsSetup && /*#__PURE__*/React.createElement("section", {
+  }, "Profile & Settings"), /*#__PURE__*/React.createElement("div", {
+    className: "profnav"
+  }, [["Business", "prof-business"], ["Preferences", "prof-brands"], ["Assistant", "prof-al"], ["Pricing", "prof-pricing"], ["Account", "prof-app"]].map(([label, gid]) => /*#__PURE__*/React.createElement("button", {
+    key: gid,
+    className: "profchip",
+    onClick: () => {
+      const el = document.getElementById(gid);
+      if (el) el.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
+  }, label))), needsSetup && /*#__PURE__*/React.createElement("section", {
     className: "card setupbanner"
-  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Add your company name and trades below and tap Save profile. Homeowners pick contractors from their profiles, so this is your first impression.")), /*#__PURE__*/React.createElement("section", {
+  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Add your company name and trades below and tap Save profile. Homeowners pick contractors from their profiles, so this is your first impression.")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-business",
+    className: "secgroup"
+  }, "Business & standards ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "your company details (public) + your Caza Manual, cost book & rates (private) — split coming next")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "profedit"
@@ -12339,50 +12422,12 @@ function App() {
     uid: me.uidC,
     role: "contractor",
     emptyText: "No written reviews yet — finish jobs and they'll show up here."
-  })), /*#__PURE__*/React.createElement("section", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "h2"
-  }, "Subscription ", /*#__PURE__*/React.createElement("span", {
+  })), /*#__PURE__*/React.createElement("div", {
+    id: "prof-brands",
+    className: "secgroup"
+  }, "Your preferences ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "demo — no real billing")), /*#__PURE__*/React.createElement("div", {
-    className: "plangrid"
-  }, PLANS.map(pl => /*#__PURE__*/React.createElement("button", {
-    key: pl.id,
-    className: "plan" + (me.plan === pl.id ? " on" : ""),
-    onClick: () => setMe({
-      ...me,
-      plan: pl.id
-    })
-  }, /*#__PURE__*/React.createElement("b", null, pl.name), /*#__PURE__*/React.createElement("span", {
-    className: "planprice"
-  }, "$", pl.price, /*#__PURE__*/React.createElement("i", null, "/mo")), /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, pl.blurb), me.plan === pl.id && /*#__PURE__*/React.createElement("span", {
-    className: "planon"
-  }, "✓ Active")))), myPlan && myPlan.limit > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 8
-    }
-  }, monthApps, " of ", myPlan.limit, " applications used this month."), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      marginTop: 6
-    }
-  }, "Flat fee, no cut of your jobs — homeowners pay you directly.")), /*#__PURE__*/React.createElement("div", {
-    className: "chooserbtns"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost grow1",
-    onClick: shareApp
-  }, /*#__PURE__*/React.createElement(Share, {
-    size: 15
-  }), " Invite someone"), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost grow1",
-    onClick: sendFeedback
-  }, /*#__PURE__*/React.createElement(MessageSquare, {
-    size: 15
-  }), " Send feedback")), /*#__PURE__*/React.createElement("section", {
+  }, "brands & tiers AL builds around — private, never shown to homeowners")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12484,7 +12529,10 @@ function App() {
     },
     disabled: busy === "prof",
     onClick: () => saveProfile("contractor")
-  }, busy === "prof" ? "Saving…" : "Save preferences")), /*#__PURE__*/React.createElement("section", {
+  }, busy === "prof" ? "Saving…" : "Save preferences")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-al",
+    className: "secgroup"
+  }, "Assistant"), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12584,7 +12632,12 @@ function App() {
     style: {
       marginTop: 8
     }
-  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.")), /*#__PURE__*/React.createElement("section", {
+  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-pricing",
+    className: "secgroup"
+  }, "Pricing & cost data ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "your real costs — homeowners only ever see a range")), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12600,6 +12653,26 @@ function App() {
   }, /*#__PURE__*/React.createElement("div", {
     className: "matcount"
   }, "✓ ", matCosts.length, " material price", matCosts.length !== 1 ? "s" : "", " loaded"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "8px 11px",
+      background: "#FFF7E6",
+      border: "1px solid #F2C98A",
+      borderRadius: 10,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8A5A12"
+    }
+  }, "These are an ", /*#__PURE__*/React.createElement("b", null, "older flat list"), " (no trade, no dates). Consolidate them into your governed price book so they get trades, dedup, and staleness tracking."), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    style: {
+      marginTop: 6
+    },
+    disabled: csvBusy,
+    onClick: migrateLegacyPrices
+  }, csvBusy ? "Sorting…" : "⇪ Consolidate into my price book")), /*#__PURE__*/React.createElement("div", {
     className: "matpreview"
   }, matCosts.slice(0, 5).map((m, i) => /*#__PURE__*/React.createElement("div", {
     className: "matrow",
@@ -12765,7 +12838,53 @@ function App() {
       unit: "sq",
       rate: 1
     }])
-  }, "+ Add task")))), me.role === "contractor" && tab === "estimator" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }, "+ Add task"))), /*#__PURE__*/React.createElement("div", {
+    id: "prof-app",
+    className: "secgroup"
+  }, "Account & app"), /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2"
+  }, "Subscription ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "demo — no real billing")), /*#__PURE__*/React.createElement("div", {
+    className: "plangrid"
+  }, PLANS.map(pl => /*#__PURE__*/React.createElement("button", {
+    key: pl.id,
+    className: "plan" + (me.plan === pl.id ? " on" : ""),
+    onClick: () => setMe({
+      ...me,
+      plan: pl.id
+    })
+  }, /*#__PURE__*/React.createElement("b", null, pl.name), /*#__PURE__*/React.createElement("span", {
+    className: "planprice"
+  }, "$", pl.price, /*#__PURE__*/React.createElement("i", null, "/mo")), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, pl.blurb), me.plan === pl.id && /*#__PURE__*/React.createElement("span", {
+    className: "planon"
+  }, "✓ Active")))), myPlan && myPlan.limit > 0 && /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 8
+    }
+  }, monthApps, " of ", myPlan.limit, " applications used this month."), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Flat fee, no cut of your jobs — homeowners pay you directly.")), /*#__PURE__*/React.createElement("div", {
+    className: "chooserbtns"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost grow1",
+    onClick: shareApp
+  }, /*#__PURE__*/React.createElement(Share, {
+    size: 15
+  }), " Invite someone"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost grow1",
+    onClick: sendFeedback
+  }, /*#__PURE__*/React.createElement(MessageSquare, {
+    size: 15
+  }), " Send feedback"))), me.role === "contractor" && tab === "estimator" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
   }, !myPlan || me.plan !== "pro" ? /*#__PURE__*/React.createElement("section", {
     className: "card"
@@ -14195,7 +14314,35 @@ function App() {
       margin: "8px 0",
       fontWeight: 600
     }
-  }, "— or import a CSV —"), /*#__PURE__*/React.createElement("label", {
+  }, "— or import a CSV —"), (() => {
+    const ven = cazaManualOf(profC.cazaManual).vendors;
+    const list = [...new Set((ven && ven.preferred || []).map(v => v.name).filter(Boolean).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+    return list.length ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, list.map(s => /*#__PURE__*/React.createElement("button", {
+      key: s,
+      type: "button",
+      className: "btn ghost",
+      style: {
+        padding: "3px 10px",
+        fontSize: 12,
+        fontWeight: csvSupplier === s ? 700 : 400,
+        borderColor: csvSupplier === s ? "#14a04a" : undefined
+      },
+      onClick: () => setCsvSupplier(s)
+    }, csvSupplier === s ? "✓ " : "", s)))) : null;
+  })(), /*#__PURE__*/React.createElement("label", {
     className: "estf"
   }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
     value: csvSupplier,
@@ -15476,6 +15623,12 @@ button{cursor:pointer;font:inherit}
 .bkval{width:72px;text-align:right;flex-shrink:0}
 .matsummary{margin-top:6px}
 .matcount{font-weight:600;color:#157F3D;font-size:14px;margin-bottom:8px}
+/* Profile reorg — group headers + jump-nav chips */
+.secgroup{font-family:'Barlow Condensed';font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:19px;color:#0a7d36;margin:18px 2px 4px;scroll-margin-top:12px}
+.secgroup .hint{text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;color:#667085;display:block}
+.profnav{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.profchip{background:#fff;border:1.5px solid #cfe6d8;color:#0a7d36;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.profchip:active{background:#0a7d36;color:#fff}
 .matpreview{border:1px solid #EEF0F3;border-radius:10px;padding:8px 10px;margin-bottom:10px}
 .matrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0}
 .matrow b{font-family:'JetBrains Mono',monospace}
