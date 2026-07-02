@@ -5718,10 +5718,10 @@ function App() {
           {needsSetup && (
             <section className="card setupbanner">
               <b>Welcome! Set up your profile first</b>
-              <span>Open <b>Business &amp; standards</b> below, add your company name and trades, and tap Save profile.</span>
+              <span>Open <b>Business profile</b> below, add your company name and trades, and tap Save &amp; publish.</span>
             </section>
           )}
-          <button type="button" className={"secgroup accord" + (gOpen.business ? " open" : "")} onClick={() => toggleGroup("business")}>Business &amp; standards <span className="hint">your company details (public) + your Caza Manual, cost book &amp; rates (private)</span><span className="accchev">{gOpen.business ? "▾" : "▸"}</span></button>
+          <button type="button" className={"secgroup accord" + (gOpen.business ? " open" : "")} onClick={() => toggleGroup("business")}>Business profile <span className="hint">what homeowners see — name, company, service area, bio</span><span className="accchev">{gOpen.business ? "▾" : "▸"}</span></button>
           <div id="prof-business" className="secbody" style={{ display: gOpen.business ? undefined : "none" }}>
           <section className="card">
             <div className="profedit">
@@ -5749,6 +5749,26 @@ function App() {
                 onChange={(e) => setProfC({ ...profC, radius: num(e.target.value) })} />
               <div className="bidends"><span>5 mi</span><span className="hint">how far you'll travel for jobs</span><span>100 mi</span></div>
             </label>
+            <label className="fld" style={{ marginTop: 8 }}><span>About your company</span>
+              <textarea className="desc" rows={3} value={profC.bio} onChange={(e) => setProfC({ ...profC, bio: e.target.value })}
+                placeholder="e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will." /></label>
+            <button className="btn primary full" disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
+              {busy === "prof" ? "Saving…" : "Save & publish"}
+            </button>
+            <p className="hint center" style={{ marginTop: 8 }}>This is your PUBLIC profile — Save &amp; publish updates what homeowners see. (Your private standards below auto-save on their own.)</p>
+          </section>
+
+          <section className="card">
+            <div className="h2">Reviews about you</div>
+            <ReviewList uid={me.uidC} role="contractor" emptyText="No written reviews yet — finish jobs and they'll show up here." />
+          </section>
+
+          </div>
+          {/* PROFILE REORG Part 2 — Caza Manual split OUT of the Business card into its own private group. */}
+          <button type="button" className={"secgroup accord" + (gOpen.manual ? " open" : "")} onClick={() => toggleGroup("manual")}>Caza Manual <span className="hint">your standards + cost book — private, auto-saves</span><span className="accchev">{gOpen.manual ? "▾" : "▸"}</span></button>
+          <div id="prof-manual" className="secbody" style={{ display: gOpen.manual ? undefined : "none" }}>
+          <section className="card">
+            <p className="hint" style={{ marginTop: 0 }}>Private — never shown to homeowners. Edits here auto-save; there's no publish button.</p>
             {/* COST BOOK — delivery / mobilization rates (used by every estimate's auto charge) */}
             <div className="seclabel" style={{ marginTop: 6 }}>Delivery / mobilization rates <span className="hint">cost book — your real costs, margin lands on top</span></div>
             <div className="estfields">
@@ -5834,21 +5854,7 @@ function App() {
                 <button className="btn ghost full" style={{ marginTop: 6 }} onClick={cmBrandAdd}><Plus size={14} /> Add brand</button>
               </div>
             ); })()}
-            <label className="fld" style={{ marginTop: 8 }}><span>About your company</span>
-              <textarea className="desc" rows={3} value={profC.bio} onChange={(e) => setProfC({ ...profC, bio: e.target.value })}
-                placeholder="e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will." /></label>
-            <button className="btn primary full" disabled={busy === "prof"} onClick={() => saveProfile("contractor")}>
-              {busy === "prof" ? "Saving…" : "Save profile"}
-            </button>
-            <p className="hint center" style={{ marginTop: 8 }}>Edits auto-save as drafts on this phone; Save publishes them to homeowners.</p>
           </section>
-
-          <section className="card">
-            <div className="h2">Reviews about you</div>
-            <ReviewList uid={me.uidC} role="contractor" emptyText="No written reviews yet — finish jobs and they'll show up here." />
-          </section>
-
-          {/* PROFILE REORG Part 1 — Subscription + Invite/feedback moved to the ACCOUNT & APP group at the bottom (out of the estimating-setup flow). */}
           </div>
           <button type="button" className={"secgroup accord" + (gOpen.brands ? " open" : "")} onClick={() => toggleGroup("brands")}>Your preferences <span className="hint">brands &amp; tiers AL builds around — private</span><span className="accchev">{gOpen.brands ? "▾" : "▸"}</span></button>
           <div id="prof-brands" className="secbody" style={{ display: gOpen.brands ? undefined : "none" }}>
