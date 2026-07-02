@@ -11850,13 +11850,13 @@ function App() {
     }
   }, "Tap a section to expand."), needsSetup && /*#__PURE__*/React.createElement("section", {
     className: "card setupbanner"
-  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Open ", /*#__PURE__*/React.createElement("b", null, "Business & standards"), " below, add your company name and trades, and tap Save profile.")), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Open ", /*#__PURE__*/React.createElement("b", null, "Business profile"), " below, add your company name and trades, and tap Save & publish.")), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "secgroup accord" + (gOpen.business ? " open" : ""),
     onClick: () => toggleGroup("business")
-  }, "Business & standards ", /*#__PURE__*/React.createElement("span", {
+  }, "Business profile ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your company details (public) + your Caza Manual, cost book & rates (private)"), /*#__PURE__*/React.createElement("span", {
+  }, "what homeowners see — name, company, service area, bio"), /*#__PURE__*/React.createElement("span", {
     className: "accchev"
   }, gOpen.business ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-business",
@@ -11963,7 +11963,59 @@ function App() {
     className: "bidends"
   }, /*#__PURE__*/React.createElement("span", null, "5 mi"), /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("div", {
+  }, "how far you'll travel for jobs"), /*#__PURE__*/React.createElement("span", null, "100 mi"))), /*#__PURE__*/React.createElement("label", {
+    className: "fld",
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "About your company"), /*#__PURE__*/React.createElement("textarea", {
+    className: "desc",
+    rows: 3,
+    value: profC.bio,
+    onChange: e => setProfC({
+      ...profC,
+      bio: e.target.value
+    }),
+    placeholder: "e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will."
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    disabled: busy === "prof",
+    onClick: () => saveProfile("contractor")
+  }, busy === "prof" ? "Saving…" : "Save & publish"), /*#__PURE__*/React.createElement("p", {
+    className: "hint center",
+    style: {
+      marginTop: 8
+    }
+  }, "This is your PUBLIC profile — Save & publish updates what homeowners see. (Your private standards below auto-save on their own.)")), /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2"
+  }, "Reviews about you"), /*#__PURE__*/React.createElement(ReviewList, {
+    uid: me.uidC,
+    role: "contractor",
+    emptyText: "No written reviews yet — finish jobs and they'll show up here."
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.manual ? " open" : ""),
+    onClick: () => toggleGroup("manual")
+  }, "Caza Manual ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "your standards + cost book — private, auto-saves"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.manual ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-manual",
+    className: "secbody",
+    style: {
+      display: gOpen.manual ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 0
+    }
+  }, "Private — never shown to homeowners. Edits here auto-save; there's no publish button."), /*#__PURE__*/React.createElement("div", {
     className: "seclabel",
     style: {
       marginTop: 6
@@ -12384,38 +12436,7 @@ function App() {
     }, /*#__PURE__*/React.createElement(Plus, {
       size: 14
     }), " Add brand"));
-  })(), /*#__PURE__*/React.createElement("label", {
-    className: "fld",
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "About your company"), /*#__PURE__*/React.createElement("textarea", {
-    className: "desc",
-    rows: 3,
-    value: profC.bio,
-    onChange: e => setProfC({
-      ...profC,
-      bio: e.target.value
-    }),
-    placeholder: "e.g. 15 years in business, fully insured, W-2 crews not day labor. We show up when we say we will."
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    disabled: busy === "prof",
-    onClick: () => saveProfile("contractor")
-  }, busy === "prof" ? "Saving…" : "Save profile"), /*#__PURE__*/React.createElement("p", {
-    className: "hint center",
-    style: {
-      marginTop: 8
-    }
-  }, "Edits auto-save as drafts on this phone; Save publishes them to homeowners.")), /*#__PURE__*/React.createElement("section", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "h2"
-  }, "Reviews about you"), /*#__PURE__*/React.createElement(ReviewList, {
-    uid: me.uidC,
-    role: "contractor",
-    emptyText: "No written reviews yet — finish jobs and they'll show up here."
-  }))), /*#__PURE__*/React.createElement("button", {
+  })())), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "secgroup accord" + (gOpen.brands ? " open" : ""),
     onClick: () => toggleGroup("brands")
