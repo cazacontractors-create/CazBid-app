@@ -5188,6 +5188,13 @@ function App() {
   const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
   const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
   const [cmOpen, setCmOpen] = useState(false); // Caza Manual editor (Profile) expanded
+  // FIX 2 — Profile groups are collapsible accordions (chips removed). Default collapsed ("five clean bars");
+  // remembered for the session. Cards stay MOUNTED (hidden via CSS) so in-progress edits survive a collapse.
+  const [gOpen, setGOpen] = useState({});
+  const toggleGroup = k => setGOpen(o => ({
+    ...o,
+    [k]: !o[k]
+  }));
   const [propOpen, setPropOpen] = useState(false); // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
   const [timerView, setTimerView] = useState(""); // "" | "timer" | "closeout" — on-site per-phase time audit
@@ -5411,11 +5418,12 @@ function App() {
     setEnginePB(next);
     pSet(ENGINE_PB_KEY, next);
   };
-  // MATERIAL PRICING HUB Part 2 — ONE canonical price list for the LLM prompt. Unions the governed
-  // enginePB (trade/date/dedup) FIRST, then the legacy matCosts + seed priceBook, deduped by name,
-  // capped for token safety. Fixes the gap where enginePB prices never reached the prompt (only the
-  // by-name takeoff concat + deterministic engine saw them). The by-name concat stays a union too.
-  const contractorPriceLines = () => {
+  // MATERIAL PRICING HUB Part 2 / FIX 3 — THE ONE merged price list. The governed enginePB
+  // (trade/date/dedup) comes FIRST so it WINS every tie, then legacy matCosts, then seed priceBook,
+  // deduped by name. Uncapped (the book is uncapped) — every price read in the app goes through this
+  // one enginePB-first precedence rule: the takeoff pricer's `books`, the AI-trade `pb`, and (capped
+  // via contractorPriceLines) the LLM prompt injection. Retiring legacy = they just stop contributing.
+  const contractorPriceBook = () => {
     const seen = new Set(),
       out = [];
     const add = (name, unit, cost) => {
@@ -5423,13 +5431,19 @@ function App() {
         key = nm.toLowerCase();
       if (!nm || !(num(cost) > 0) || seen.has(key)) return;
       seen.add(key);
-      out.push("- " + nm + (unit ? " (" + unit + ")" : "") + ": $" + num(cost));
+      out.push({
+        name: nm,
+        unit: unit || "",
+        cost: num(cost)
+      });
     };
     (enginePB || []).forEach(e => add(e.material, e.unit, e.unitCost));
     (matCosts || []).forEach(m => add(m.name, m.unit, m.cost));
     (priceBook || []).forEach(p => add(p.name, p.unit, p.price));
-    return out.slice(0, 120);
+    return out;
   };
+  // Formatted, capped-for-tokens view of the merged book for LLM prompt injection.
+  const contractorPriceLines = () => contractorPriceBook().slice(0, 120).map(b => "- " + b.name + (b.unit ? " (" + b.unit + ")" : "") + ": $" + b.cost);
   // PART 5 — stale export ("reprice run" list). Rows stale per priceIsStale, grouped supplier → trade.
   const csvCell = v => {
     const s = String(v == null ? "" : v);
@@ -5869,7 +5883,7 @@ function App() {
     const pbk = PB_TRADE_KEY[houseTrade];
     const fields = pbk && whInputs[pbk] ? whInputs[pbk] : null;
     const fieldText = fields ? Object.keys(fields).filter(k => k !== "complexityFactor" && (typeof fields[k] === "string" && fields[k] || num(fields[k]) > 0)).map(k => k + ": " + fields[k]).join(", ") : "";
-    const prompt = "You are a senior estimator for an established, insured contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand a customer for ONE scope.\n" + "WORK: " + label + (mat ? " — material/system: " + mat : "") + "\n" + (whDims ? "MEASUREMENTS (use these exact numbers): " + whDims + "\n" : "") + (fieldText ? "ENTERED DIMENSIONS: " + fieldText + "\n" : "") + (whPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL contractor material unit costs, burdened labor $/hr (small-market ~$45-70/hr, not metro/union), local sales tax, and disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE itemized materials takeoff (8-15+ lines, not two), PRIMARY material first.\n" + TRADE_BASE_RULES + tradeModuleFor(label, mat) + "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 ONE combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" + (matCosts.length ? "CONTRACTOR'S OWN MATERIAL PRICES (use THESE exact unit costs when a line matches; match loosely):\n" + matCosts.slice(0, 120).map(m => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (their unit costs; use when a line matches):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "FINAL SELF-CHECK: (1) SYSTEM PURITY — delete any line from a DIFFERENT roofing/siding system than this job's (" + (mat || label) + "); an asphalt-shingle job has NO metal-panel / standing-seam / clip / seam-tape lines. (2) sanity-check every qty against the measurements. (3) items[] is MATERIALS ONLY (no labor / equipment / dumpster lines).\n" + "Respond with ONLY raw JSON: {\"title\":str,\"trade\":str,\"items\":[{\"name\":str,\"qty\":num,\"unit\":str,\"cost\":num}],\"laborHours\":num,\"laborRate\":num,\"laborSource\":\"ratebook\"|\"estimate\",\"equipment\":num,\"taxRate\":num,\"crew\":num,\"days\":num}";
+    const prompt = "You are a senior estimator for an established, insured contractor near " + region + ". Build a DETAILED, itemized estimate a contractor can hand a customer for ONE scope.\n" + "WORK: " + label + (mat ? " — material/system: " + mat : "") + "\n" + (whDims ? "MEASUREMENTS (use these exact numbers): " + whDims + "\n" : "") + (fieldText ? "ENTERED DIMENSIONS: " + fieldText + "\n" : "") + (whPhotos.length ? "Photos attached — read scope, materials, condition.\n" : "") + EV_FORMULAS + "Use web search to verify CURRENT " + new Date().getFullYear() + " LOCAL contractor material unit costs, burdened labor $/hr (small-market ~$45-70/hr, not metro/union), local sales tax, and disposal. Be realistic and accurate — do not pad.\n" + "Produce a COMPLETE itemized materials takeoff (8-15+ lines, not two), PRIMARY material first.\n" + TRADE_BASE_RULES + tradeModuleFor(label, mat) + "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 ONE combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" + (contractorPriceLines().length ? "CONTRACTOR'S OWN MATERIAL PRICES (use THESE exact unit costs when a line matches; match loosely):\n" + contractorPriceLines().join("\n") + "\n" : "") + "CONTRACTOR'S PRICE BOOK (their unit costs; use when a line matches):\n" + priceBook.slice(0, 120).map(m => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" + "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map(r => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" + "FINAL SELF-CHECK: (1) SYSTEM PURITY — delete any line from a DIFFERENT roofing/siding system than this job's (" + (mat || label) + "); an asphalt-shingle job has NO metal-panel / standing-seam / clip / seam-tape lines. (2) sanity-check every qty against the measurements. (3) items[] is MATERIALS ONLY (no labor / equipment / dumpster lines).\n" + "Respond with ONLY raw JSON: {\"title\":str,\"trade\":str,\"items\":[{\"name\":str,\"qty\":num,\"unit\":str,\"cost\":num}],\"laborHours\":num,\"laborRate\":num,\"laborSource\":\"ratebook\"|\"estimate\",\"equipment\":num,\"taxRate\":num,\"crew\":num,\"days\":num}";
     const content = [...whPhotos.slice(0, 3).map(ph => ({
       type: "image",
       source: {
@@ -5907,15 +5921,7 @@ function App() {
       const q = computeRoofQuantities(whDims, sysStr, 0);
       if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
-          const books = [].concat(matCosts || [], (priceBook || []).map(p => ({
-            name: p.name,
-            unit: p.unit,
-            cost: p.price
-          })), (enginePB || []).map(e => ({
-            name: e.material,
-            unit: e.unit,
-            cost: e.unitCost
-          })));
+          const books = contractorPriceBook();
           items = priceRoofTakeoff(q, books, items);
         } else {
           const matchers = [{
@@ -7636,15 +7642,7 @@ function App() {
     setAiTradeDraft(null);
     try {
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
-      const pb = [].concat((matCosts || []).map(m => ({
-        name: m.name,
-        unit: m.unit,
-        cost: m.cost
-      })), (priceBook || []).map(m => ({
-        name: m.name,
-        unit: m.unit,
-        cost: m.price
-      })));
+      const pb = contractorPriceBook(); // FIX 3: was matCosts+priceBook only — now the merged enginePB-first book
       const res = await fetch("/.netlify/functions/build-trade", {
         method: "POST",
         headers: {
@@ -7838,15 +7836,7 @@ function App() {
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic && !__flatTiers) {
         const q = computeRoofQuantities(dims, sysStr, num(panelW));
-        const books = [].concat(matCosts || [], (priceBook || []).map(p => ({
-          name: p.name,
-          unit: p.unit,
-          cost: p.price
-        })), (enginePB || []).map(e => ({
-          name: e.material,
-          unit: e.unit,
-          cost: e.unitCost
-        })));
+        const books = contractorPriceBook();
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -11852,26 +11842,29 @@ function App() {
     className: "page"
   }, /*#__PURE__*/React.createElement("div", {
     className: "pagetitle"
-  }, "Profile & Settings"), /*#__PURE__*/React.createElement("div", {
-    className: "profnav"
-  }, [["Business", "prof-business"], ["Preferences", "prof-brands"], ["Assistant", "prof-al"], ["Pricing", "prof-pricing"], ["Account", "prof-app"]].map(([label, gid]) => /*#__PURE__*/React.createElement("button", {
-    key: gid,
-    className: "profchip",
-    onClick: () => {
-      const el = document.getElementById(gid);
-      if (el) el.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
+  }, "Profile & Settings"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: -2,
+      marginBottom: 4
     }
-  }, label))), needsSetup && /*#__PURE__*/React.createElement("section", {
+  }, "Tap a section to expand."), needsSetup && /*#__PURE__*/React.createElement("section", {
     className: "card setupbanner"
-  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Add your company name and trades below and tap Save profile. Homeowners pick contractors from their profiles, so this is your first impression.")), /*#__PURE__*/React.createElement("div", {
-    id: "prof-business",
-    className: "secgroup"
+  }, /*#__PURE__*/React.createElement("b", null, "Welcome! Set up your profile first"), /*#__PURE__*/React.createElement("span", null, "Open ", /*#__PURE__*/React.createElement("b", null, "Business & standards"), " below, add your company name and trades, and tap Save profile.")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.business ? " open" : ""),
+    onClick: () => toggleGroup("business")
   }, "Business & standards ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your company details (public) + your Caza Manual, cost book & rates (private) — split coming next")), /*#__PURE__*/React.createElement("section", {
+  }, "your company details (public) + your Caza Manual, cost book & rates (private)"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.business ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-business",
+    className: "secbody",
+    style: {
+      display: gOpen.business ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "profedit"
@@ -12422,12 +12415,21 @@ function App() {
     uid: me.uidC,
     role: "contractor",
     emptyText: "No written reviews yet — finish jobs and they'll show up here."
-  })), /*#__PURE__*/React.createElement("div", {
-    id: "prof-brands",
-    className: "secgroup"
+  }))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.brands ? " open" : ""),
+    onClick: () => toggleGroup("brands")
   }, "Your preferences ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "brands & tiers AL builds around — private, never shown to homeowners")), /*#__PURE__*/React.createElement("section", {
+  }, "brands & tiers AL builds around — private"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.brands ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-brands",
+    className: "secbody",
+    style: {
+      display: gOpen.brands ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12529,10 +12531,21 @@ function App() {
     },
     disabled: busy === "prof",
     onClick: () => saveProfile("contractor")
-  }, busy === "prof" ? "Saving…" : "Save preferences")), /*#__PURE__*/React.createElement("div", {
+  }, busy === "prof" ? "Saving…" : "Save preferences"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.al ? " open" : ""),
+    onClick: () => toggleGroup("al")
+  }, "Assistant ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "who reads your estimates back"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.al ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-al",
-    className: "secgroup"
-  }, "Assistant"), /*#__PURE__*/React.createElement("section", {
+    className: "secbody",
+    style: {
+      display: gOpen.al ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12632,12 +12645,380 @@ function App() {
     style: {
       marginTop: 8
     }
-  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.")), /*#__PURE__*/React.createElement("div", {
-    id: "prof-pricing",
-    className: "secgroup"
+  }, "Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added."))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.pricing ? " open" : ""),
+    onClick: () => toggleGroup("pricing")
   }, "Pricing & cost data ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
-  }, "your real costs — homeowners only ever see a range")), /*#__PURE__*/React.createElement("section", {
+  }, "your real costs — homeowners only ever see a range"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.pricing ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
+    id: "prof-pricing",
+    className: "secbody",
+    style: {
+      display: gOpen.pricing ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2"
+  }, "Material Pricing ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "one book · all intakes")), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: -2
+    }
+  }, "Your real material costs — used in every estimate; homeowners only ever see a range."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "matcount",
+    style: {
+      marginBottom: 0
+    }
+  }, enginePB.length, " price", enginePB.length === 1 ? "" : "s", " in your book"), (() => {
+    const n = enginePB.filter(priceIsStale).length;
+    return n ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        background: "#F2C98A",
+        color: "#5a4a2a",
+        fontWeight: 700,
+        fontSize: 12,
+        borderRadius: 8,
+        padding: "2px 9px"
+      }
+    }, n, " stale") : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#1B7A3D",
+        fontWeight: 700,
+        fontSize: 12.5
+      }
+    }, "✓ all fresh");
+  })()), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    style: {
+      marginTop: 8
+    },
+    onClick: () => {
+      setWhPbOpen(true);
+      setPbImportOpen(true);
+    }
+  }, "＋ Add prices ", /*#__PURE__*/React.createElement("span", {
+    className: "hint",
+    style: {
+      color: "#fff",
+      opacity: .85
+    }
+  }, "CSV · 📷 photo/PDF · 🔗 supplier feed")), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    style: {
+      marginTop: 6
+    },
+    onClick: () => setWhPbOpen(o => !o)
+  }, whPbOpen ? "▾ Hide price book" : "▸ View / edit price book")), whPbOpen && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range."), enginePB.length === 0 && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.map(e => {
+    const stale = priceIsStale(e);
+    return /*#__PURE__*/React.createElement("div", {
+      key: e.id,
+      style: stale ? {
+        background: "#FFF7E6",
+        border: "1px solid #F2C98A",
+        borderRadius: 8,
+        padding: "6px 8px",
+        marginBottom: 4
+      } : {
+        marginBottom: 2
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "estfields",
+      style: {
+        alignItems: "end"
+      }
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
+      value: e.material,
+      onChange: ev => pbSet(e.id, "material", ev.target.value),
+      placeholder: "e.g. 2x4x8 SPF"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Trade"), /*#__PURE__*/React.createElement("select", {
+      value: e.trade,
+      onChange: ev => pbSet(e.id, "trade", ev.target.value)
+    }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
+      key: t.trade,
+      value: t.trade
+    }, t.label)))), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
+      value: e.category,
+      onChange: ev => pbSet(e.id, "category", ev.target.value),
+      placeholder: "lumber"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
+      value: e.unit,
+      onChange: ev => pbSet(e.id, "unit", ev.target.value),
+      placeholder: "EA"
+    })), /*#__PURE__*/React.createElement("label", {
+      className: "estf"
+    }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.01",
+      value: e.unitCost,
+      onChange: ev => pbSet(e.id, "unitCost", num(ev.target.value))
+    })), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        alignSelf: "center"
+      },
+      onClick: () => pbDel(e.id)
+    }, "✕")), /*#__PURE__*/React.createElement("div", {
+      className: "hint",
+      style: {
+        marginTop: 1,
+        color: stale ? "#8A5A12" : undefined,
+        fontWeight: stale ? 600 : 400
+      }
+    }, stale ? "⚠️ " : "", priceUpdatedLabel(e)));
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    style: {
+      marginTop: 8
+    },
+    onClick: pbAdd
+  }, "+ Add a price"), (() => {
+    const n = enginePB.filter(priceIsStale).length;
+    return n > 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 10,
+        padding: "9px 11px",
+        background: "#FFF7E6",
+        border: "1px solid #F2C98A",
+        borderRadius: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        color: "#8A5A12",
+        fontSize: 12.5
+      }
+    }, "⚠️ ", n, " price", n === 1 ? "" : "s", " stale ", /*#__PURE__*/React.createElement("span", {
+      className: "hint",
+      style: {
+        fontWeight: 400
+      }
+    }, "(no date or over ", PRICE_STALE_DAYS, " days) — your reprice-run list")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost grow1",
+      onClick: exportStalePricesCSV
+    }, "⬇ Export CSV"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost grow1",
+      onClick: openStaleSheet
+    }, "🖨 Print / PDF"))) : enginePB.length ? /*#__PURE__*/React.createElement("p", {
+      className: "hint",
+      style: {
+        marginTop: 8,
+        color: "#1B7A3D",
+        fontWeight: 600
+      }
+    }, "✓ All prices fresh (updated within ", PRICE_STALE_DAYS, " days).") : null;
+  })(), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12,
+      borderTop: "1px solid #eee",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    onClick: () => setPbImportOpen(o => !o)
+  }, pbImportOpen ? "▾ Hide" : "＋ Add prices", " ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "CSV · 📷 photo / PDF · 🔗 supplier feed")), pbImportOpen && !csvReview && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "📷 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*,application/pdf,.pdf",
+    disabled: csvBusy,
+    onChange: e => onPriceFile(e.target.files && e.target.files[0])
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Reading the price sheet…"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      textAlign: "center",
+      margin: "8px 0",
+      fontWeight: 600
+    }
+  }, "— or import a CSV —"), (() => {
+    const ven = cazaManualOf(profC.cazaManual).vendors;
+    const list = [...new Set((ven && ven.preferred || []).map(v => v.name).filter(Boolean).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+    return list.length ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, list.map(s => /*#__PURE__*/React.createElement("button", {
+      key: s,
+      type: "button",
+      className: "btn ghost",
+      style: {
+        padding: "3px 10px",
+        fontSize: 12,
+        fontWeight: csvSupplier === s ? 700 : 400,
+        borderColor: csvSupplier === s ? "#14a04a" : undefined
+      },
+      onClick: () => setCsvSupplier(s)
+    }, csvSupplier === s ? "✓ " : "", s)))) : null;
+  })(), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
+    value: csvSupplier,
+    onChange: e => setCsvSupplier(e.target.value),
+    placeholder: "ABC Supply"
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Supplier API / feed URL"), /*#__PURE__*/React.createElement("input", {
+    value: csvUrl,
+    onChange: e => setCsvUrl(e.target.value),
+    placeholder: "https://supplier.example/prices.csv"
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    disabled: csvBusy,
+    style: {
+      margin: "4px 0 8px"
+    },
+    onClick: fetchSupplierUrl
+  }, csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "CSV file"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".csv,text/csv,text/plain",
+    onChange: e => onCsvFile(e.target.files && e.target.files[0])
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "…or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
+    rows: 4,
+    onChange: e => onCsvText(e.target.value),
+    placeholder: "material,unit,cost\n2x4x8 SPF,EA,5.85"
+  })), csvParsed && csvParsed.headers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Map your columns (", csvParsed.rows.length, " rows found):"), /*#__PURE__*/React.createElement("div", {
+    className: "estfields"
+  }, [["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => /*#__PURE__*/React.createElement("label", {
+    className: "estf",
+    key: k
+  }, /*#__PURE__*/React.createElement("span", null, lbl), /*#__PURE__*/React.createElement("select", {
+    value: csvMap[k],
+    onChange: e => setCsvMap(m => ({
+      ...m,
+      [k]: num(e.target.value)
+    }))
+  }, /*#__PURE__*/React.createElement("option", {
+    value: -1
+  }, "—"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, h || "col " + (i + 1))))))), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    style: {
+      marginTop: 8
+    },
+    disabled: csvBusy,
+    onClick: csvParseAndCategorize
+  }, csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"))), pbImportOpen && csvReview && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Review & correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    className: "estfields",
+    key: i,
+    style: {
+      alignItems: "end",
+      background: r.confidence < 0.6 ? "#fff6e6" : "transparent",
+      borderRadius: 6,
+      padding: 4
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
+    value: r.material,
+    onChange: e => csvReviewSet(i, "material", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Trade ", r.confidence < 0.6 ? "⚠️" : ""), /*#__PURE__*/React.createElement("select", {
+    value: r.trade,
+    onChange: e => csvReviewSet(i, "trade", e.target.value)
+  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.trade,
+    value: t.trade
+  }, t.label)), /*#__PURE__*/React.createElement("option", {
+    value: "other"
+  }, "other (skip)"))), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
+    value: r.category,
+    onChange: e => csvReviewSet(i, "category", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
+    value: r.unit,
+    onChange: e => csvReviewSet(i, "unit", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: r.cost,
+    onChange: e => csvReviewSet(i, "cost", num(e.target.value))
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn primary grow1",
+    onClick: csvCommit
+  }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: csvResetImport
+  }, "Cancel"))))), /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12838,10 +13219,21 @@ function App() {
       unit: "sq",
       rate: 1
     }])
-  }, "+ Add task"))), /*#__PURE__*/React.createElement("div", {
+  }, "+ Add task")))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "secgroup accord" + (gOpen.app ? " open" : ""),
+    onClick: () => toggleGroup("app")
+  }, "Account & app ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "plan, invite, feedback"), /*#__PURE__*/React.createElement("span", {
+    className: "accchev"
+  }, gOpen.app ? "▾" : "▸")), /*#__PURE__*/React.createElement("div", {
     id: "prof-app",
-    className: "secgroup"
-  }, "Account & app"), /*#__PURE__*/React.createElement("section", {
+    className: "secbody",
+    style: {
+      display: gOpen.app ? undefined : "none"
+    }
+  }, /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
@@ -12884,7 +13276,7 @@ function App() {
     onClick: sendFeedback
   }, /*#__PURE__*/React.createElement(MessageSquare, {
     size: 15
-  }), " Send feedback"))), me.role === "contractor" && tab === "estimator" && !overlay && /*#__PURE__*/React.createElement("main", {
+  }), " Send feedback")))), me.role === "contractor" && tab === "estimator" && !overlay && /*#__PURE__*/React.createElement("main", {
     className: "page"
   }, !myPlan || me.plan !== "pro" ? /*#__PURE__*/React.createElement("section", {
     className: "card"
@@ -14138,326 +14530,24 @@ function App() {
         }
       }, "⚑ Price ", $0(sell), " is below your Caza job minimum of ", $0(jobMin), "."));
     })())));
-  })(), whSpecs && /*#__PURE__*/React.createElement("button", {
+  })(), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 10
     },
-    onClick: () => setWhPbOpen(o => !o)
-  }, whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book", " ", /*#__PURE__*/React.createElement("span", {
+    onClick: () => {
+      setGOpen(o => ({
+        ...o,
+        pricing: true
+      }));
+      goTab("settings");
+    }
+  }, "💲 Manage prices in Profile → Pricing ", /*#__PURE__*/React.createElement("span", {
     className: "hint"
   }, enginePB.length, " item", enginePB.length === 1 ? "" : "s", (() => {
     const n = enginePB.filter(priceIsStale).length;
-    return n ? " · " : "";
-  })()), (() => {
-    const n = enginePB.filter(priceIsStale).length;
-    return n ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        background: "#F2C98A",
-        color: "#5a4a2a",
-        fontWeight: 700,
-        fontSize: 11,
-        borderRadius: 8,
-        padding: "1px 7px",
-        marginLeft: 2
-      }
-    }, n, " stale") : null;
-  })()), whSpecs && whPbOpen && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 10
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range."), enginePB.length === 0 && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched."), enginePB.map(e => {
-    const stale = priceIsStale(e);
-    return /*#__PURE__*/React.createElement("div", {
-      key: e.id,
-      style: stale ? {
-        background: "#FFF7E6",
-        border: "1px solid #F2C98A",
-        borderRadius: 8,
-        padding: "6px 8px",
-        marginBottom: 4
-      } : {
-        marginBottom: 2
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "estfields",
-      style: {
-        alignItems: "end"
-      }
-    }, /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
-      value: e.material,
-      onChange: ev => pbSet(e.id, "material", ev.target.value),
-      placeholder: "e.g. 2x4x8 SPF"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Trade"), /*#__PURE__*/React.createElement("select", {
-      value: e.trade,
-      onChange: ev => pbSet(e.id, "trade", ev.target.value)
-    }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
-      key: t.trade,
-      value: t.trade
-    }, t.label)))), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
-      value: e.category,
-      onChange: ev => pbSet(e.id, "category", ev.target.value),
-      placeholder: "lumber"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
-      value: e.unit,
-      onChange: ev => pbSet(e.id, "unit", ev.target.value),
-      placeholder: "EA"
-    })), /*#__PURE__*/React.createElement("label", {
-      className: "estf"
-    }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      step: "0.01",
-      value: e.unitCost,
-      onChange: ev => pbSet(e.id, "unitCost", num(ev.target.value))
-    })), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost",
-      style: {
-        alignSelf: "center"
-      },
-      onClick: () => pbDel(e.id)
-    }, "✕")), /*#__PURE__*/React.createElement("div", {
-      className: "hint",
-      style: {
-        marginTop: 1,
-        color: stale ? "#8A5A12" : undefined,
-        fontWeight: stale ? 600 : 400
-      }
-    }, stale ? "⚠️ " : "", priceUpdatedLabel(e)));
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    style: {
-      marginTop: 8
-    },
-    onClick: pbAdd
-  }, "+ Add a price"), (() => {
-    const n = enginePB.filter(priceIsStale).length;
-    return n > 0 ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginTop: 10,
-        padding: "9px 11px",
-        background: "#FFF7E6",
-        border: "1px solid #F2C98A",
-        borderRadius: 10
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontWeight: 700,
-        color: "#8A5A12",
-        fontSize: 12.5
-      }
-    }, "⚠️ ", n, " price", n === 1 ? "" : "s", " stale ", /*#__PURE__*/React.createElement("span", {
-      className: "hint",
-      style: {
-        fontWeight: 400
-      }
-    }, "(no date or over ", PRICE_STALE_DAYS, " days) — your reprice-run list")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        gap: 6,
-        marginTop: 8
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost grow1",
-      onClick: exportStalePricesCSV
-    }, "⬇ Export CSV"), /*#__PURE__*/React.createElement("button", {
-      className: "btn ghost grow1",
-      onClick: openStaleSheet
-    }, "🖨 Print / PDF"))) : enginePB.length ? /*#__PURE__*/React.createElement("p", {
-      className: "hint",
-      style: {
-        marginTop: 8,
-        color: "#1B7A3D",
-        fontWeight: 600
-      }
-    }, "✓ All prices fresh (updated within ", PRICE_STALE_DAYS, " days).") : null;
-  })(), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 12,
-      borderTop: "1px solid #eee",
-      paddingTop: 10
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    onClick: () => setPbImportOpen(o => !o)
-  }, "📄 ", pbImportOpen ? "Hide CSV importer" : "Import from CSV"), pbImportOpen && !csvReview && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "📷 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "image/*,application/pdf,.pdf",
-    disabled: csvBusy,
-    onChange: e => onPriceFile(e.target.files && e.target.files[0])
-  })), /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Reading the price sheet…"), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      textAlign: "center",
-      margin: "8px 0",
-      fontWeight: 600
-    }
-  }, "— or import a CSV —"), (() => {
-    const ven = cazaManualOf(profC.cazaManual).vendors;
-    const list = [...new Set((ven && ven.preferred || []).map(v => v.name).filter(Boolean).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
-    return list.length ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 6
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "hint"
-    }, "Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 6,
-        marginTop: 4
-      }
-    }, list.map(s => /*#__PURE__*/React.createElement("button", {
-      key: s,
-      type: "button",
-      className: "btn ghost",
-      style: {
-        padding: "3px 10px",
-        fontSize: 12,
-        fontWeight: csvSupplier === s ? 700 : 400,
-        borderColor: csvSupplier === s ? "#14a04a" : undefined
-      },
-      onClick: () => setCsvSupplier(s)
-    }, csvSupplier === s ? "✓ " : "", s)))) : null;
-  })(), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
-    value: csvSupplier,
-    onChange: e => setCsvSupplier(e.target.value),
-    placeholder: "ABC Supply"
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Supplier API / feed URL"), /*#__PURE__*/React.createElement("input", {
-    value: csvUrl,
-    onChange: e => setCsvUrl(e.target.value),
-    placeholder: "https://supplier.example/prices.csv"
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    disabled: csvBusy,
-    style: {
-      margin: "4px 0 8px"
-    },
-    onClick: fetchSupplierUrl
-  }, csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "CSV file"), /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: ".csv,text/csv,text/plain",
-    onChange: e => onCsvFile(e.target.files && e.target.files[0])
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "…or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
-    rows: 4,
-    onChange: e => onCsvText(e.target.value),
-    placeholder: "material,unit,cost\n2x4x8 SPF,EA,5.85"
-  })), csvParsed && csvParsed.headers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Map your columns (", csvParsed.rows.length, " rows found):"), /*#__PURE__*/React.createElement("div", {
-    className: "estfields"
-  }, [["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => /*#__PURE__*/React.createElement("label", {
-    className: "estf",
-    key: k
-  }, /*#__PURE__*/React.createElement("span", null, lbl), /*#__PURE__*/React.createElement("select", {
-    value: csvMap[k],
-    onChange: e => setCsvMap(m => ({
-      ...m,
-      [k]: num(e.target.value)
-    }))
-  }, /*#__PURE__*/React.createElement("option", {
-    value: -1
-  }, "—"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, h || "col " + (i + 1))))))), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    style: {
-      marginTop: 8
-    },
-    disabled: csvBusy,
-    onClick: csvParseAndCategorize
-  }, csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"))), pbImportOpen && csvReview && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Review & correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    className: "estfields",
-    key: i,
-    style: {
-      alignItems: "end",
-      background: r.confidence < 0.6 ? "#fff6e6" : "transparent",
-      borderRadius: 6,
-      padding: 4
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
-    value: r.material,
-    onChange: e => csvReviewSet(i, "material", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Trade ", r.confidence < 0.6 ? "⚠️" : ""), /*#__PURE__*/React.createElement("select", {
-    value: r.trade,
-    onChange: e => csvReviewSet(i, "trade", e.target.value)
-  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
-    key: t.trade,
-    value: t.trade
-  }, t.label)), /*#__PURE__*/React.createElement("option", {
-    value: "other"
-  }, "other (skip)"))), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
-    value: r.category,
-    onChange: e => csvReviewSet(i, "category", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
-    value: r.unit,
-    onChange: e => csvReviewSet(i, "unit", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    step: "0.01",
-    value: r.cost,
-    onChange: e => csvReviewSet(i, "cost", num(e.target.value))
-  })))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn primary grow1",
-    onClick: csvCommit
-  }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    onClick: csvResetImport
-  }, "Cancel")))))), me.role === "contractor" && tab === "estimator" && timerView && estResult && estResult.trades && /*#__PURE__*/React.createElement("div", {
+    return n ? " · " + n + " stale" : "";
+  })()))), me.role === "contractor" && tab === "estimator" && timerView && estResult && estResult.trades && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
       inset: 0,
@@ -15626,8 +15716,11 @@ button{cursor:pointer;font:inherit}
 /* Profile reorg — group headers + jump-nav chips */
 .secgroup{font-family:'Barlow Condensed';font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:19px;color:#0a7d36;margin:18px 2px 4px;scroll-margin-top:12px}
 .secgroup .hint{text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;color:#667085;display:block}
-.profnav{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
-.profchip{background:#fff;border:1.5px solid #cfe6d8;color:#0a7d36;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+/* FIX 2 — accordion group bars */
+.secgroup.accord{display:block;width:100%;text-align:left;background:#fff;border:1.5px solid #cfe6d8;border-radius:12px;padding:11px 14px;margin:10px 0 0;cursor:pointer;position:relative}
+.secgroup.accord.open{border-color:#0a7d36;border-bottom-left-radius:0;border-bottom-right-radius:0;margin-bottom:0}
+.secgroup.accord .accchev{position:absolute;right:14px;top:11px;color:#0a7d36;font-size:16px}
+.secbody{border:1.5px solid #0a7d36;border-top:none;border-radius:0 0 12px 12px;padding:10px 12px 4px;margin-bottom:6px}
 .profchip:active{background:#0a7d36;color:#fff}
 .matpreview{border:1px solid #EEF0F3;border-radius:10px;padding:8px 10px;margin-bottom:10px}
 .matrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0}

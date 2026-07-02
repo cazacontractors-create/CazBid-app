@@ -1965,6 +1965,10 @@ function App() {
   const [estMobOn, setEstMobOn] = useState(true); // include the delivery/mobilization charge on this estimate
   const [prefCat, setPrefCat] = useState("shingle"); // which tier-preset category is shown in Profile
   const [cmOpen, setCmOpen] = useState(false); // Caza Manual editor (Profile) expanded
+  // FIX 2 — Profile groups are collapsible accordions (chips removed). Default collapsed ("five clean bars");
+  // remembered for the session. Cards stay MOUNTED (hidden via CSS) so in-progress edits survive a collapse.
+  const [gOpen, setGOpen] = useState({});
+  const toggleGroup = (k) => setGOpen((o) => ({ ...o, [k]: !o[k] }));
   const [propOpen, setPropOpen] = useState(false);  // homeowner proposal presentation view
   const [propScopeOpen, setPropScopeOpen] = useState(false); // itemized scope expanded
   const [timerView, setTimerView] = useState("");   // "" | "timer" | "closeout" — on-site per-phase time audit
@@ -2103,18 +2107,21 @@ function App() {
   };
   // ---- engine price book (manual entry) ----
   const saveEnginePB = (next) => { setEnginePB(next); pSet(ENGINE_PB_KEY, next); };
-  // MATERIAL PRICING HUB Part 2 — ONE canonical price list for the LLM prompt. Unions the governed
-  // enginePB (trade/date/dedup) FIRST, then the legacy matCosts + seed priceBook, deduped by name,
-  // capped for token safety. Fixes the gap where enginePB prices never reached the prompt (only the
-  // by-name takeoff concat + deterministic engine saw them). The by-name concat stays a union too.
-  const contractorPriceLines = () => {
+  // MATERIAL PRICING HUB Part 2 / FIX 3 — THE ONE merged price list. The governed enginePB
+  // (trade/date/dedup) comes FIRST so it WINS every tie, then legacy matCosts, then seed priceBook,
+  // deduped by name. Uncapped (the book is uncapped) — every price read in the app goes through this
+  // one enginePB-first precedence rule: the takeoff pricer's `books`, the AI-trade `pb`, and (capped
+  // via contractorPriceLines) the LLM prompt injection. Retiring legacy = they just stop contributing.
+  const contractorPriceBook = () => {
     const seen = new Set(), out = [];
-    const add = (name, unit, cost) => { const nm = String(name || "").trim(), key = nm.toLowerCase(); if (!nm || !(num(cost) > 0) || seen.has(key)) return; seen.add(key); out.push("- " + nm + (unit ? " (" + unit + ")" : "") + ": $" + (num(cost)) ); };
+    const add = (name, unit, cost) => { const nm = String(name || "").trim(), key = nm.toLowerCase(); if (!nm || !(num(cost) > 0) || seen.has(key)) return; seen.add(key); out.push({ name: nm, unit: unit || "", cost: num(cost) }); };
     (enginePB || []).forEach((e) => add(e.material, e.unit, e.unitCost));
     (matCosts || []).forEach((m) => add(m.name, m.unit, m.cost));
     (priceBook || []).forEach((p) => add(p.name, p.unit, p.price));
-    return out.slice(0, 120);
+    return out;
   };
+  // Formatted, capped-for-tokens view of the merged book for LLM prompt injection.
+  const contractorPriceLines = () => contractorPriceBook().slice(0, 120).map((b) => "- " + b.name + (b.unit ? " (" + b.unit + ")" : "") + ": $" + b.cost);
   // PART 5 — stale export ("reprice run" list). Rows stale per priceIsStale, grouped supplier → trade.
   const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const downloadText = (text, filename, mime) => {
@@ -2317,7 +2324,7 @@ function App() {
       "Produce a COMPLETE itemized materials takeoff (8-15+ lines, not two), PRIMARY material first.\n" +
       TRADE_BASE_RULES + tradeModuleFor(label, mat) +
       "LABOR: STEP 1 use the CONTRACTOR PRODUCTION RATES below (hours = qty x MH/unit, summed) for matching tasks; STEP 2 ONE combined difficulty factor capped 1.5 on install only; STEP 3 fallback benchmarks only if nothing matches (asphalt re-roof 1.5-2.5 MH/sq, steep/complex/specialty 4-12+). Never return a token labor number. laborHours = total MH; days = laborHours/(crew x 8).\n" +
-      (matCosts.length ? "CONTRACTOR'S OWN MATERIAL PRICES (use THESE exact unit costs when a line matches; match loosely):\n" + matCosts.slice(0, 120).map((m) => "- " + m.name + (m.unit ? " (" + m.unit + ")" : "") + ": $" + m.cost).join("\n") + "\n" : "") +
+      (contractorPriceLines().length ? "CONTRACTOR'S OWN MATERIAL PRICES (use THESE exact unit costs when a line matches; match loosely):\n" + contractorPriceLines().join("\n") + "\n" : "") +
       "CONTRACTOR'S PRICE BOOK (their unit costs; use when a line matches):\n" + priceBook.slice(0, 120).map((m) => "- " + m.name + " (" + m.unit + "): $" + m.price).join("\n") + "\n" +
       "CONTRACTOR'S PRODUCTION RATES (MH/unit, sq=100sqft):\n" + rateBook.slice(0, 120).map((r) => "- " + r.task + " (" + r.unit + "): " + r.rate + " MH/unit").join("\n") + "\n" +
       "FINAL SELF-CHECK: (1) SYSTEM PURITY — delete any line from a DIFFERENT roofing/siding system than this job's (" + (mat || label) + "); an asphalt-shingle job has NO metal-panel / standing-seam / clip / seam-tape lines. (2) sanity-check every qty against the measurements. (3) items[] is MATERIALS ONLY (no labor / equipment / dumpster lines).\n" +
@@ -2339,7 +2346,7 @@ function App() {
       const q = computeRoofQuantities(whDims, sysStr, 0);
       if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
-          const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
+          const books = contractorPriceBook();
           items = priceRoofTakeoff(q, books, items);
         } else {
           const matchers = [
@@ -3319,7 +3326,7 @@ function App() {
     setAiTradeBusy(true); setAiTradeDraft(null);
     try {
       const region = (profC.base || profC.town || profH.town || "upstate New York").trim();
-      const pb = [].concat((matCosts || []).map((m) => ({ name: m.name, unit: m.unit, cost: m.cost })), (priceBook || []).map((m) => ({ name: m.name, unit: m.unit, cost: m.price })));
+      const pb = contractorPriceBook(); // FIX 3: was matCosts+priceBook only — now the merged enginePB-first book
       const res = await fetch("/.netlify/functions/build-trade", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: desc, description: desc, region: region, priceBook: pb }) });
       const d = await res.json();
       if (!res.ok || !d.trade) throw new Error(d.error || "couldn't build the trade");
@@ -3444,7 +3451,7 @@ function App() {
       // Deterministic-engine results already carry exact code-computed quantities — do not re-derive.
       if (isRoof && !d.deterministic && !__flatTiers) {
         const q = computeRoofQuantities(dims, sysStr, num(panelW));
-        const books = [].concat(matCosts || [], (priceBook || []).map((p) => ({ name: p.name, unit: p.unit, cost: p.price })), (enginePB || []).map((e) => ({ name: e.material, unit: e.unit, cost: e.unitCost })));
+        const books = contractorPriceBook();
         if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -5706,19 +5713,16 @@ function App() {
       {me.role === "contractor" && tab === "settings" && !overlay && (
         <main className="page">
           <div className="pagetitle">Profile &amp; Settings</div>
-          {/* PROFILE REORG Part 1 — jump-nav to the five groups (one scrollable page; no routes change). */}
-          <div className="profnav">
-            {[["Business", "prof-business"], ["Preferences", "prof-brands"], ["Assistant", "prof-al"], ["Pricing", "prof-pricing"], ["Account", "prof-app"]].map(([label, gid]) => (
-              <button key={gid} className="profchip" onClick={() => { const el = document.getElementById(gid); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{label}</button>
-            ))}
-          </div>
+          {/* FIX 2 — collapsible group accordions (chips removed). Tap a bar to expand; default collapsed. */}
+          <p className="hint" style={{ marginTop: -2, marginBottom: 4 }}>Tap a section to expand.</p>
           {needsSetup && (
             <section className="card setupbanner">
               <b>Welcome! Set up your profile first</b>
-              <span>Add your company name and trades below and tap Save profile. Homeowners pick contractors from their profiles, so this is your first impression.</span>
+              <span>Open <b>Business &amp; standards</b> below, add your company name and trades, and tap Save profile.</span>
             </section>
           )}
-          <div id="prof-business" className="secgroup">Business &amp; standards <span className="hint">your company details (public) + your Caza Manual, cost book &amp; rates (private) — split coming next</span></div>
+          <button type="button" className={"secgroup accord" + (gOpen.business ? " open" : "")} onClick={() => toggleGroup("business")}>Business &amp; standards <span className="hint">your company details (public) + your Caza Manual, cost book &amp; rates (private)</span><span className="accchev">{gOpen.business ? "▾" : "▸"}</span></button>
+          <div id="prof-business" className="secbody" style={{ display: gOpen.business ? undefined : "none" }}>
           <section className="card">
             <div className="profedit">
               <Avatar user={profC} size="xl" onTap={() => document.getElementById("avc").click()} />
@@ -5845,7 +5849,9 @@ function App() {
           </section>
 
           {/* PROFILE REORG Part 1 — Subscription + Invite/feedback moved to the ACCOUNT & APP group at the bottom (out of the estimating-setup flow). */}
-          <div id="prof-brands" className="secgroup">Your preferences <span className="hint">brands &amp; tiers AL builds around — private, never shown to homeowners</span></div>
+          </div>
+          <button type="button" className={"secgroup accord" + (gOpen.brands ? " open" : "")} onClick={() => toggleGroup("brands")}>Your preferences <span className="hint">brands &amp; tiers AL builds around — private</span><span className="accchev">{gOpen.brands ? "▾" : "▸"}</span></button>
+          <div id="prof-brands" className="secbody" style={{ display: gOpen.brands ? undefined : "none" }}>
           <section className="card">
             <div className="h2">Preferred material brands</div>
             <p className="hint" style={{ marginTop: -2 }}>AL leans on these as defaults in your estimates and good/better/best options.</p>
@@ -5883,7 +5889,9 @@ function App() {
             </button>
           </section>
 
-          <div id="prof-al" className="secgroup">Assistant</div>
+          </div>
+          <button type="button" className={"secgroup accord" + (gOpen.al ? " open" : "")} onClick={() => toggleGroup("al")}>Assistant <span className="hint">who reads your estimates back</span><span className="accchev">{gOpen.al ? "▾" : "▸"}</span></button>
+          <div id="prof-al" className="secbody" style={{ display: gOpen.al ? undefined : "none" }}>
           <section className="card">
             <div className="h2">Assistant voice <span className="hint">who talks &amp; helps you estimate</span></div>
             <p className="hint" style={{ marginTop: -2 }}>Pick who reads your estimates back. AL is the default. Tap ▶ to hear each one, set its speed, then Use.</p>
@@ -5913,7 +5921,123 @@ function App() {
             <p className="hint" style={{ marginTop: 8 }}>Speed 0.70–1.20× (1.00 = normal). Avatars are coming — names show initials until photos are added.</p>
           </section>
 
-          <div id="prof-pricing" className="secgroup">Pricing &amp; cost data <span className="hint">your real costs — homeowners only ever see a range</span></div>
+          </div>
+          <button type="button" className={"secgroup accord" + (gOpen.pricing ? " open" : "")} onClick={() => toggleGroup("pricing")}>Pricing &amp; cost data <span className="hint">your real costs — homeowners only ever see a range</span><span className="accchev">{gOpen.pricing ? "▾" : "▸"}</span></button>
+          <div id="prof-pricing" className="secbody" style={{ display: gOpen.pricing ? undefined : "none" }}>
+          {/* MATERIAL PRICING — governed book editor + ALL intakes (CSV · photo/PDF · supplier feed), moved here from the estimator (FIX 1). */}
+          <section className="card">
+            <div className="h2">Material Pricing <span className="hint">one book · all intakes</span></div>
+            <p className="hint" style={{ marginTop: -2 }}>Your real material costs — used in every estimate; homeowners only ever see a range.</p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+              <div className="matcount" style={{ marginBottom: 0 }}>{enginePB.length} price{enginePB.length === 1 ? "" : "s"} in your book</div>
+              {(() => { const n = enginePB.filter(priceIsStale).length; return n ? <span style={{ background: "#F2C98A", color: "#5a4a2a", fontWeight: 700, fontSize: 12, borderRadius: 8, padding: "2px 9px" }}>{n} stale</span> : <span style={{ color: "#1B7A3D", fontWeight: 700, fontSize: 12.5 }}>✓ all fresh</span>; })()}
+            </div>
+            <button className="btn primary full" style={{ marginTop: 8 }} onClick={() => { setWhPbOpen(true); setPbImportOpen(true); }}>＋ Add prices <span className="hint" style={{ color: "#fff", opacity: .85 }}>CSV · 📷 photo/PDF · 🔗 supplier feed</span></button>
+            <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide price book" : "▸ View / edit price book"}</button>
+          </section>
+          {whPbOpen && (
+            <div className="card" style={{ marginTop: 10 }}>
+              <p className="hint">Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range.</p>
+              {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
+              {enginePB.map((e) => { const stale = priceIsStale(e); return (
+                <div key={e.id} style={stale ? { background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 8, padding: "6px 8px", marginBottom: 4 } : { marginBottom: 2 }}>
+                  <div className="estfields" style={{ alignItems: "end" }}>
+                    <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
+                    <label className="estf"><span>Trade</span>
+                      <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
+                        {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
+                    <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
+                    <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
+                    <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
+                  </div>
+                  <div className="hint" style={{ marginTop: 1, color: stale ? "#8A5A12" : undefined, fontWeight: stale ? 600 : 400 }}>{stale ? "⚠️ " : ""}{priceUpdatedLabel(e)}</div>
+                </div>
+              ); })}
+              <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
+              {(() => { const n = enginePB.filter(priceIsStale).length; return n > 0 ? (
+                <div style={{ marginTop: 10, padding: "9px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10 }}>
+                  <div style={{ fontWeight: 700, color: "#8A5A12", fontSize: 12.5 }}>⚠️ {n} price{n === 1 ? "" : "s"} stale <span className="hint" style={{ fontWeight: 400 }}>(no date or over {PRICE_STALE_DAYS} days) — your reprice-run list</span></div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button className="btn ghost grow1" onClick={exportStalePricesCSV}>⬇ Export CSV</button>
+                    <button className="btn ghost grow1" onClick={openStaleSheet}>🖨 Print / PDF</button>
+                  </div>
+                </div>
+              ) : (enginePB.length ? <p className="hint" style={{ marginTop: 8, color: "#1B7A3D", fontWeight: 600 }}>✓ All prices fresh (updated within {PRICE_STALE_DAYS} days).</p> : null); })()}
+
+              <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
+                <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>{pbImportOpen ? "▾ Hide" : "＋ Add prices"} <span className="hint">CSV · 📷 photo / PDF · 🔗 supplier feed</span></button>
+                {pbImportOpen && !csvReview && (
+                  <div style={{ marginTop: 8 }}>
+                    <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
+                    <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
+                    {csvBusy && <p className="hint">Reading the price sheet…</p>}
+                    <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
+                    {(() => {
+                      const ven = cazaManualOf(profC.cazaManual).vendors;
+                      const list = [...new Set((((ven && ven.preferred) || []).map((v) => v.name).filter(Boolean)).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+                      return list.length ? (
+                        <div style={{ marginBottom: 6 }}>
+                          <div className="hint">Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                            {list.map((s) => (<button key={s} type="button" className="btn ghost" style={{ padding: "3px 10px", fontSize: 12, fontWeight: csvSupplier === s ? 700 : 400, borderColor: csvSupplier === s ? "#14a04a" : undefined }} onClick={() => setCsvSupplier(s)}>{csvSupplier === s ? "✓ " : ""}{s}</button>))}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+                    <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
+                    <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
+                    <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
+                    <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
+                    <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
+                    {csvParsed && csvParsed.headers.length > 0 && (
+                      <div>
+                        <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
+                        <div className="estfields">
+                          {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
+                            <label className="estf" key={k}><span>{lbl}</span>
+                              <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
+                                <option value={-1}>—</option>
+                                {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                        <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
+                          {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {pbImportOpen && csvReview && (
+                  <div style={{ marginTop: 8 }}>
+                    <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
+                    {csvReview.map((r, i) => (
+                      <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
+                        <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
+                        <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
+                          <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
+                            {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                            <option value="other">other (skip)</option>
+                          </select>
+                        </label>
+                        <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
+                        <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
+                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
+                      <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <section className="card">
             <div className="h2">Your material price list <span className="hint">CSV</span></div>
             <p className="hint" style={{ marginTop: -2 }}>Upload a CSV of your real material costs and your estimates will use YOUR prices instead of estimates. Columns: <b>name, unit, cost</b> (a header row is fine).</p>
@@ -6000,8 +6124,10 @@ function App() {
             )}
           </section>
 
-          {/* ACCOUNT & APP — moved here from the middle so it doesn't interrupt the estimating-setup flow. */}
-          <div id="prof-app" className="secgroup">Account &amp; app</div>
+          </div>
+          {/* ACCOUNT & APP — Subscription + Invite/feedback, at the bottom (out of the estimating-setup flow). */}
+          <button type="button" className={"secgroup accord" + (gOpen.app ? " open" : "")} onClick={() => toggleGroup("app")}>Account &amp; app <span className="hint">plan, invite, feedback</span><span className="accchev">{gOpen.app ? "▾" : "▸"}</span></button>
+          <div id="prof-app" className="secbody" style={{ display: gOpen.app ? undefined : "none" }}>
           <section className="card">
             <div className="h2">Subscription <span className="hint">demo — no real billing</span></div>
             <div className="plangrid">
@@ -6021,6 +6147,7 @@ function App() {
             <button className="btn ghost grow1" onClick={shareApp}><Share size={15} /> Invite someone</button>
             <button className="btn ghost grow1" onClick={sendFeedback}><MessageSquare size={15} /> Send feedback</button>
           </div>
+          </div>{/* /prof-app secbody */}
         </main>
       )}
 
@@ -6475,115 +6602,8 @@ function App() {
               );
             })()
           )}
-          {/* PRICING DETAILS / PRICE BOOK — hidden from the main flow (bottom toggle) */}
-          {whSpecs && (
-            <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide pricing details" : "▸ Pricing details / my price book"} <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}{(() => { const n = enginePB.filter(priceIsStale).length; return n ? " · " : ""; })()}</span>{(() => { const n = enginePB.filter(priceIsStale).length; return n ? <span style={{ background: "#F2C98A", color: "#5a4a2a", fontWeight: 700, fontSize: 11, borderRadius: 8, padding: "1px 7px", marginLeft: 2 }}>{n} stale</span> : null; })()}</button>
-          )}
-          {whSpecs && whPbOpen && (
-            <div className="card" style={{ marginTop: 10 }}>
-              <p className="hint">Your material costs — matched per trade, override seed pricing. Homeowners never see these; they only get a range.</p>
-              {enginePB.length === 0 && <p className="hint">No prices yet. Add your material costs below — the engine fuzzy-matches them to each trade's lines (scoped to the trade) and falls back to seed pricing for anything unmatched.</p>}
-              {enginePB.map((e) => { const stale = priceIsStale(e); return (
-                <div key={e.id} style={stale ? { background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 8, padding: "6px 8px", marginBottom: 4 } : { marginBottom: 2 }}>
-                  <div className="estfields" style={{ alignItems: "end" }}>
-                    <label className="estf"><span>Material</span><input value={e.material} onChange={(ev) => pbSet(e.id, "material", ev.target.value)} placeholder="e.g. 2x4x8 SPF" /></label>
-                    <label className="estf"><span>Trade</span>
-                      <select value={e.trade} onChange={(ev) => pbSet(e.id, "trade", ev.target.value)}>
-                        {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
-                      </select>
-                    </label>
-                    <label className="estf"><span>Category</span><input value={e.category} onChange={(ev) => pbSet(e.id, "category", ev.target.value)} placeholder="lumber" /></label>
-                    <label className="estf"><span>Unit</span><input value={e.unit} onChange={(ev) => pbSet(e.id, "unit", ev.target.value)} placeholder="EA" /></label>
-                    <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={e.unitCost} onChange={(ev) => pbSet(e.id, "unitCost", num(ev.target.value))} /></label>
-                    <button className="btn ghost" style={{ alignSelf: "center" }} onClick={() => pbDel(e.id)}>✕</button>
-                  </div>
-                  <div className="hint" style={{ marginTop: 1, color: stale ? "#8A5A12" : undefined, fontWeight: stale ? 600 : 400 }}>{stale ? "⚠️ " : ""}{priceUpdatedLabel(e)}</div>
-                </div>
-              ); })}
-              <button className="btn ghost full" style={{ marginTop: 8 }} onClick={pbAdd}>+ Add a price</button>
-              {/* PART 5 — stale export ("reprice run"): rows with no date or >30 days old. */}
-              {(() => { const n = enginePB.filter(priceIsStale).length; return n > 0 ? (
-                <div style={{ marginTop: 10, padding: "9px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10 }}>
-                  <div style={{ fontWeight: 700, color: "#8A5A12", fontSize: 12.5 }}>⚠️ {n} price{n === 1 ? "" : "s"} stale <span className="hint" style={{ fontWeight: 400 }}>(no date or over {PRICE_STALE_DAYS} days) — your reprice-run list</span></div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                    <button className="btn ghost grow1" onClick={exportStalePricesCSV}>⬇ Export CSV</button>
-                    <button className="btn ghost grow1" onClick={openStaleSheet}>🖨 Print / PDF</button>
-                  </div>
-                </div>
-              ) : (enginePB.length ? <p className="hint" style={{ marginTop: 8, color: "#1B7A3D", fontWeight: 600 }}>✓ All prices fresh (updated within {PRICE_STALE_DAYS} days).</p> : null); })()}
-
-              <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
-                <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>📄 {pbImportOpen ? "Hide CSV importer" : "Import from CSV"}</button>
-                {pbImportOpen && !csvReview && (
-                  <div style={{ marginTop: 8 }}>
-                    <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
-                    <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
-                    {csvBusy && <p className="hint">Reading the price sheet…</p>}
-                    <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
-                    {/* Part 3 — supplier quick-pick: your Caza Manual vendors + common suppliers, tags the import's source.supplier. */}
-                    {(() => {
-                      const ven = cazaManualOf(profC.cazaManual).vendors;
-                      const list = [...new Set((((ven && ven.preferred) || []).map((v) => v.name).filter(Boolean)).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
-                      return list.length ? (
-                        <div style={{ marginBottom: 6 }}>
-                          <div className="hint">Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                            {list.map((s) => (<button key={s} type="button" className="btn ghost" style={{ padding: "3px 10px", fontSize: 12, fontWeight: csvSupplier === s ? 700 : 400, borderColor: csvSupplier === s ? "#14a04a" : undefined }} onClick={() => setCsvSupplier(s)}>{csvSupplier === s ? "✓ " : ""}{s}</button>))}
-                          </div>
-                        </div>
-                      ) : null;
-                    })()}
-                    <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
-                    <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
-                    <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
-                    <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
-                    <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
-                    {csvParsed && csvParsed.headers.length > 0 && (
-                      <div>
-                        <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
-                        <div className="estfields">
-                          {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
-                            <label className="estf" key={k}><span>{lbl}</span>
-                              <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
-                                <option value={-1}>—</option>
-                                {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
-                              </select>
-                            </label>
-                          ))}
-                        </div>
-                        <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
-                          {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {pbImportOpen && csvReview && (
-                  <div style={{ marginTop: 8 }}>
-                    <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
-                    {csvReview.map((r, i) => (
-                      <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
-                        <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
-                        <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
-                          <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
-                            {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
-                            <option value="other">other (skip)</option>
-                          </select>
-                        </label>
-                        <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
-                        <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
-                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
-                      </div>
-                    ))}
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
-                      <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* FIX 1 — the price book + all intakes moved to Profile → Pricing; estimator keeps a deep-link (auto-opens that group). */}
+          <button className="btn ghost full" style={{ marginTop: 10 }} onClick={() => { setGOpen((o) => ({ ...o, pricing: true })); goTab("settings"); }}>💲 Manage prices in Profile → Pricing <span className="hint">{enginePB.length} item{enginePB.length === 1 ? "" : "s"}{(() => { const n = enginePB.filter(priceIsStale).length; return n ? " · " + n + " stale" : ""; })()}</span></button>
         </main>
       )}
 
@@ -7173,8 +7193,11 @@ button{cursor:pointer;font:inherit}
 /* Profile reorg — group headers + jump-nav chips */
 .secgroup{font-family:'Barlow Condensed';font-weight:700;text-transform:uppercase;letter-spacing:.5px;font-size:19px;color:#0a7d36;margin:18px 2px 4px;scroll-margin-top:12px}
 .secgroup .hint{text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;color:#667085;display:block}
-.profnav{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
-.profchip{background:#fff;border:1.5px solid #cfe6d8;color:#0a7d36;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+/* FIX 2 — accordion group bars */
+.secgroup.accord{display:block;width:100%;text-align:left;background:#fff;border:1.5px solid #cfe6d8;border-radius:12px;padding:11px 14px;margin:10px 0 0;cursor:pointer;position:relative}
+.secgroup.accord.open{border-color:#0a7d36;border-bottom-left-radius:0;border-bottom-right-radius:0;margin-bottom:0}
+.secgroup.accord .accchev{position:absolute;right:14px;top:11px;color:#0a7d36;font-size:16px}
+.secbody{border:1.5px solid #0a7d36;border-top:none;border-radius:0 0 12px 12px;padding:10px 12px 4px;margin-bottom:6px}
 .profchip:active{background:#0a7d36;color:#fff}
 .matpreview{border:1px solid #EEF0F3;border-radius:10px;padding:8px 10px;margin-bottom:10px}
 .matrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0}
