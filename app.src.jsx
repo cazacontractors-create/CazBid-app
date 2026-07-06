@@ -1657,6 +1657,13 @@ async function pSet(key, val) {
 // from day one: { id, customerName, jobAddress, createdAt, updatedAt, status,
 // jobNimbusId, price, payload }. NOTE: local storage is NOT a backup (cache clear /
 // lost phone = gone); it stops mid-session loss until cloud sync ships.
+// ===== DIAGNOSTIC BUNDLE ("flight recorder") — version + input hash =====
+// Every estimate run records HOW it was built (raw LLM JSON + final takeoff + provenance), not
+// just what it concluded. inputsHash lets identical-input re-rolls be spotted as noise vs a real
+// scope change. Bump APP_VERSION on release; DIAG_VERSION on bundle-shape changes.
+const DIAG_VERSION = 1;
+const APP_VERSION = "2026-07-06";
+function hashStr(s) { let h = 0x811c9dc5; const str = String(s || ""); for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
 const estStore = {
   async list() { const a = await pGet(ESTIMATES_KEY); return Array.isArray(a) ? a : []; },
   async get(id) { return (await estStore.list()).find((e) => e.id === id) || null; },
@@ -2232,6 +2239,8 @@ function App() {
   const [estNotes, setEstNotes] = useState("");       // free-text job notes saved with the job
   const [estJobPhotos, setEstJobPhotos] = useState([]);// job/documentation photos saved with the job (separate from AI inspection photos)
   const [savedOpen, setSavedOpen] = useState(false);  // "Saved estimates" list expanded
+  const [diagLink, setDiagLink] = useState("");        // diagnostic share link (Part 2), per open estimate
+  const [diagBusy, setDiagBusy] = useState(false);
   const [estSvcPrompt, setEstSvcPrompt] = useState(null);
   // ---- Whole House / Addition (deterministic multi-trade) ----
   const [whSpecs, setWhSpecs] = useState(null);   // trade input schemas from /trade-specs
@@ -3875,6 +3884,10 @@ function App() {
         manualLoaded: __manualLoaded, manualKey: __manualKey,
         aiBuilt: !!(aiTrade && aiTrade.trade === scope),
         calibKey: calibKey, calibN: calibEntry ? (calibEntry.n || 0) : 0, calibFactor: calibEntry ? calibEntry.factor : 1,
+        // DIAGNOSTIC capture (stripped from the persisted trade after the run bundle is built): the RAW
+        // LLM JSON exactly as parsed (before override/price/dedup) + how this trade was routed.
+        __diagRaw: d,
+        __diagPipe: { scope: scope, desc: desc, dims: dims, panelW: num(panelW), roofType: roofTypeOf(scope + " " + desc), mixed: roofIsMixed(scope + " " + desc), deterministic: !!d.deterministic, flat: !!__flatTiers, manualLoaded: __manualLoaded, manualKey: __manualKey, offManual: __offManual, model: "claude-opus-4-8", endpoint: "estimate-background", laborSource: laborSrc, rateFloored: !!__rateFloored },
       };
     }
   };
@@ -3884,7 +3897,9 @@ function App() {
   const buildUnifiedEstimate = async () => {
     const sel = Object.keys(houseScope);
     if (!sel.length) { flash("Add at least one trade first — AL's buttons up top."); return; }
-    setEstBusy("run"); setEstResult(null);
+    const __t0 = Date.now();
+    const __prevDiag = (estResult && estResult.diag) ? estResult.diag : null; // for the run-vs-run delta (Part 3)
+    setEstBusy("run"); setEstResult(null); setDiagLink("");
     if (voiceRef.current) speakAL("Let me double-check everything before I save this."); // voice pairing for the Opus preflight wait
     try {
       const results = [];
@@ -3912,7 +3927,14 @@ function App() {
       }
       const ok = results.filter((r) => !r.error);
       if (!ok.length) { flash("Estimate failed: " + ((results[0] && results[0].error) || "tap Build again")); setEstBusy(""); if (voiceRef.current) speakAL("That didn't build — let's try again."); return; }
-      setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1 });
+      // DIAGNOSTIC BUNDLE — build BEFORE stripping the raw-capture temp fields; a failure here never
+      // blocks the estimate (diagnostics are a passenger, never the pilot).
+      let __diag = null;
+      try { __diag = buildDiagBundle(sel, ok, __t0, __prevDiag); } catch (e) { console.warn("diag capture failed", e); }
+      ok.forEach((t) => { try { delete t.__diagRaw; delete t.__diagPipe; } catch (e) {} }); // keep the persisted trade lean
+      setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1, diag: __diag });
+      // PART 3 — run-vs-run delta readback when the same job re-rolls (same inputs, different numbers = noise)
+      if (__diag && __diag.deltaVsPrev && __diag.deltaVsPrev.sameInputs) { const dv = __diag.deltaVsPrev; if (Math.abs(dv.price) >= 200 || Math.abs(dv.laborHours) >= 8) flash("Re-roll vs last run: " + (dv.price >= 0 ? "+" : "") + "$" + Math.round(dv.price).toLocaleString() + " price · labor hours " + dv.laborHoursFrom + "→" + dv.laborHoursTo + " (same inputs)."); }
       // PART 4: apply Caza's standard gross margin for this job on a fresh build (contractor can still slide).
       const stdMargin = cazaMarginStd(ok, profC.cazaManual); setEstMargin(stdMargin);
       // OFF-MANUAL: tally each off-manual scope on a FRESH build (not a rebuild) — drives the "add to manual?" nudge on repeats.
@@ -4196,8 +4218,65 @@ function App() {
     estMargin: estMargin, estMiles: estMiles, estMobOn: estMobOn, houseScope: houseScope, housePanelW: housePanelW, whDims: whDims, whScopeLines: whScopeLines, whPhotos: whPhotos, houseView: houseView,
     colors: (estResult && estResult.colors) || {}, proposalTier: (estResult && estResult.proposalTier) || "",
     jobNotes: estNotes, jobPhotos: estJobPhotos,
+    diag: (estResult && estResult.diag) || null, // diagnostic bundle rides with the estimate (no photos/manual text inside)
   });
   // Persist the in-progress estimate (auto-save + explicit). Creates an id on first save.
+  // ===== DIAGNOSTIC BUNDLE — build the per-run "flight recorder" (never blocks the estimate) =====
+  // Captures BOTH the raw LLM JSON (item 3) AND the final takeoff with per-line provenance (item 4),
+  // plus pipeline/money/timing. Deep-cloned at the end so it's a frozen snapshot independent of later
+  // edits. No photo bytes, no manual text, no keys — just the dynamic trail.
+  const buildDiagBundle = (sel, ok, t0, prevDiag) => {
+    const materialsTotal = ok.reduce((a, t) => a + (t.items || []).reduce((s, it) => s + (num(it.cost) || 0), 0), 0);
+    const cost = Math.round(jobCostOf(ok));
+    const money = { cost: cost, materialsTotal: Math.round(materialsTotal), margin: estMargin, price: Math.round(sellOf(ok ? jobCostOf(ok) : 0, estMargin)), laborHours: ok.reduce((a, t) => a + (num(t.laborHours) || 0), 0) };
+    const inputs = { trades: sel, dims: whDims || "", scopeLines: whScopeLines || {}, margin: estMargin, panelW: housePanelW || {}, photoCount: (whPhotos || []).length, houseView: houseView };
+    const inputsHash = hashStr(JSON.stringify(inputs));
+    const trades = ok.map((t) => ({
+      label: t.label, tradeKey: t.tradeKey, title: t.title, trade: t.trade,
+      pipeline: t.__diagPipe || null,
+      rawLLM: t.__diagRaw || null, // BEFORE overrides/price/dedup
+      final: {                     // AS DISPLAYED, with per-line provenance
+        items: (t.items || []).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice, cost: it.cost, unpriced: !!it.unpriced, priceTier: it.priceTier || null, priceSrc: it.priceSrc || null, priceNote: it.priceNote || "" })),
+        laborHours: t.laborHours, laborRate: t.laborRate, laborSource: t.laborSource, phases: t.phases || [],
+        equipment: t.equipment, taxRate: t.taxRate, crew: t.crew, days: t.days, rateFloored: !!t.rateFloored, calibFactor: t.calibFactor,
+        cazaDeviations: t.cazaDeviations || [], offManual: !!t.offManual, flatTier: !!t.flatTier, chosenTier: t.chosenTier || null,
+        primaryOptions: (t.primaryOptions || []).map((o) => ({ tier: o.tier, name: o.name, cost: o.cost, offFamily: !!o.offFamily })),
+        checks: t.checks || [], assumptions: t.assumptions || [], questions: t.questions || [],
+      },
+    }));
+    const bundle = { v: DIAG_VERSION, app: APP_VERSION, ts: new Date().toISOString(), runMs: Date.now() - t0, inputs: inputs, inputsHash: inputsHash, money: money, trades: trades };
+    if (prevDiag && prevDiag.money) bundle.deltaVsPrev = { sameInputs: prevDiag.inputsHash === inputsHash, laborHoursFrom: prevDiag.money.laborHours || 0, laborHoursTo: money.laborHours, laborHours: money.laborHours - (prevDiag.money.laborHours || 0), materials: money.materialsTotal - (prevDiag.money.materialsTotal || 0), price: money.price - (prevDiag.money.price || 0) };
+    return JSON.parse(JSON.stringify(bundle)); // frozen snapshot
+  };
+  const diagBundleJSON = () => (estResult && estResult.diag) ? JSON.stringify(estResult.diag, null, 2) : null;
+  const exportDiagnostics = async () => {
+    const js = diagBundleJSON();
+    if (!js) { flash("No diagnostics on this estimate — rebuild to capture one."); return; }
+    const fname = "cazbid-diag-" + (estId || "run") + ".json";
+    try { const f = new File([js], fname, { type: "application/json" }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: "CazBid diagnostics" }); return; } } catch (e) { /* fall through */ }
+    try { await navigator.clipboard.writeText(js); flash("Diagnostics JSON copied to clipboard."); }
+    catch (e) { downloadText(js, fname, "application/json"); }
+  };
+  const copyDiagLink = async () => {
+    const js = diagBundleJSON();
+    if (!js) { flash("No diagnostics on this estimate — rebuild to capture one."); return; }
+    if (js.length > 256 * 1024) { flash("Diagnostics too large to link (over 256 KB)."); return; }
+    setDiagBusy(true);
+    try {
+      const res = await fetch("/.netlify/functions/estimate-debug", { method: "POST", headers: { "Content-Type": "application/json" }, body: js });
+      const d = await res.json();
+      if (!res.ok || !d.url) throw new Error(d.error || "link failed");
+      setDiagLink(d.url);
+      try { await navigator.clipboard.writeText(d.url); flash("Diagnostic link copied — anyone with it can read this bundle."); } catch (e) { flash("Link ready — copy it below."); }
+    } catch (e) { flash("Couldn't create a link — needs a connection. " + errMsg(e)); }
+    setDiagBusy(false);
+  };
+  const deleteDiagLink = async () => {
+    const id = (String(diagLink).split("id=")[1] || "").trim();
+    if (!id) { setDiagLink(""); return; }
+    try { await fetch("/.netlify/functions/estimate-debug?id=" + encodeURIComponent(id), { method: "DELETE" }); flash("Link deleted — the URL no longer works."); } catch (e) { flash("Couldn't delete — " + errMsg(e)); }
+    setDiagLink("");
+  };
   const persistCurrent = async (extra) => {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
     const id = estId || ("est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
@@ -4220,8 +4299,8 @@ function App() {
     setEstMargin(num(p.estMargin) || 30); setEstMiles(num(p.estMiles) || 0); setEstMobOn(p.estMobOn === true); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhScopeLines(p.whScopeLines || {}); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setEstNotes(p.jobNotes || ""); setEstJobPhotos(Array.isArray(p.jobPhotos) ? p.jobPhotos : []);
-    setActiveTrade(null); setSelStep("ready"); setSavedOpen(false);
-    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "" });
+    setActiveTrade(null); setSelStep("ready"); setSavedOpen(false); setDiagLink("");
+    setEstResult({ trades: p.trades || [], multi: !!p.multi, errors: p.errors || [], colors: p.colors || {}, proposalTier: p.proposalTier || "", diag: p.diag || null });
   };
   const deleteSavedEstimate = async (id) => {
     const all = await estStore.remove(id); setEstimates(all);
@@ -6749,6 +6828,24 @@ function App() {
                   </div>
                   <button className="btn primary full" style={{ marginBottom: 4 }} onClick={openProposal}>📄 Present proposal to homeowner</button>
                   <button className="btn ghost full" style={{ marginBottom: 4 }} onClick={() => { persistCurrent(); openTimer(); }}>⏱ Track time on this job <span className="hint">log actual hours per phase</span></button>
+                  {/* DIAGNOSTICS ("flight recorder") — export the build trail, or a fetchable link for an advisor. */}
+                  {estResult && estResult.diag && (
+                    <section className="card" style={{ marginBottom: 4 }}>
+                      <div className="h2">Diagnostics <span className="hint">flight recorder</span></div>
+                      <p className="hint" style={{ marginTop: -2 }}>Captures HOW this bid was built — the raw AI output, the final takeoff, and each line's price provenance — for debugging or diffing two runs.</p>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button className="btn ghost grow1" onClick={exportDiagnostics}>⬇ Export diagnostics</button>
+                        <button className="btn ghost grow1" disabled={diagBusy} onClick={copyDiagLink}>{diagBusy ? "Linking…" : "🔗 Copy diagnostic link"}</button>
+                      </div>
+                      {diagLink && (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="hint mono" style={{ wordBreak: "break-all" }}>{diagLink}</div>
+                          <p className="hint" style={{ color: "#8A5A12", marginTop: 4 }}>⚠️ Anyone with this link can read this bundle (your costs + margin). Unguessable, not private — auto-expires in ~30 days.</p>
+                          <button className="btn ghost" style={{ marginTop: 4 }} onClick={deleteDiagLink}>Delete link</button>
+                        </div>
+                      )}
+                    </section>
+                  )}
                   {/* customer + address — identify the saved estimate (auto-saves) */}
                   <section className="card" style={{ marginBottom: 4 }}>
                     <div className="estfields">
