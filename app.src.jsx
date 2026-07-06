@@ -702,6 +702,37 @@ function roofIsMixed(sys) {
   const s = (sys || "").toLowerCase();
   return roofTypeOf(s) !== "shingle" && ROOF_SHINGLE_RE.test(s);
 }
+// DEFECT D/F + I&W grade rule — build-prompt guidance for a MIXED roof: partition the area per Caza's
+// 4ft-band standard (a stated band depth wins), give the exact reference numbers when measurements
+// allow, spell the grade->hardware rule (26-ga SMP flange-screw vs 24-ga Kynar clip) and the two-SKU
+// I&W split. The LLM produces the partitioned quantities (which the mixed price-only pass then keeps),
+// so the band is never double-counted and fasteners/underlayment are band-scoped — not full-roof.
+function mixedRoofBlock(dims, sysStr, desc, panelW) {
+  const s = (String(sysStr || "") + " " + String(desc || "")).toLowerCase();
+  const m = parseMeas(dims);
+  const totalSQ = m.area ? Math.round((m.area / 100) * 10) / 10 : 0;
+  const eaveLF = m.eaves || 0;
+  let bandFt = 4, bandStated = false;
+  const bm = s.match(/(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)[- ]*(?:eave\s*)?band/) || s.match(/band[^.]{0,24}?(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)/);
+  if (bm) { const v = parseFloat(bm[1]); if (v > 0 && v < 20) { bandFt = v; bandStated = true; } }
+  const coverIn = parseFloat(panelW) > 0 ? parseFloat(panelW) : 16;
+  const coverFt = coverIn / 12;
+  const isKynar = /kynar|24\s*ga|1-?1\/2|1\.5\s*(?:in|")?\s*seam/.test(s) && !/\bsmp\b|26\s*ga/.test(s);
+  let out = "MIXED ROOF — this job has a NON-shingle band AND a shingle field. Build BOTH systems in ONE takeoff and PARTITION the roof area so nothing is double-counted (the band must NOT also be shingled):\n";
+  out += "- Band depth: " + (bandStated ? ("as stated in the conversation (" + bandFt + "ft up-slope).") : "use Caza's STANDARD 4ft up-slope (measured along the slope), and FLAG it as an assumption/deviation: \"band figured at Caza standard 4ft - adjust?\".") + "\n";
+  out += "- Partition: band SF = eave LF x " + bandFt + "ft; band SQ = band SF / 100; shingle field SQ = total SQ - band SQ; panel LF = band SF / (coverage width " + coverIn + "in = " + (Math.round(coverFt * 1000) / 1000) + "ft).\n";
+  if (eaveLF > 0 && totalSQ > 0) {
+    const bandSF = eaveLF * bandFt, bandSQ = Math.round(bandSF / 100 * 10) / 10, fieldSQ = Math.round((totalSQ - bandSF / 100) * 10) / 10, panelLF = Math.round(bandSF / coverFt);
+    out += "- FOR THIS JOB (eave " + eaveLF + " LF, total " + totalSQ + " SQ): band ~= " + bandSQ + " SQ, shingle field ~= " + fieldSQ + " SQ, panel ~= " + panelLF + " LF. Use these PARTITIONED quantities — the shingle field is ~" + fieldSQ + " SQ, NOT the full " + totalSQ + " SQ.\n";
+  } else {
+    out += "- (Eave LF or total area not measured — state the assumption and ask for the eave length if you need it.)\n";
+  }
+  out += "- Panel hardware follows the GRADE (flag any mismatch as a deviation): 26-ga SMP = concealed pancake screws through the 1in flange 12in o.c. -> screw count ~= panel LF; NO clips, and NOT AG-style exposed/washered screws. 24-ga Kynar = concealed clips 16in o.c. (clips ~= panel LF x 0.75) + 2 pancake screws per clip. This job reads as " + (isKynar ? "24-ga Kynar (clip)" : "26-ga SMP (flange-screw)") + " unless the SKU/manual says otherwise.\n";
+  out += "- Fasteners, band underlayment, and band trim scale to the BAND area, NOT the whole roof.\n";
+  out += "- Ice & water by system: HIGH-TEMP on the band area only; REGULAR at the shingle field's eaves/valleys per the EagleView formula. Two separate lines — neither runs across the whole roof.\n";
+  out += "- Tiers: keep the shingle field's Good/Better/Best in the SHINGLE family and the band in the METAL family; do NOT flag the shingle tiers as off-family on this mixed job.\n";
+  return out;
+}
 // Infer a takeoff category KEY from a line name (for category-assisted book matching, Defect C).
 function roofLineKey(name) {
   const s = String(name || "").toLowerCase();
@@ -748,15 +779,39 @@ function parseLenFt(str) {
   return 0;
 }
 // Best NAME-overlap book row (the original token-overlap logic, returning the row + score).
-function bestBookRowByName(name, books) {
+// C.5 CROSS-PRODUCT GUARD — a takeoff line's part-type must agree with the book row's part-type, so a
+// ridge-cap line can't price off a field-shingle bundle (brand tokens like "Owens Corning Duration"
+// otherwise overwhelm the one part token "ridge" -> $35.25/LF ridge). Only the distinct BIG products
+// are strict-guarded; fasteners/clips/underlayment/closure match freely (units + category catch those).
+function roofPartType(s) {
+  const t = String(s || "").toLowerCase();
+  if (/ridge\s*vent|soffit\s*vent|intake|exhaust/.test(t)) return "vent";
+  if (/hip\s*(?:&|and|\/)?\s*ridge|ridge\s*cap|hip\s*cap|\bridge\b|\bhip\b/.test(t)) return "ridge";
+  if (/starter/.test(t)) return "starter";
+  if (/valley/.test(t)) return "valley";
+  if (/drip|eave\s*(?:trim|metal)|edge\s*metal|\brake\b|gable|\bfascia\b|step\s*flash/.test(t)) return "trim";
+  if (/underlay|ice\s*(?:&|and)?\s*water|\bi&w\b|high.?temp|\bfelt\b|synthetic/.test(t)) return "iw";
+  if (/\bclip\b|cleat/.test(t)) return "clip";
+  if (/screw|fastener/.test(t)) return "screw";
+  if (/\bpanel\b|standing.?seam/.test(t)) return "panel";
+  if (/shingle|architectural|3-?tab|laminate|\bslate\b|\bfield\b|membrane|\btpo\b|\bepdm\b|\btile\b/.test(t)) return "field";
+  return "";
+}
+const KEY_PART = { field: "field", panel: "panel", clip: "clip", screw: "screw", drip: "trim", rake: "trim", step: "trim", flash: "trim", valley: "valley", ridge: "ridge", starter: "starter", iw: "iw" };
+const STRICT_PARTS = { field: 1, panel: 1, ridge: 1, trim: 1, valley: 1, starter: 1 }; // distinct big products that must not cross-match
+function bestBookRowByName(name, books, lineKey) {
   const stem = (t) => (t.length > 3 && t.charAt(t.length - 1) === "s" && t.charAt(t.length - 2) !== "s") ? t.slice(0, -1) : t;
-  const toks = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9/ ]/g, " ").split(/\s+/).filter((t) => t.length > 1 && !["the", "and", "for", "per", "ft", "of"].includes(t)).map(stem);
+  // split a slash between LETTERS ("hip/ridge" -> "hip ridge") but keep digit fractions ("1/2") intact
+  const toks = (x) => String(x || "").toLowerCase().replace(/([a-z])\/([a-z])/g, "$1 $2").replace(/[^a-z0-9/ ]/g, " ").split(/\s+/).filter((t) => t.length > 1 && !["the", "and", "for", "per", "ft", "of"].includes(t)).map(stem);
   const want = new Set(toks(name));
   if (!want.size) return null;
+  const expected = lineKey ? KEY_PART[lineKey] : "";
+  const guard = !!(expected && STRICT_PARTS[expected]);
   let best = null, bestScore = 0;
   for (const b of books) {
     const c = Number(b && b.cost);
     if (!(c > 0)) continue;
+    if (guard) { const rp = roofPartType(b.name); if (rp && STRICT_PARTS[rp] && rp !== expected) continue; } // C.5: skip cross-product rows
     const bt = toks(b.name);
     if (!bt.length) continue;
     const bs = new Set(bt);
@@ -786,7 +841,7 @@ function matchBookLine(line, books) {
   if (!Array.isArray(books) || !books.length) return { unmatched: true };
   const wantUnit = canonUnit(line.unit);
   let row = null, via = null;
-  const bn = bestBookRowByName(line.name, books);
+  const bn = bestBookRowByName(line.name, books, line.key); // pass key for the C.5 cross-product guard
   if (bn) { row = bn.row; via = "name"; }
   if (!row && line.key) { const cr = bookRowByCategory(line.key, books); if (cr) { row = cr; via = "category"; } }
   if (!row) return { unmatched: true };
@@ -1197,12 +1252,15 @@ const CAZA_MANUAL_DEFAULT = {
     { id: "cm_a_shingle", match: "shingle|asphalt|architectural", includes: ["Tear-off + haul-away", "Ice & water shield (eaves + valleys)", "Synthetic underlayment", "Owens Corning Duration shingles", "Starter strip", "Hip & ridge cap", "Ridge / intake ventilation", "Step + pipe flashing", "Drip edge", "Cleanup / magnetic sweep"], excludes: [], note: "Owens Corning Total Protection system." },
     { id: "cm_a_cedar", match: "cedar", includes: ["Cedar field siding", "Cedar fascia / rake", "Metal J-channel", "Cedar starter course", "Building paper / WRB", "Stainless / hot-dipped fasteners"], excludes: ["vinyl j-channel", "vinyl fascia"], note: "Cedar takes metal trim, never vinyl." },
     { id: "cm_a_vinylsoffit", match: "soffit", includes: ["Vinyl soffit", "Aluminum or vinyl fascia (per standard)", "Drip edge"], excludes: ["wall opening", "window opening"], note: "Soffit is eave trim — no wall-opening lines." },
-    { id: "cm_a_standingseam", match: "standing.?seam|snap.?lock|metal panel|metal roof", includes: ["Standing-seam panels", "Metal valley / eave / rake trim", "Metal step + chimney flashing", "High-temp underlayment", "Concealed clips"], excludes: ["asphalt flashing", "rubber gutter"], note: "All-metal system." },
+    { id: "cm_a_standingseam", match: "standing.?seam|snap.?lock|mechanical.?lock|nu-?lok|metal panel|metal roof", includes: ["Standing-seam panels (16in coverage)", "Metal valley / eave / rake trim", "Metal step + chimney flashing", "High-temp ice & water (under ALL steel)", "Panel hardware per grade: 26-ga SMP = concealed pancake screws through the 1in integral flange, 12in o.c. (NO clips); 24-ga Kynar = concealed clips 16in o.c. up the 1-1/2in seam + 2 pancake screws per clip"], excludes: ["asphalt flashing", "rubber gutter", "exposed-fastener / washered screws", "regular (non-high-temp) underlayment under steel"], note: "All-metal system. TWO Caza grades: Good = 26-ga SMP (flange-screw, no clips); Better/Best = 24-ga Kynar (clip-fastened). Both 16in coverage — panel LF math is identical; only hardware differs." },
+    { id: "cm_a_metalband", match: "eave band|metal band|metal eave|band \\+ shingle", includes: ["Metal eave band at Caza standard depth 4ft up-slope (measured along the slope)", "Band panel per standing-seam grade (16in coverage)", "High-temp ice & water on the BAND area only", "Band trim + closures", "Shingle field on the REMAINING area (total minus band) with REGULAR ice & water at eaves/valleys"], excludes: ["shingle field run at the FULL roof area (double-counts the band)", "band fasteners/underlayment scaled to the full roof area"], note: "Mixed roof: PARTITION the area. band SF = eave LF x 4ft; shingle field SQ = total SQ minus band SQ; panel LF = band SF / panel coverage width. Fastener + band underlayment scale to the band area only. A band depth stated in the conversation overrides the 4ft standard." },
     { id: "cm_a_tpo", match: "\\btpo\\b|flat roof|membrane", includes: ["TPO membrane", "Polyiso insulation (fully adhered)", "TPO-compatible flashing", "TPO fasteners / plates", "Edge metal / coping"], excludes: ["EPDM fasteners", "BUR flashing"], note: "TPO single-ply assembly." },
   ],
   materials: [
     { id: "cm_m_shingle", role: "Shingle", standard: "Owens Corning Duration", subs: ["GAF Timberline HDZ", "CertainTeed Landmark"], note: "OC Total Protection system." },
-    { id: "cm_m_underlay", role: "Underlayment", standard: "Synthetic underlayment + ice & water at eaves/valleys", subs: [], note: "" },
+    { id: "cm_m_ss_smp", role: "Standing seam — Good (economy grade)", standard: "26-ga SMP, 1in seam, integral screw flange, 16in coverage; concealed pancake screws 12in o.c. up the flange, NO clips", subs: [], note: "Flange-screw grade. Screw count ~= panel LF (12in o.c. on one flange). SKU e.g. 26G SMP A1101." },
+    { id: "cm_m_ss_kynar", role: "Standing seam — Better/Best (premium grade)", standard: "24-ga Kynar, 1-1/2in seam, clip-fastened, 16in coverage; concealed clips 16in o.c. up the seam, 2 pancake screws per clip", subs: [], note: "Clip grade. Clips ~= panel LF x 0.75; screws = clips x 2." },
+    { id: "cm_m_underlay", role: "Underlayment / ice & water", standard: "Synthetic underlayment; REGULAR ice & water at eaves/valleys on shingle roofs; HIGH-TEMP ice & water under ALL steel. On a MIXED roof: high-temp on the metal band, regular at the shingle field's eaves/valleys — two separate SKUs, each scoped to its own area.", subs: [], note: "I&W grade follows the system: regular = asphalt, high-temp = steel. Neither product runs across the whole roof on a mixed job." },
     { id: "cm_m_pipeflash", role: "Pipe flashing", standard: "Lifetime Tool pipe flashing", subs: [], note: "" },
     { id: "cm_m_cedartrim", role: "Cedar siding trim / J-channel", standard: "Metal J-channel (copper / bronze / aluminum)", subs: [], note: "No vinyl trim on cedar." },
     { id: "cm_m_soffitfascia", role: "Fascia (vinyl soffit job)", standard: "Aluminum fascia", subs: ["Vinyl fascia"], note: "" },
@@ -3416,7 +3474,7 @@ function App() {
         if (ctx.state === "suspended" && ctx.resume) ctx.resume();
       } catch (e) { analyserRef.current = null; }
       sessionRef.current = true; micMutedRef.current = true; setVoiceSession(true);
-      await speakAL("Voice on — what are we working on?"); // greeting (mic muted until it ends)
+      await speakAL("What are we working on?"); // greeting (mic muted until it ends)
       if (sessionRef.current) { micMutedRef.current = false; recordTurn(); }
     } catch (e) { endVoiceSession(); flash("Mic unavailable — allow microphone access, or use your keyboard's 🎤."); }
   };
@@ -3594,6 +3652,7 @@ function App() {
         "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" +
         ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
         cazaManualBlock(scope, desc, profC.cazaManual) +
+        (roofIsMixed(scope + " " + desc) ? mixedRoofBlock(dims, scope + " " + desc, desc, panelW) : "") +
         (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") +
         "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" +
         "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
@@ -3698,9 +3757,14 @@ function App() {
       // FAMILY-LOCK backstop (Leak B): mark any tier whose material family clearly differs from the
       // job's specified primary (e.g. vinyl on a cedar job) — flagged in the UI, never silently dropped.
       const __jobFamily = materialFamily(scope + " " + desc);
+      // DEFECT E: on a MIXED roof BOTH systems' families are in-scope (metal band + shingle field) — a
+      // tier matching EITHER is in-family; flag only a tier that matches NEITHER. Single-system jobs keep
+      // the strict single-family lock exactly as shipped.
+      const __mixedFams = (isRoof && roofIsMixed(sysStr)) ? (() => { const t = roofTypeOf(sysStr); const nf = (t === "metal" || t === "agpanel") ? "metal" : t === "flat" ? "membrane" : t === "tile" ? "tile" : ""; return [nf, "shingle"].filter(Boolean); })() : null;
+      const __offFam = (nm) => { const of = materialFamily(nm); if (!of) return false; return __mixedFams ? (__mixedFams.indexOf(of) < 0) : tierOffFamily(__jobFamily, nm); };
       let primaryOptions = Array.isArray(d.primaryOptions) ? d.primaryOptions.slice(0, 3).map((o) => ({
         tier: String(o.tier || ""), name: String(o.name || ""), why: String(o.why || ""),
-        cost: Math.round(num(o.cost) || 0), url: String(o.url || ""), offFamily: tierOffFamily(__jobFamily, String(o.name || "")),
+        cost: Math.round(num(o.cost) || 0), url: String(o.url || ""), offFamily: __offFam(String(o.name || "")),
       })).filter((o) => o.name) : [];
       // Flat commercial: replace the LLM options with the 3 engine assemblies (each carries its
       // full assembly so picking a tier or pricing the proposal swaps membrane+insulation+labor).
