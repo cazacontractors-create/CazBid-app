@@ -707,26 +707,37 @@ function roofIsMixed(sys) {
 // allow, spell the grade->hardware rule (26-ga SMP flange-screw vs 24-ga Kynar clip) and the two-SKU
 // I&W split. The LLM produces the partitioned quantities (which the mixed price-only pass then keeps),
 // so the band is never double-counted and fasteners/underlayment are band-scoped — not full-roof.
-function mixedRoofBlock(dims, sysStr, desc, panelW) {
+// Shared band/field partition for a mixed roof: eave LF x band depth (a stated depth wins, else Caza's
+// 4ft standard); panel LF = band SF / panel coverage width (panelW in, default 16in). Used by the build
+// prompt AND the never-omit panel backstop so both agree on the numbers.
+function bandPartition(dims, sysStr, desc, panelW) {
   const s = (String(sysStr || "") + " " + String(desc || "")).toLowerCase();
   const m = parseMeas(dims);
-  const totalSQ = m.area ? Math.round((m.area / 100) * 10) / 10 : 0;
+  const totalSQ = m.area ? m.area / 100 : 0;
   const eaveLF = m.eaves || 0;
   let bandFt = 4, bandStated = false;
   const bm = s.match(/(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)[- ]*(?:eave\s*)?band/) || s.match(/band[^.]{0,24}?(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)/);
   if (bm) { const v = parseFloat(bm[1]); if (v > 0 && v < 20) { bandFt = v; bandStated = true; } }
   const coverIn = parseFloat(panelW) > 0 ? parseFloat(panelW) : 16;
   const coverFt = coverIn / 12;
+  const bandSF = eaveLF * bandFt;
+  return { eaveLF, totalSQ, bandFt, bandStated, coverIn, coverFt, bandSF, bandSQ: bandSF / 100, fieldSQ: totalSQ > 0 ? Math.max(0, totalSQ - bandSF / 100) : 0, panelLF: coverFt > 0 ? bandSF / coverFt : 0 };
+}
+function mixedRoofBlock(dims, sysStr, desc, panelW) {
+  const s = (String(sysStr || "") + " " + String(desc || "")).toLowerCase();
+  const bp = bandPartition(dims, sysStr, desc, panelW);
+  const totalSQ = Math.round(bp.totalSQ * 10) / 10, eaveLF = bp.eaveLF, bandFt = bp.bandFt, bandStated = bp.bandStated, coverIn = bp.coverIn, coverFt = bp.coverFt;
   const isKynar = /kynar|24\s*ga|1-?1\/2|1\.5\s*(?:in|")?\s*seam/.test(s) && !/\bsmp\b|26\s*ga/.test(s);
   let out = "MIXED ROOF — this job has a NON-shingle band AND a shingle field. Build BOTH systems in ONE takeoff and PARTITION the roof area so nothing is double-counted (the band must NOT also be shingled):\n";
   out += "- Band depth: " + (bandStated ? ("as stated in the conversation (" + bandFt + "ft up-slope).") : "use Caza's STANDARD 4ft up-slope (measured along the slope), and FLAG it as an assumption/deviation: \"band figured at Caza standard 4ft - adjust?\".") + "\n";
   out += "- Partition: band SF = eave LF x " + bandFt + "ft; band SQ = band SF / 100; shingle field SQ = total SQ - band SQ; panel LF = band SF / (coverage width " + coverIn + "in = " + (Math.round(coverFt * 1000) / 1000) + "ft).\n";
   if (eaveLF > 0 && totalSQ > 0) {
-    const bandSF = eaveLF * bandFt, bandSQ = Math.round(bandSF / 100 * 10) / 10, fieldSQ = Math.round((totalSQ - bandSF / 100) * 10) / 10, panelLF = Math.round(bandSF / coverFt);
+    const bandSQ = Math.round(bp.bandSQ * 10) / 10, fieldSQ = Math.round(bp.fieldSQ * 10) / 10, panelLF = Math.round(bp.panelLF);
     out += "- FOR THIS JOB (eave " + eaveLF + " LF, total " + totalSQ + " SQ): band ~= " + bandSQ + " SQ, shingle field ~= " + fieldSQ + " SQ, panel ~= " + panelLF + " LF. Use these PARTITIONED quantities — the shingle field is ~" + fieldSQ + " SQ, NOT the full " + totalSQ + " SQ.\n";
   } else {
     out += "- (Eave LF or total area not measured — state the assumption and ask for the eave length if you need it.)\n";
   }
+  out += "- NEVER OMIT the metal PANEL line (the band's priciest component): if you can't resolve the band size, still include the panel line with your best default quantity and mark it an assumption — never ship band accessories (butyl/closures/rivets/screws) without their panel.\n";
   out += "- Panel hardware follows the GRADE (flag any mismatch as a deviation): 26-ga SMP = concealed pancake screws through the 1in flange 12in o.c. -> screw count ~= panel LF; NO clips, and NOT AG-style exposed/washered screws. 24-ga Kynar = concealed clips 16in o.c. (clips ~= panel LF x 0.75) + 2 pancake screws per clip. This job reads as " + (isKynar ? "24-ga Kynar (clip)" : "26-ga SMP (flange-screw)") + " unless the SKU/manual says otherwise.\n";
   out += "- Fasteners, band underlayment, and band trim scale to the BAND area, NOT the whole roof.\n";
   out += "- Ice & water by system: HIGH-TEMP on the band area only; REGULAR at the shingle field's eaves/valleys per the EagleView formula. Two separate lines — neither runs across the whole roof.\n";
@@ -2592,6 +2603,15 @@ function App() {
       const q = __mixed ? null : computeRoofQuantities(whDims, sysStr, 0);
       if (__mixed) {
         items = repriceLlmItems(items, books);
+        // NEVER-OMIT (run-3): a mixed roof must show its metal PANEL line even if the LLM only shipped
+        // band accessories — add a flagged panel line at the best default qty rather than hide the cost.
+        if (!items.some((it) => roofPartType(it.name) === "panel")) {
+          const bp = bandPartition(whDims, sysStr, mat, 0);
+          const qty = bp.panelLF > 0 ? Math.round(bp.panelLF) : 0;
+          const mb = matchBookLine({ name: "Standing-seam metal panel", unit: "LF", key: "panel" }, books);
+          const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
+          items.push({ name: "Standing-seam metal panel (band)", qty: qty, unit: "LF", cost: up != null ? Math.round(up * qty) : 0, unpriced: up == null || qty <= 0 });
+        }
       } else if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
           items = priceRoofTakeoff(q, books, items);
@@ -3707,6 +3727,17 @@ function App() {
         const q = __mixed ? null : computeRoofQuantities(dims, sysStr, num(panelW));
         if (__mixed) {
           items = repriceLlmItems(items, books);
+          // NEVER-OMIT (run-3): a mixed roof MUST show its metal PANEL line — the band's priciest
+          // component. If the LLM shipped band accessories (butyl/closures/screws) but no panel, add a
+          // flagged panel line at the best default qty (band SF / coverage). A contractor can fix a
+          // flagged number; they can't fix an invisible one.
+          if (!items.some((it) => roofPartType(it.name) === "panel")) {
+            const bp = bandPartition(dims, sysStr, desc, panelW);
+            const qty = bp.panelLF > 0 ? Math.round(bp.panelLF) : 0;
+            const mb = matchBookLine({ name: "Standing-seam metal panel", unit: "LF", key: "panel" }, books);
+            const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
+            items.push({ name: "Standing-seam metal panel (band)", qty: qty, unit: "LF", unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * qty) : 0, unpriced: up == null || qty <= 0, priceTier: null, matchType: null, priceNote: qty > 0 ? ("band panel ~= " + qty + " LF (Caza " + bp.bandFt + "ft band / " + bp.coverIn + "in coverage)" + (bp.bandStated ? "" : " - 4ft standard, adjust")) : "panel line added - set the band size (eave LF) to get a quantity" });
+          }
         } else if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -3725,11 +3756,16 @@ function App() {
             { key: "step", kw: ["step flash"] },
             { key: "pen", kw: ["pipe boot", "penetration", "pipe flash"] },
           ];
+          // DEFECT G: reconcile formula lines with LLM lines by COMPONENT — one line per component, no
+          // $0 duplicate. Keyword lists miss variants ("hip & ridge" != "hip/ridge"); roofPartType catches
+          // them for the distinct big products so a matched LLM line is rewritten (not duplicated).
+          const DISTINCT_PART = { ridge: "ridge", starter: "starter", valley: "valley", field: "field" };
           const matched = {};
           q.forEach((cq) => {
             const mm = matchers.find((x) => x.key === cq.key);
             if (!mm) return;
-            const idx = items.findIndex((it) => { const n = (it.name || "").toLowerCase(); return mm.kw.some((k) => n.indexOf(k) >= 0); });
+            const dp = DISTINCT_PART[cq.key];
+            const idx = items.findIndex((it) => { const n = (it.name || "").toLowerCase(); return mm.kw.some((k) => n.indexOf(k) >= 0) || (dp && roofPartType(it.name) === dp); });
             if (idx >= 0) {
               matched[cq.key] = true;
               const old = items[idx];
@@ -3747,6 +3783,8 @@ function App() {
             if (matched[key]) return;
             const cq = q.find((x) => x.key === key);
             if (!cq) return;
+            // DEFECT G safety: don't backfill a distinct component the LLM already carries under another name.
+            if (DISTINCT_PART[key] && items.some((it) => roofPartType(it.name) === DISTINCT_PART[key])) return;
             const mb = matchBookLine({ name: cq.name, unit: cq.unit, key: cq.key }, books);
             const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
             items.push({ name: cq.name, qty: cq.qty, unit: cq.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * cq.qty) : 0, unpriced: up == null, priceTier: null, matchType: null, priceNote: (mb && mb.note) || "" });
