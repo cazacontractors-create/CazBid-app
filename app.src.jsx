@@ -570,10 +570,13 @@ const MANUAL_FILE_FOR_TRADE = {
 function manualTradeKey(scope, desc) {
   const s = ((scope || "") + " " + (desc || "")).toLowerCase();
   if (/(roof|shingle|standing seam|metal panel|slate|nu-?lok|tpo|epdm|membrane|bur|flat roof|re-?roof|ridge|soffit|fascia|gutter|downspout)/.test(s)) return "roofing";
+  // F9/F10: DECKS before siding/framing — a "Trex deck + VINYL railing" must not route into the
+  // siding engine (run-6: all-zero siding template), and a deck's PT SUBFRAME (joists/beams/posts)
+  // belongs to the deck trade, never the HOUSE-framing engine (run-6: roof trusses on a deck).
+  if (/(deck|railing|guard|baluster|porch|composite deck|trex)/.test(s)) return "decks";
   if (/(siding|vinyl|hardie|fiber cement|clapboard|cedar lap|board.?and.?batten|ag panel|cladding|housewrap|wrb)/.test(s)) return "siding";
   if (/(fram|truss|rafter|joist|stud|beam|lvl|header|sheathing|structural|timber)/.test(s)) return "framing";
   if (/(concrete|masonry|foundation|footing|slab|cmu|block|brick|stone|veneer|paver|hardscape|retaining|flatwork|mortar)/.test(s)) return "concrete";
-  if (/(deck|railing|guard|baluster|porch|composite deck|trex)/.test(s)) return "decks";
   if (/(insulat|spray foam|batt|blown.?in|cellulose|rigid board|r-?value|air seal|vapor barrier|thermal)/.test(s)) return "insulation";
   if (/(drywall|sheetrock|gypsum|joint compound|\bpaint|primer|interior finish|level 5)/.test(s)) return "interior";
   if (/(floor|tile|hardwood|engineered wood|lvp|lvt|vinyl plank|laminate|carpet|subfloor)/.test(s)) return "flooring";
@@ -723,12 +726,29 @@ function bandPartition(dims, sysStr, desc, panelW) {
   const totalSQ = m.area ? m.area / 100 : 0;
   const eaveLF = m.eaves || 0;
   let bandFt = 4, bandStated = false;
-  const bm = s.match(/(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)[- ]*(?:eave\s*)?band/) || s.match(/band[^.]{0,24}?(\d+(?:\.\d+)?)\s*(?:'|ft|foot|feet)/);
+  const bm = s.match(/(\d+(?:\.\d+)?)\s*-?\s*(?:'|ft\b|foot|feet)[- ]*(?:eave\s*)?band/) || s.match(/band[^.]{0,24}?(\d+(?:\.\d+)?)\s*-?\s*(?:'|ft\b|foot|feet)/);
   if (bm) { const v = parseFloat(bm[1]); if (v > 0 && v < 20) { bandFt = v; bandStated = true; } }
   const coverIn = parseFloat(panelW) > 0 ? parseFloat(panelW) : 16;
   const coverFt = coverIn / 12;
   const bandSF = eaveLF * bandFt;
   return { eaveLF, totalSQ, bandFt, bandStated, coverIn, coverFt, bandSF, bandSQ: bandSF / 100, fieldSQ: totalSQ > 0 ? Math.max(0, totalSQ - bandSF / 100) : 0, panelLF: coverFt > 0 ? bandSF / coverFt : 0 };
+}
+// H2 — ONE band depth must drive BOTH partition halves. The 3-ft run set the shingle field from the
+// stated depth but left panel/screws/band-I&W at the 4-ft quantities. After the mixed price-only
+// pass, the PANEL line (the band's priciest, formula-owned component) is reconciled to the band
+// formula when it deviates >25% — with the math shown in the line note, never silently.
+function reconcileBandPanel(items, dims, sysStr, desc, panelW) {
+  const bp = bandPartition(dims, sysStr, desc, panelW);
+  if (!(bp.panelLF > 0)) return items;
+  return (items || []).map((it) => {
+    if (roofPartType(it.name) !== "panel") return it;
+    const cu = canonUnit(it.unit);
+    const want = cu === "sq" ? Math.round(bp.bandSQ * 1.08 * 10) / 10 : Math.round(bp.panelLF);
+    const q = Number(it.qty) || 0;
+    if (!(want > 0) || (q > 0 && Math.abs(q - want) / want <= 0.25)) return it;
+    const up = Number(it.unitPrice) > 0 ? Number(it.unitPrice) : (q > 0 ? (Number(it.cost) || 0) / q : 0);
+    return Object.assign({}, it, { qty: want, unitPrice: up, cost: Math.round(up * want), priceNote: ((it.priceNote ? it.priceNote + " · " : "") + "panel set to the band formula: " + bp.eaveLF + " LF eave x " + bp.bandFt + "' band" + (cu === "sq" ? "" : " / " + bp.coverIn + "in coverage") + " = " + want + " " + (cu === "sq" ? "SQ" : "LF") + (bp.bandStated ? "" : " (4ft Caza standard - adjust?)")) });
+  });
 }
 function mixedRoofBlock(dims, sysStr, desc, panelW) {
   const s = (String(sysStr || "") + " " + String(desc || "")).toLowerCase();
@@ -1136,16 +1156,30 @@ function computeLaborFromRateBook(items, rateBook, estDims, scope, desc) {
   if (mult > 1.5) mult = 1.5;
 
   let hours = 0; let matched = false; let sqHours = 0; // sqHours = the per-square bulk (install + tear-off)
+  const insCtx = installScope(ctx); // F13: the INSTALLED system picks the rate — never the roof being torn off
+  // H1 (the $5k template flip): a MIXED roof's install labor covers BOTH systems, computed IN CODE
+  // from the PARTITIONED quantities — shingle rate x field SQ + metal rate x band SQ (one difficulty
+  // factor). If either rate or the partition is missing, return null (AI total + floor) rather than
+  // bid half the install labor.
+  if (/roof/.test(ctx) && roofIsMixed(insCtx) && squares > 0) {
+    const bp = bandPartition(estDims, insCtx, "", 0);
+    const shR = findRate(["shingle install", "shingle"]);
+    const ssR = findRate(["standing seam"]) || findRate(["steel panel", "ag panel"]);
+    if (!(shR && ssR && bp.bandSQ > 0 && bp.fieldSQ > 0)) return null;
+    const h = (bp.fieldSQ * num(shR.rate) + bp.bandSQ * num(ssR.rate)) * mult;
+    hours += h; sqHours += h; matched = true;
+  } else {
   // 1) PRIMARY INSTALL (per square) — pick the rate matching the system
   let instRate = null;
-  if (/standing seam|lok|snap.?lock|mechanical lock/.test(ctx)) instRate = findRate(["standing seam"]);
-  else if (/slate|nu-?lok/.test(ctx)) instRate = findRate(["slate"]);
-  else if (/shake/.test(ctx)) instRate = findRate(["shake"]);
-  else if (/shingle|asphalt/.test(ctx)) instRate = findRate(["shingle install", "shingle"]);
-  else if (/tpo/.test(ctx)) instRate = findRate(["tpo"]);
-  else if (/epdm/.test(ctx)) instRate = findRate(["epdm"]);
-  else if (/metal panel|exposed fastener|ag panel|steel panel/.test(ctx)) instRate = findRate(["steel panel", "ag panel"]);
+  if (/standing seam|lok|snap.?lock|mechanical lock/.test(insCtx)) instRate = findRate(["standing seam"]);
+  else if (/slate|nu-?lok/.test(insCtx)) instRate = findRate(["slate"]);
+  else if (/shake/.test(insCtx)) instRate = findRate(["shake"]);
+  else if (/shingle|asphalt/.test(insCtx)) instRate = findRate(["shingle install", "shingle"]);
+  else if (/tpo/.test(insCtx)) instRate = findRate(["tpo"]);
+  else if (/epdm/.test(insCtx)) instRate = findRate(["epdm"]);
+  else if (/metal panel|exposed fastener|ag panel|steel panel/.test(insCtx)) instRate = findRate(["steel panel", "ag panel"]);
   if (instRate && squares > 0) { const h = squares * num(instRate.rate) * mult; hours += h; sqHours += h; matched = true; }
+  }
 
   // 2) TEAR-OFF (per square, not multiplied by pitch difficulty)
   if (/tear|re-?roof|remove|layer/.test(ctx)) {
@@ -1641,6 +1675,27 @@ async function pSet(key, val) {
 // from day one: { id, customerName, jobAddress, createdAt, updatedAt, status,
 // jobNimbusId, price, payload }. NOTE: local storage is NOT a backup (cache clear /
 // lost phone = gone); it stops mid-session loss until cloud sync ships.
+// F12 — market $-sanity band (ADVISORY, never a block): a per-unit installed price far outside the
+// physically possible band means template fiction (run-6's $19/SF Trex deck) or fat-finger inputs.
+// Bands are deliberately WIDE — only the impossible trips them.
+function marketSanity(sysStr, items, sellShare) {
+  const s = String(sysStr || "").toLowerCase();
+  if (!(sellShare > 0)) return "";
+  const isSF = (u) => /sq\s*ft|sqft|\bsf\b/.test(u);
+  const isSQ = (u) => !isSF(u) && (/\bsq\b|square/.test(u));
+  let area = 0, unitLbl = "", lo = 0, hi = 0, kind = "";
+  for (const it of (items || [])) {
+    const q = Number(it.qty) || 0; if (!(q > 0)) continue;
+    const u = String(it.unit || "").toLowerCase();
+    if (/deck|trex|composite/.test(s) && /deck|porch/.test(s)) { kind = "composite deck"; lo = 35; hi = 250; unitLbl = "SF"; if (isSF(u)) { area = Math.max(area, q); } }
+    else if (/roof|shingle|standing.?seam|metal panel|slate|tile/.test(s)) { kind = "roof"; lo = 300; hi = 2600; unitLbl = "SQ"; if (isSQ(u)) area = Math.max(area, q); }
+    else if (/siding|hardie|clapboard|cladding/.test(s)) { kind = "siding"; lo = 3; hi = 35; unitLbl = "SF"; if (isSF(u)) area = Math.max(area, q); else if (isSQ(u)) area = Math.max(area, q * 100); }
+  }
+  if (!(area > 0)) return "";
+  const per = Math.round((sellShare / area) * 100) / 100;
+  if (per >= lo && per <= hi) return "";
+  return "≈$" + per + "/" + unitLbl + " installed is " + (per < lo ? "below" : "above") + " the typical " + kind + " band ($" + lo + "–$" + hi + "/" + unitLbl + ") — double-check quantities, scope, and trade routing before sending this.";
+}
 // ===== DIAGNOSTIC BUNDLE ("flight recorder") — version + input hash =====
 // Every estimate run records HOW it was built (raw LLM JSON + final takeoff + provenance), not
 // just what it concluded. inputsHash lets identical-input re-rolls be spotted as noise vs a real
@@ -1885,9 +1940,13 @@ const ROOF_PHASES = {
   tile:      { names: ["Tear-off (tile)", "Underlayment & battens", "Tile set", "Hip/ridge & details", "Cleanup"], split: [0.20, 0.15, 0.40, 0.17, 0.08] },
   composite: { names: ["Tear-off", "Dry-in", "Composite field install", "Details & flashing", "Cleanup"], split: [0.18, 0.10, 0.42, 0.22, 0.08] },
   slate:     { names: ["Tear-off", "Dry-in", "Slate set", "Hip/ridge & details", "Cleanup"], split: [0.18, 0.12, 0.42, 0.20, 0.08] },
+  // H1: a MIXED roof gets BOTH install phases — never a single-system template that silently drops
+  // half the install labor (the $5k 4'→3' swing was this template flipping shingle↔metal).
+  mixed:     { names: ["Tear-off / strip", "Dry-in / underlayment", "Shingle field install", "Metal band panel set", "Details & flashing", "Cleanup"], split: [0.18, 0.10, 0.28, 0.20, 0.16, 0.08] },
 };
 function roofPhaseSpec(sys) {
-  const s = (sys || "").toLowerCase();
+  const s = installScope(sys); // F13: phase shape follows the INSTALLED system, not the tear-off
+  if (roofIsMixed(s)) return ROOF_PHASES.mixed; // H1: both systems' phases
   if (/composite|synthetic|davinci|brava|ecostar|inspire|symphony/.test(s)) return ROOF_PHASES.composite;
   if (/slate/.test(s)) return ROOF_PHASES.slate;
   return ROOF_PHASES[roofTypeOf(s)] || ROOF_PHASES.shingle;
@@ -2605,6 +2664,7 @@ function App() {
           const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
           items.push({ name: "Standing-seam metal panel (band)", qty: qty, unit: "LF", cost: up != null ? Math.round(up * qty) : 0, unpriced: up == null || qty <= 0 });
         }
+        items = reconcileBandPanel(items, whDims, sysStr, mat, 0); // H2: one depth drives both halves
       } else if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
           items = priceRoofTakeoff(q, books, items);
@@ -3731,6 +3791,7 @@ function App() {
             const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
             items.push({ name: "Standing-seam metal panel (band)", qty: qty, unit: "LF", unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * qty) : 0, unpriced: up == null || qty <= 0, priceTier: null, matchType: null, priceNote: qty > 0 ? ("band panel ~= " + qty + " LF (Caza " + bp.bandFt + "ft band / " + bp.coverIn + "in coverage)" + (bp.bandStated ? "" : " - 4ft standard, adjust")) : "panel line added - set the band size (eave LF) to get a quantity" });
           }
+          items = reconcileBandPanel(items, dims, sysStr, desc, num(panelW)); // H2: one depth drives both halves
         } else if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
             // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
@@ -3906,6 +3967,10 @@ function App() {
         try {
           const __cat = tierPrefCategory(t, scope + " " + desc);
           const r = await buildOneTrade({ scope, desc, dims, photos: whPhotos, panelW: num(housePanelW[t]) || 0, aiTrade: aiT, tierPref: (__cat && profC.tierPrefs && profC.tierPrefs[__cat]) || null, excludeList: excludeList });
+          // F11 — zero-quantity guard (never-render-zero, the trade-level twin of never-omit): a trade
+          // whose EVERY line came back qty 0 is a wrong-engine/missing-inputs template, not an estimate.
+          // Block-and-ask instead of rendering template lines + phantom minimum hours.
+          if (!(r.items || []).some((it) => num(it.qty) > 0)) throw new Error(label + " came back with no real quantities — add its dimensions (or re-describe the scope) and rebuild.");
           r.phaseSys = scope + " " + desc; // remember the system so phases stay type-specific on edit/reopen
           r.phases = allocatePhases(t, r.laborHours, r.phaseSys); // per-phase BID hours, keyed to the material/system
           results.push(Object.assign({ tradeKey: t, label: label }, r));
@@ -3918,6 +3983,9 @@ function App() {
       let __diag = null;
       try { __diag = buildDiagBundle(sel, ok, __t0, __prevDiag); } catch (e) { console.warn("diag capture failed", e); }
       ok.forEach((t) => { try { delete t.__diagRaw; delete t.__diagPipe; } catch (e) {} }); // keep the persisted trade lean
+      // F12 — advisory market-sanity flag per trade (computed at Caza's standard margin; never blocks)
+      const __sanityMargin = cazaMarginStd(ok, profC.cazaManual);
+      ok.forEach((t) => { try { const __c = (t.items || []).reduce((s, it) => s + num(it.cost), 0) + (num(t.laborHours) || 0) * (num(t.laborRate) || 0) + (num(t.equipment) || 0); const f = marketSanity((t.label || "") + " " + (t.phaseSys || t.title || ""), t.items, sellOf(__c, __sanityMargin)); if (f) t.sanityFlag = f; } catch (e) {} });
       setEstResult({ trades: ok, errors: results.filter((r) => r.error), multi: ok.length > 1, diag: __diag });
       // PART 3 — run-vs-run delta readback when the same job re-rolls (same inputs, different numbers = noise)
       if (__diag && __diag.deltaVsPrev && __diag.deltaVsPrev.sameInputs) { const dv = __diag.deltaVsPrev; if (Math.abs(dv.price) >= 200 || Math.abs(dv.laborHours) >= 8) flash("Re-roll vs last run: " + (dv.price >= 0 ? "+" : "") + "$" + Math.round(dv.price).toLocaleString() + " price · labor hours " + dv.laborHoursFrom + "→" + dv.laborHoursTo + " (same inputs)."); }
@@ -6890,6 +6958,8 @@ function App() {
                           </div>
                         )}
                         {t.addedToManual && (<div style={{ fontSize: 12, color: "#1B7A3D", margin: "4px 0 8px", fontWeight: 600 }}>✓ Added to your Caza Manual — verify the assembly + rate in Profile.</div>)}
+                        {/* F12 — advisory market-sanity band (catches template-fiction bids + fat-finger inputs; never blocks) */}
+                        {t.sanityFlag && (<div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>📉 {t.sanityFlag}</div>)}
                         {t.aiBuilt && !(t.calibN > 0) && (<div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12", fontWeight: 600 }}>🤖 AI-built trade — VERIFY before bidding.</div>)}
                         {t.calibN > 0
                           ? <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10, fontSize: 12.5, color: "#1B7A3D", fontWeight: 600 }}>✓ Calibrated from {t.calibN} job{t.calibN === 1 ? "" : "s"} — labor ×{t.calibFactor}.</div>
