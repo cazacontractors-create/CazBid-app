@@ -3719,9 +3719,9 @@ const CAZA_MANUAL_DEFAULT = {
   }, {
     id: "cm_a_vinylsoffit",
     match: "soffit",
-    includes: ["Vinyl soffit", "Aluminum or vinyl fascia (per standard)", "Drip edge"],
-    excludes: ["wall opening", "window opening"],
-    note: "Soffit is eave trim — no wall-opening lines."
+    includes: ["Vinyl soffit", "F-channel receiver at the soffit-wall connection (the ONE receiver)", "Aluminum or vinyl fascia (per standard)", "Drip edge"],
+    excludes: ["wall opening", "window opening", "J-channel at the soffit-wall connection (F-channel is the receiver — never both for the same run)"],
+    note: "Soffit is eave trim — no wall-opening lines. F8 (Dustin, locked): soffit gets ONE receiver at the wall = F-channel; J-channel footage must not also count the soffit run."
   }, {
     id: "cm_a_standingseam",
     match: "standing.?seam|snap.?lock|mechanical.?lock|nu-?lok|metal panel|metal roof",
@@ -3783,6 +3783,12 @@ const CAZA_MANUAL_DEFAULT = {
     standard: "Aluminum fascia",
     subs: ["Vinyl fascia"],
     note: ""
+  }, {
+    id: "cm_m_soffitrecv",
+    role: "Soffit receiver (soffit-wall connection)",
+    standard: "F-channel",
+    subs: [],
+    note: "ONE receiver at the wall. J-channel LF must exclude the soffit run — F-channel AND J on the same run is a double-count."
   }],
   // PART 5 — vendors/brands: who Caza buys from + preferred manufacturers. Injected into the Opus
   // prompt; the preflight flags a takeoff brand that isn't Caza's preferred (kind "vendor").
