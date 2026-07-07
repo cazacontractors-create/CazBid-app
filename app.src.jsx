@@ -702,6 +702,13 @@ function roofIsMixed(sys) {
   const s = (sys || "").toLowerCase();
   return roofTypeOf(s) !== "shingle" && ROOF_SHINGLE_RE.test(s);
 }
+// F13 — a "tear off / strip / remove (1 layer of shingles)" clause names the OLD roof being REMOVED;
+// it must not feed system/mixed detection (a shingle tear-off + metal install must read as pure metal,
+// not mixed). Strip the removal verb + an optional parenthetical/"N layers of"/one material noun, but
+// stop before any install words so "remove old shingles and install standing seam" keeps the metal.
+function installScope(s) {
+  return String(s || "").toLowerCase().replace(/\b(?:tear[- ]?off|tear[- ]?out|strip(?:ping)?|remov(?:e|al|ing)|rip[- ]?off|demo(?:lish|lition)?)\b\s*(?:\([^)]*\))?\s*(?:(?:the|existing|old|down\s+to\s+deck|\d+\s*layers?\s*(?:of\s+)?)\s*)*(?:asphalt|architectural|3-?tab|dimensional|laminate|shingles?|shakes?|slate|metal|steel|panels?|membrane|tpo|epdm|rubber|tile|roof(?:ing)?)?/g, " ").replace(/\s+/g, " ").trim();
+}
 // DEFECT D/F + I&W grade rule — build-prompt guidance for a MIXED roof: partition the area per Caza's
 // 4ft-band standard (a stated band depth wins), give the exact reference numbers when measurements
 // allow, spell the grade->hardware rule (26-ga SMP flange-screw vs 24-ga Kynar clip) and the two-SKU
@@ -755,6 +762,7 @@ function roofLineKey(name) {
   if (/valley/.test(s)) return "valley";
   if (/ridge|hip/.test(s)) return "ridge";
   if (/closure/.test(s)) return "closure";
+  if (/starter/.test(s)) return "starter"; // H3: BEFORE field — so the C.5 guard stops starter matching a field-shingle row
   if (/underlay|ice|high.?temp|synthetic|felt/.test(s)) return "iw";
   if (/shingle|membrane|\btpo\b|\bepdm\b|tile/.test(s)) return "field";
   return "";
@@ -810,7 +818,13 @@ function roofPartType(s) {
 }
 const KEY_PART = { field: "field", panel: "panel", clip: "clip", screw: "screw", drip: "trim", rake: "trim", step: "trim", flash: "trim", valley: "valley", ridge: "ridge", starter: "starter", iw: "iw" };
 const STRICT_PARTS = { field: 1, panel: 1, ridge: 1, trim: 1, valley: 1, starter: 1 }; // distinct big products that must not cross-match
-function bestBookRowByName(name, books, lineKey) {
+// F6 — steel-SYSTEM SKUs (gauge-prefixed trims, W-bend/valley, cleats, butyl, rivets, pancake/flange
+// screws, standing-seam) are unmatchable on a SHINGLE job — a shingle roof takes aluminum drip + a
+// closed aluminum valley, never Caza's 26G/24G steel-roof accessories.
+function looksSteelSystem(name) {
+  return /\b(?:22|24|26|28|29)\s*ga\b|\b(?:22|24|26|28|29)g\b|w-?bend|w-?valley|\bcleat\b|butyl|\brivet|pancake|standing.?seam|snap.?lock/i.test(String(name || ""));
+}
+function bestBookRowByName(name, books, lineKey, jobShingle) {
   const stem = (t) => (t.length > 3 && t.charAt(t.length - 1) === "s" && t.charAt(t.length - 2) !== "s") ? t.slice(0, -1) : t;
   // split a slash between LETTERS ("hip/ridge" -> "hip ridge") but keep digit fractions ("1/2") intact
   const toks = (x) => String(x || "").toLowerCase().replace(/([a-z])\/([a-z])/g, "$1 $2").replace(/[^a-z0-9/ ]/g, " ").split(/\s+/).filter((t) => t.length > 1 && !["the", "and", "for", "per", "ft", "of"].includes(t)).map(stem);
@@ -823,6 +837,7 @@ function bestBookRowByName(name, books, lineKey) {
     const c = Number(b && b.cost);
     if (!(c > 0)) continue;
     if (guard) { const rp = roofPartType(b.name); if (rp && STRICT_PARTS[rp] && rp !== expected) continue; } // C.5: skip cross-product rows
+    if (jobShingle && looksSteelSystem(b.name)) continue; // F6: no steel-system SKU on a shingle job
     const bt = toks(b.name);
     if (!bt.length) continue;
     const bs = new Set(bt);
@@ -848,11 +863,11 @@ function bookRowByCategory(key, books) {
 // The one unit-aware matcher. Returns { unitPrice, note, source, via } when it can price the line
 // in the TAKEOFF's own unit; { mismatch, bookUnit, wantUnit } when it found a name/category match
 // but the units don't reconcile (caller FLAGS — never silently applies); { unmatched } otherwise.
-function matchBookLine(line, books) {
+function matchBookLine(line, books, opts) {
   if (!Array.isArray(books) || !books.length) return { unmatched: true };
   const wantUnit = canonUnit(line.unit);
   let row = null, via = null;
-  const bn = bestBookRowByName(line.name, books, line.key); // pass key for the C.5 cross-product guard
+  const bn = bestBookRowByName(line.name, books, line.key, !!(opts && opts.jobShingle)); // key = C.5 guard; jobShingle = F6 steel guard
   if (bn) { row = bn.row; via = "name"; }
   if (!row && line.key) { const cr = bookRowByCategory(line.key, books); if (cr) { row = cr; via = "category"; } }
   if (!row) return { unmatched: true };
@@ -922,41 +937,10 @@ function repriceLlmItems(items, books) {
     return it;
   });
 }
-// Token-overlap fuzzy price lookup against the contractor's cost book(s).
-// books: [{name, unit, cost}]. Returns a unit cost or null (caller flags null).
-function priceFromBook(name, books) {
-  if (!Array.isArray(books) || !books.length) return null;
-  const stem = (t) => (t.length > 3 && t.charAt(t.length - 1) === "s" && t.charAt(t.length - 2) !== "s") ? t.slice(0, -1) : t;
-  const toks = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9/ ]/g, " ").split(/\s+/).filter((t) => t.length > 1 && !["the", "and", "for", "per", "ft", "of"].includes(t)).map(stem);
-  const want = new Set(toks(name));
-  if (!want.size) return null;
-  let best = null, bestScore = 0;
-  for (const b of books) {
-    const c = Number(b && b.cost);
-    if (!(c > 0)) continue;
-    const bt = toks(b.name);
-    if (!bt.length) continue;
-    const bs = new Set(bt);
-    let inter = 0; for (const t of want) if (bs.has(t)) inter++;
-    const score = inter / Math.min(want.size, bs.size);
-    if (inter >= 1 && score > bestScore) { bestScore = score; best = b; }
-  }
-  return (best && bestScore >= 0.34) ? Number(best.cost) : null;
-}
-// Price a deterministic roof takeoff: cost book first, then (for lines the book
-// lacks) the LLM's own per-unit estimate for that line — NOT hardcoded. Only lines
-// neither source can price are FLAGGED (visible, never silently $0).
-function priceRoofTakeoff(lines, books, llmItems) {
-  const llmBook = Array.isArray(llmItems) ? llmItems.map((it) => {
-    const u = Number(it.unitPrice) > 0 ? Number(it.unitPrice) : (Number(it.qty) > 0 ? Number(it.cost) / Number(it.qty) : Number(it.cost));
-    return { name: it.name, cost: u };
-  }).filter((x) => x.cost > 0) : [];
-  return (lines || []).map((l) => {
-    let up = priceFromBook(l.name, books); let src = up != null ? "book" : null;
-    if (up == null) { up = priceFromBook(l.name, llmBook); if (up != null) src = "ai"; }
-    return { name: l.name, qty: l.qty, unit: l.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * l.qty) : 0, unpriced: up == null, priceSrc: src };
-  });
-}
+// (Removed the OLD token-overlap priceFromBook + priceRoofTakeoff duplicates that used to live here:
+// as later declarations they SHADOWED the unit-aware versions above, so pure non-shingle roofs were
+// pricing without unit-awareness / the C.5 guard / category-assist. The versions above are now the
+// only definitions — see matchBookLine.)
 // ===== COMMERCIAL FLAT ROOF (TPO/EPDM) — good/better/best tier assemblies =====
 // The engine builds 3 complete flat-membrane assemblies that vary on the 4 levers a
 // commercial customer actually chooses between: membrane thickness (mil), attachment
@@ -1242,7 +1226,7 @@ function stripCrossSystem(items, sysStr) {
   const vinyl = /vinyl (siding|lap)/.test(s);
   const fiber = /fiber.?cement|hardie/.test(s);
   let banned = null;
-  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof|kynar|pvdf|metal trim|metal drip|metal rake/i;
+  if (shingle) banned = /standing seam|metal panel|steel panel|ag panel|snap.?lock|mechanical lock|panel clip|concealed clip|seam tape|metal roof|kynar|pvdf|metal trim|metal drip|metal rake|\b(?:22|24|26|28|29)\s*ga\b|\b(?:22|24|26|28|29)g\b|w-?bend|w-?valley|\bcleat\b|butyl|\brivet|pancake/i;
   else if (metal) banned = /asphalt|3-tab|architectural shingle|laminate shingle|shingle bundle|starter shingle/i;
   else if (tpo) banned = /shingle|asphalt|standing seam|metal panel|epdm membrane/i;
   else if (epdm) banned = /shingle|asphalt|standing seam|metal panel|tpo membrane/i;
@@ -1303,7 +1287,7 @@ const CAZA_MANUAL_DEFAULT = {
     defaultRate: 50,
     crewRates: [
       { id: "cm_l_ss", trade: "standing seam", rate: 72 }, { id: "cm_l_slate", trade: "slate", rate: 72 },
-      { id: "cm_l_roof", trade: "roof", rate: 65 }, { id: "cm_l_elec", trade: "electric", rate: 70 },
+      { id: "cm_l_roof", trade: "roof", rate: 72 }, { id: "cm_l_elec", trade: "electric", rate: 70 }, // F4 (Dustin, locked): roofing burdened floor $72/hr, fires every roofing run
       { id: "cm_l_plumb", trade: "plumb", rate: 70 }, { id: "cm_l_hvac", trade: "hvac", rate: 68 },
       { id: "cm_l_side", trade: "siding", rate: 55 }, { id: "cm_l_conc", trade: "concrete", rate: 55 },
     ],
@@ -2599,7 +2583,7 @@ function App() {
     const text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: mkey, priceBook: enginePriceBookPayload() });
     const d = parseJSON(text);
     let items = Array.isArray(d.items) ? d.items.map((it) => ({ name: String(it.name || "Item"), qty: num(it.qty), unit: String(it.unit || ""), cost: Math.round(num(it.cost)) })) : [];
-    const sysStr = (label + " " + mat).toLowerCase();
+    const sysStr = installScope(label + " " + mat); // F13: classify by the INSTALL system, not the roof being torn off
     items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines
     const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane/.test(sysStr);
     // ROOF material takeoff. Shingle keeps the qty-override behavior (verified). For
@@ -3681,7 +3665,7 @@ function App() {
         "FAMILY-LOCK: all THREE tier options MUST be the SAME material family/class as THIS job's specified primary material — they are good/better/best WITHIN that family, not cross-material alternatives. A cedar/wood siding job → three wood or genuine cedar-substitute options (e.g. cedar, red cedar, LP SmartSide engineered wood) — NEVER vinyl or fiber-cement unless the scope explicitly specifies that material. A shingle job → shingle tiers; standing-seam → metal tiers; TPO → membrane tiers. If the contractor's scope specifies the material, match it exactly.\n" +
         ((tierPref && (tierPref.good || tierPref.better || tierPref.best)) ? ("THE CONTRACTOR'S PREFERRED TIER LINES — USE THESE EXACT PRODUCTS as the Good/Better/Best names (price each for this job, give the why + a real URL): " + ["good", "better", "best"].map((k) => tierPref[k] ? (k + "=" + tierPref[k]) : "").filter(Boolean).join(", ") + ".\n") : "") +
         cazaManualBlock(scope, desc, profC.cazaManual) +
-        (roofIsMixed(scope + " " + desc) ? mixedRoofBlock(dims, scope + " " + desc, desc, panelW) : "") +
+        (roofIsMixed(installScope(scope + " " + desc)) ? mixedRoofBlock(dims, installScope(scope + " " + desc), desc, panelW) : "") +
         (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") +
         "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" +
         "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
@@ -3714,7 +3698,7 @@ function App() {
       }) : [];
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
-      const sysStr = (scope + " " + desc).toLowerCase();
+      const sysStr = installScope(scope + " " + desc); // F13: classify by the INSTALL system, not the roof being torn off
       items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines (shingle job can't keep metal-panel lines)
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
       // COMMERCIAL FLAT (TPO/EPDM): engine builds 3 good/better/best assemblies (membrane mil +
@@ -3794,9 +3778,9 @@ function App() {
             if (!cq) return;
             // DEFECT G safety: don't backfill a distinct component the LLM already carries under another name.
             if (DISTINCT_PART[key] && items.some((it) => roofPartType(it.name) === DISTINCT_PART[key])) return;
-            const mb = matchBookLine({ name: cq.name, unit: cq.unit, key: cq.key }, books);
+            const mb = matchBookLine({ name: cq.name, unit: cq.unit, key: cq.key }, books, { jobShingle: true }); // F6: don't price a shingle line off a steel SKU
             const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
-            items.push({ name: cq.name, qty: cq.qty, unit: cq.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * cq.qty) : 0, unpriced: up == null, priceTier: null, matchType: null, priceNote: (mb && mb.note) || "" });
+            items.push({ name: cq.name, qty: cq.qty, unit: cq.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * cq.qty) : 0, unpriced: up == null, priceTier: null, matchType: null, priceNote: (mb && mb.note) || (up == null ? "no shingle-system match in your book — add the price" : "") });
           });
           }
         }
@@ -3887,7 +3871,9 @@ function App() {
         // DIAGNOSTIC capture (stripped from the persisted trade after the run bundle is built): the RAW
         // LLM JSON exactly as parsed (before override/price/dedup) + how this trade was routed.
         __diagRaw: d,
-        __diagPipe: { scope: scope, desc: desc, dims: dims, panelW: num(panelW), roofType: roofTypeOf(scope + " " + desc), mixed: roofIsMixed(scope + " " + desc), deterministic: !!d.deterministic, flat: !!__flatTiers, manualLoaded: __manualLoaded, manualKey: __manualKey, offManual: __offManual, model: "claude-opus-4-8", endpoint: "estimate-background", laborSource: laborSrc, rateFloored: !!__rateFloored },
+        // F7: roofType/mixed only mean something on ROOFING trades — null them elsewhere so they stop
+        // polluting siding/deck/etc. diagnostics. (installScope so a tear-off system doesn't skew it.)
+        __diagPipe: (() => { const __rt = /\broof|shingle|standing.?seam|metal panel|\btpo\b|\bepdm\b|slate|\btile\b|membrane/.test((scope + " " + desc).toLowerCase()); const __ins = installScope(scope + " " + desc); return { scope: scope, desc: desc, dims: dims, panelW: num(panelW), roofType: __rt ? roofTypeOf(__ins) : null, mixed: __rt ? roofIsMixed(__ins) : false, deterministic: !!d.deterministic, flat: !!__flatTiers, manualLoaded: __manualLoaded, manualKey: __manualKey, offManual: __offManual, model: "claude-opus-4-8", endpoint: "estimate-background", laborSource: laborSrc, rateFloored: !!__rateFloored }; })(),
       };
     }
   };
@@ -4241,7 +4227,9 @@ function App() {
         equipment: t.equipment, taxRate: t.taxRate, crew: t.crew, days: t.days, rateFloored: !!t.rateFloored, calibFactor: t.calibFactor,
         cazaDeviations: t.cazaDeviations || [], offManual: !!t.offManual, flatTier: !!t.flatTier, chosenTier: t.chosenTier || null,
         primaryOptions: (t.primaryOptions || []).map((o) => ({ tier: o.tier, name: o.name, cost: o.cost, offFamily: !!o.offFamily })),
-        checks: t.checks || [], assumptions: t.assumptions || [], questions: t.questions || [],
+        // F5: the trade only KEEPS assumptions/questions when off-manual — fall back to the raw LLM's so
+        // the final block is self-describing.
+        checks: t.checks || [], assumptions: (t.assumptions && t.assumptions.length) ? t.assumptions : ((t.__diagRaw && t.__diagRaw.assumptions) || []), questions: (t.questions && t.questions.length) ? t.questions : ((t.__diagRaw && t.__diagRaw.questions) || []),
       },
     }));
     const bundle = { v: DIAG_VERSION, app: APP_VERSION, ts: new Date().toISOString(), runMs: Date.now() - t0, inputs: inputs, inputsHash: inputsHash, money: money, trades: trades };
@@ -4252,7 +4240,7 @@ function App() {
   const exportDiagnostics = async () => {
     const js = diagBundleJSON();
     if (!js) { flash("No diagnostics on this estimate — rebuild to capture one."); return; }
-    const fname = "cazbid-diag-" + (estId || "run") + ".json";
+    const fname = "cazbid-diag-" + (estId || "run") + "-" + ((estResult.diag && estResult.diag.inputsHash) || Date.now().toString(36)) + ".json"; // H4: inputsHash so two runs of one job don't collide
     try { const f = new File([js], fname, { type: "application/json" }); if (navigator.share && navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: "CazBid diagnostics" }); return; } } catch (e) { /* fall through */ }
     try { await navigator.clipboard.writeText(js); flash("Diagnostics JSON copied to clipboard."); }
     catch (e) { downloadText(js, fname, "application/json"); }
