@@ -750,6 +750,21 @@ function reconcileBandPanel(items, dims, sysStr, desc, panelW) {
     return Object.assign({}, it, { qty: want, unitPrice: up, cost: Math.round(up * want), priceNote: ((it.priceNote ? it.priceNote + " · " : "") + "panel set to the band formula: " + bp.eaveLF + " LF eave x " + bp.bandFt + "' band" + (cu === "sq" ? "" : " / " + bp.coverIn + "in coverage") + " = " + want + " " + (cu === "sq" ? "SQ" : "LF") + (bp.bandStated ? "" : " (4ft Caza standard - adjust?)")) });
   });
 }
+// F2 (Dustin, locked): REGULAR I&W on shingle roofs — high-temp is a STEEL-system product. On a
+// PURE-shingle job (mixed keeps HT on its band) a high-temp I&W line is conformed to regular:
+// renamed + repriced from the book when it has a regular SKU, the swap shown in the line note —
+// never a silent pass, never an omission. (~$150-200/job + a spec mismatch otherwise.)
+function enforceShingleIwGrade(items, books) {
+  return (items || []).map((it) => {
+    if (roofLineKey(it.name) !== "iw") return it;
+    if (!/high.?temp|\bht\b/i.test(String(it.name || ""))) return it;
+    const name = "Ice & water shield (regular)";
+    const qty = Number(it.qty) || 0;
+    const mb = matchBookLine({ name: name, unit: it.unit, key: "iw" }, books, { jobShingle: true });
+    if (mb && mb.unitPrice != null) return Object.assign({}, it, { name: name, unitPrice: mb.unitPrice, cost: Math.round(mb.unitPrice * qty), unpriced: false, priceNote: "Caza standard: REGULAR I&W on shingle (high-temp is for steel) — swapped + repriced from your book" });
+    return Object.assign({}, it, { name: name, priceNote: "Caza standard: REGULAR I&W on shingle (was high-temp) — still at the HT price; set your regular I&W cost" });
+  });
+}
 function mixedRoofBlock(dims, sysStr, desc, panelW) {
   const s = (String(sysStr || "") + " " + String(desc || "")).toLowerCase();
   const bp = bandPartition(dims, sysStr, desc, panelW);
@@ -1109,7 +1124,10 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
     const iwNum = (m.eaves * 2) + m.valleys + m.flashing + m.stepflash;
     if (iwNum) out.push({ key: "iw", name: "Ice & water", qty: up(iwNum / 66), unit: "roll" });
     if (eaveRake) out.push({ key: "drip", name: "Drip edge (10ft)", qty: up((eaveRake * 1.15) / 10) * 10, unit: "LF" });
-    if (m.valleys) out.push({ key: "valley", name: "Valley metal (10ft)", qty: up(m.valleys / 50) * 10, unit: "LF" });
+    // F3 + F6 (Dustin, locked): shingle valleys are CLOSED — 14in aluminum ROLL (1 roll per 50 LF)
+    // + I&W beneath (the I&W formula above already counts valleys). The old qty `up(valleys/50)*10`
+    // mixed the roll formula with a stick length (38 LF of valley -> "10 LF") — rolls now, no x10.
+    if (m.valleys) out.push({ key: "valley", name: "Valley flashing — 14in aluminum roll (closed valley)", qty: up(m.valleys / 50) || 1, unit: "roll" });
     if (m.stepflash) out.push({ key: "step", name: "Step flashing", qty: up(m.stepflash / 25), unit: "bundle" });
     if (m.pens) out.push({ key: "pen", name: "Pipe boots / penetrations", qty: m.pens, unit: "ea" });
   }
@@ -2680,6 +2698,7 @@ function App() {
             const idx = items.findIndex((it) => { const n = (it.name || "").toLowerCase(); return mm.kw.some((k) => n.indexOf(k) >= 0); });
             if (idx >= 0) { const old = items[idx]; let up = old.qty > 0 ? old.cost / old.qty : old.cost; if ((old.unit || "").toLowerCase() !== (cq.unit || "").toLowerCase() && cq.qty > 0) up = old.cost / cq.qty; items[idx] = Object.assign({}, old, { qty: cq.qty, unit: cq.unit, cost: Math.round(up * cq.qty) }); }
           });
+          items = enforceShingleIwGrade(items, books); // F2: regular I&W on shingle — high-temp is steel-only
         }
       }
     }
@@ -2691,7 +2710,7 @@ function App() {
     let sqGuess = 0;
     items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty)); });
     if (!sqGuess && whDims) { const m = String(whDims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(String(m[1]).replace(/,/g, "")) || 0) / 100; }
-    const floor = realisticLaborFloor(sqGuess, whDims, sysStr, isRoof);
+    const floor = realisticLaborFloor(sqGuess, whDims, (label + " " + mat).toLowerCase(), isRoof); // raw string — the floor's tear-off test needs the words installScope strips
     if (floor > 0 && laborHours < floor) laborHours = floor;
     if (laborHours <= 0) laborHours = Math.max(8, (num(d.crew) || 2) * (num(d.days) || 1) * 8);
     // Feature B: apply this trade's labor calibration factor (from logged actuals)
@@ -3627,7 +3646,7 @@ function App() {
     "- Hip/Ridge caps (bundles): ((Ridges LF + Hips LF) x 1.10) / 30, round up to bundle.\n" +
     "- Ice & water (rolls): ((Eaves x 2) + Valleys + Flashing + StepFlash) / 66, round up.\n" +
     "- Drip edge (10ft pieces): (Total eave+rake LF x 1.15) / 10, round up.\n" +
-    "- W-valley 14in (10ft pieces): Valleys LF / 50, round up.\n" +
+    "- Valley (SHINGLE roof = CLOSED valley): 14in aluminum ROLL valley flashing, Valleys LF / 50 = rolls, round up (+ I&W beneath). Open W-valley steel (10ft sticks, Valleys LF / 10 = sticks) is for STEEL/mixed systems only.\n" +
     "- Step flashing (bundles/pieces): StepFlash LF / 25, round up.\n";
   // ---- AI trade builder (Feature A) helpers ----
   const aiTradeModule = (t) => {
@@ -3843,6 +3862,7 @@ function App() {
             const up = mb && mb.unitPrice != null ? mb.unitPrice : null;
             items.push({ name: cq.name, qty: cq.qty, unit: cq.unit, unitPrice: up != null ? up : 0, cost: up != null ? Math.round(up * cq.qty) : 0, unpriced: up == null, priceTier: null, matchType: null, priceNote: (mb && mb.note) || (up == null ? "no shingle-system match in your book — add the price" : "") });
           });
+          items = enforceShingleIwGrade(items, books); // F2: regular I&W on shingle — high-temp is steel-only
           }
         }
       }
@@ -3895,7 +3915,7 @@ function App() {
         items.forEach((it) => { const u = (it.unit || "").toLowerCase(); if (u.indexOf("square") >= 0 || u === "sq") sqGuess = Math.max(sqGuess, num(it.qty) || 0); });
         if (!sqGuess && dims) { const m = String(dims).match(/([\d,]+(?:\.\d+)?)\s*sqft/i); if (m) sqGuess = (num(m[1]) || 0) / 100; }
         // Realistic minimum man-hours for a sized job (shared helper; BUG-1 fix).
-        const floor = realisticLaborFloor(sqGuess, dims, sysStr, isRoof);
+        const floor = realisticLaborFloor(sqGuess, dims, (scope + " " + desc).toLowerCase(), isRoof); // raw string — the floor's tear-off test needs the words installScope strips
         if (floor > 0 && laborHours < floor) { laborHours = floor; if (laborSrc !== "ratebook") laborSrc = "estimate"; }
       }
       if (laborHours <= 0) laborHours = Math.max(1, crewN * daysN * 8);
@@ -3923,7 +3943,12 @@ function App() {
 
         laborHours: laborHours, laborRate: laborRate, laborSource: laborSrc,
         rateFloor: __rateFloor, rateFloored: __rateFloored, burdened: true,
-        equipment: Math.round(num(d.equipment) || 0), taxRate: num(d.taxRate) || 0.08,
+        // F1 (Dustin, locked): a roofing tear-off's disposal is BOOK DATA, not a web guess — 30-yd
+        // roofing dumpster = $1,000. Floor the equipment total and flag the raise (still editable).
+        // NOTE: tear-off words live in the RAW scope/desc — sysStr is installScope()d (F13 strips them).
+        equipment: (() => { const e = Math.round(num(d.equipment) || 0); return (isRoof && /tear|re-?roof|remove|layer/.test((scope + " " + desc).toLowerCase()) && e < 1000) ? 1000 : e; })(),
+        equipFloored: !!(isRoof && /tear|re-?roof|remove|layer/.test((scope + " " + desc).toLowerCase()) && Math.round(num(d.equipment) || 0) < 1000),
+        taxRate: num(d.taxRate) || 0.08,
         crew: crewN, days: daysFinal, notes: String(d.notes || ""),
         checks: Array.isArray(d.checks) ? d.checks.map((c) => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded, manualKey: __manualKey,
@@ -7057,6 +7082,7 @@ function App() {
                           <div className="costrow"><span>Labor — {t.laborHours} hrs @ {$0(t.laborRate)}/hr <span className="labtag book" title="Burdened rate: base wage + comp/insurance + payroll taxes + overhead (not bare wage)">burdened</span>{t.laborSource === "ratebook" ? <span className="labtag book">rate book</span> : t.laborSource === "engine" ? <span className="labtag book">engine</span> : <span className="labtag est">AI est. · verify</span>}</span><b>{$0(c.labor)}</b></div>
                           {t.rateFloored && <div className="costrow"><span className="hint">↳ raised to the {$0(t.rateFloor)}/hr burdened minimum for this trade — override above if your loaded cost differs</span><b></b></div>}
                           <div className="costrow"><span>Equipment / disposal</span><b>{$0(t.equipment)}</b></div>
+                          {t.equipFloored && <div className="costrow"><span className="hint">↳ raised to the $1,000 30-yd roofing-dumpster standard — override above if your hauler differs</span><b></b></div>}
                           <div className="costrow total"><span>{(t.label || "Trade")} cost</span><b>{$0(c.cost)}</b></div>
                         </div>
                         {t.calibKey && (logOpen === t.calibKey ? (
