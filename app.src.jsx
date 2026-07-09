@@ -1296,12 +1296,12 @@ function stripCrossSystem(items, sysStr) {
 // a code change. Part 1 = assemblies (what a Caza job includes); Part 2 = material specs/subs.
 const CAZA_MANUAL_DEFAULT = {
   assemblies: [
-    { id: "cm_a_shingle", match: "shingle|asphalt|architectural", includes: ["Tear-off + haul-away", "Ice & water shield (eaves + valleys)", "Synthetic underlayment", "Owens Corning Duration shingles", "Starter strip", "Hip & ridge cap", "Ridge / intake ventilation", "Step + pipe flashing", "Drip edge", "Cleanup / magnetic sweep"], excludes: [], note: "Owens Corning Total Protection system." },
+    { id: "cm_a_shingle", match: "shingle|asphalt|architectural", includes: ["Tear-off + haul-away", "Ice & water shield (eaves + valleys)", "Synthetic underlayment", "Owens Corning Duration shingles", "Starter strip", "Hip & ridge cap", "Ridge / intake ventilation", "Step + pipe flashing", "Drip edge", "Cleanup / magnetic sweep"], excludes: [], note: "Owens Corning Total Protection system.", walk: "deck → drip edge (eaves, under I&W) → REGULAR I&W (eaves + valleys) → synthetic underlayment → drip edge (rakes, over underlayment) → starter strip → field shingles (bottom-up) → step/headwall + pipe flashing → closed valley (14in alum roll under shingles) → hip/ridge caps + ridge vent" },
     { id: "cm_a_cedar", match: "cedar", includes: ["Cedar field siding", "Cedar fascia / rake", "Metal J-channel", "Cedar starter course", "Building paper / WRB", "Stainless / hot-dipped fasteners"], excludes: ["vinyl j-channel", "vinyl fascia"], note: "Cedar takes metal trim, never vinyl." },
     { id: "cm_a_vinylsoffit", match: "soffit", includes: ["Vinyl soffit", "F-channel receiver at the soffit-wall connection (the ONE receiver)", "Aluminum or vinyl fascia (per standard)", "Drip edge"], excludes: ["wall opening", "window opening", "J-channel at the soffit-wall connection (F-channel is the receiver — never both for the same run)"], note: "Soffit is eave trim — no wall-opening lines. F8 (Dustin, locked): soffit gets ONE receiver at the wall = F-channel; J-channel footage must not also count the soffit run." },
-    { id: "cm_a_standingseam", match: "standing.?seam|snap.?lock|mechanical.?lock|nu-?lok|metal panel|metal roof", includes: ["Standing-seam panels (16in coverage)", "Metal valley / eave / rake trim", "Metal step + chimney flashing", "High-temp ice & water (under ALL steel)", "Panel hardware per grade: 26-ga SMP = concealed pancake screws through the 1in integral flange, 12in o.c. (NO clips); 24-ga Kynar = concealed clips 16in o.c. up the 1-1/2in seam + 2 pancake screws per clip"], excludes: ["asphalt flashing", "rubber gutter", "exposed-fastener / washered screws", "regular (non-high-temp) underlayment under steel"], note: "All-metal system. TWO Caza grades: Good = 26-ga SMP (flange-screw, no clips); Better/Best = 24-ga Kynar (clip-fastened). Both 16in coverage — panel LF math is identical; only hardware differs." },
-    { id: "cm_a_metalband", match: "eave band|metal band|metal eave|band \\+ shingle", includes: ["Metal eave band at Caza standard depth 4ft up-slope (measured along the slope)", "Band panel per standing-seam grade (16in coverage)", "High-temp ice & water on the BAND area only", "Band trim + closures", "Shingle field on the REMAINING area (total minus band) with REGULAR ice & water at eaves/valleys"], excludes: ["shingle field run at the FULL roof area (double-counts the band)", "band fasteners/underlayment scaled to the full roof area"], note: "Mixed roof: PARTITION the area. band SF = eave LF x 4ft; shingle field SQ = total SQ minus band SQ; panel LF = band SF / panel coverage width. Fastener + band underlayment scale to the band area only. A band depth stated in the conversation overrides the 4ft standard." },
-    { id: "cm_a_tpo", match: "\\btpo\\b|flat roof|membrane", includes: ["TPO membrane", "Polyiso insulation (fully adhered)", "TPO-compatible flashing", "TPO fasteners / plates", "Edge metal / coping"], excludes: ["EPDM fasteners", "BUR flashing"], note: "TPO single-ply assembly." },
+    { id: "cm_a_standingseam", match: "standing.?seam|snap.?lock|mechanical.?lock|nu-?lok|metal panel|metal roof", includes: ["Standing-seam panels (16in coverage)", "Metal valley / eave / rake trim", "Metal step + chimney flashing", "High-temp ice & water (under ALL steel)", "Panel hardware per grade: 26-ga SMP = concealed pancake screws through the 1in integral flange, 12in o.c. (NO clips); 24-ga Kynar = concealed clips 16in o.c. up the 1-1/2in seam + 2 pancake screws per clip"], excludes: ["asphalt flashing", "rubber gutter", "exposed-fastener / washered screws", "regular (non-high-temp) underlayment under steel"], note: "All-metal system. TWO Caza grades: Good = 26-ga SMP (flange-screw, no clips); Better/Best = 24-ga Kynar (clip-fastened). Both 16in coverage — panel LF math is identical; only hardware differs.", walk: "deck → HIGH-TEMP I&W (full coverage) → eave trim + offset cleat → panels eave-to-ridge (26-ga SMP: pancake screws through the flange 12in o.c. | 24-ga Kynar: clips 16in o.c. + 2 pancake screws/clip) → Z-closures → hip/ridge cap" },
+    { id: "cm_a_metalband", match: "eave band|metal band|metal eave|band \\+ shingle", includes: ["Metal eave band at Caza standard depth 4ft up-slope (measured along the slope)", "Band panel per standing-seam grade (16in coverage)", "High-temp ice & water on the BAND area only", "Band trim + closures", "Shingle field on the REMAINING area (total minus band) with REGULAR ice & water at eaves/valleys"], excludes: ["shingle field run at the FULL roof area (double-counts the band)", "band fasteners/underlayment scaled to the full roof area"], note: "Mixed roof: PARTITION the area. band SF = eave LF x 4ft; shingle field SQ = total SQ minus band SQ; panel LF = band SF / panel coverage width. Fastener + band underlayment scale to the band area only. A band depth stated in the conversation overrides the 4ft standard.", walk: "deck → HIGH-TEMP I&W on the band (eave, band depth) → eave trim + cleat → band panels → BAND-TO-FIELD TRANSITION flashing (band top edge, lapped by the field underlayment above — a REQUIRED junction step) → regular I&W + synthetic on the field → starter → field shingles → step/pipe flashing → caps/ridge" },
+    { id: "cm_a_tpo", match: "\\btpo\\b|flat roof|membrane", includes: ["TPO membrane", "Polyiso insulation (fully adhered)", "TPO-compatible flashing", "TPO fasteners / plates", "Edge metal / coping"], excludes: ["EPDM fasteners", "BUR flashing"], note: "TPO single-ply assembly.", walk: "deck → polyiso insulation → coverboard (Best tier) → membrane (adhered or mech-fastened) → welded seams / cover tape → penetrations & flashing → termination bar + edge metal/coping" },
   ],
   materials: [
     { id: "cm_m_shingle", role: "Shingle", standard: "Owens Corning Duration", subs: ["GAF Timberline HDZ", "CertainTeed Landmark"], note: "OC Total Protection system." },
@@ -1411,6 +1411,10 @@ function cazaManualBlock(scope, desc, manual) {
   if (!sel.assemblies.length && !sel.materials.length) return "";
   let s = "THE CAZA MANUAL — verify this estimate against THIS company's standards. FLAG every deviation in \"deviations\" below; do NOT silently change or remove anything.\n";
   if (sel.assemblies.length) s += "CAZA STANDARD ASSEMBLY for this job type (what a Caza job includes end-to-end):\n" + sel.assemblies.map((a) => "- includes [" + (a.includes || []).join("; ") + "]" + ((a.excludes && a.excludes.length) ? "; NEVER [" + a.excludes.join("; ") + "]" : "") + (a.note ? " — " + a.note : "")).join("\n") + "\n";
+  // ASSEMBLY WALK (Part 2): the Manual's ordered graph — the model's assemblyWalk is diffed against
+  // this order at the preflight; missing/extra/reordered layers flag like material deviations.
+  const __walks = sel.assemblies.filter((a) => a.walk);
+  if (__walks.length) s += "CAZA ASSEMBLY ORDER (the walk — layers in INSTALL order; junctions are steps):\n" + __walks.map((a) => "- " + a.walk).join("\n") + "\nCompare YOUR assemblyWalk to this order. A MISSING layer, an EXTRA layer, or a REORDERED layer (e.g. I&W above the synthetic) is a deviation — kind \"missing\"/\"extra\"/\"material\" with a note saying what is out of order. Flag it; never silently fix.\n";
   if (sel.materials.length) s += "CAZA STANDARD MATERIALS (role → Caza standard; acceptable subs in parens):\n" + sel.materials.map((mm) => "- " + mm.role + " → " + mm.standard + ((mm.subs && mm.subs.length) ? " (subs ok: " + mm.subs.join(", ") + ")" : "") + (mm.note ? " — " + mm.note : "")).join("\n") + "\n";
   const rate = cazaCrewRate(scope, desc, manual);
   if (rate > 0) s += "CAZA STANDARD BURDENED CREW RATE for this trade: $" + rate + "/hr — use this as laborRate unless the job is genuinely unusual. If your computed burdened rate differs materially, flag a \"labor\" deviation (found=your $/hr, standard=" + rate + ").\n";
@@ -1694,6 +1698,60 @@ async function pSet(key, val) {
 // from day one: { id, customerName, jobAddress, createdAt, updatedAt, status,
 // jobNimbusId, price, payload }. NOTE: local storage is NOT a backup (cache clear /
 // lost phone = gone); it stops mid-session loss until cloud sync ships.
+// ===== ASSEMBLY WALK — forced sequential-spatial reasoning (order + presence; NEVER quantities) =====
+// Before emitting items[], the model narrates the build in INSTALLATION order; every LLM item traces
+// to a step. Code then checks coherence cheaply. Every list-shaped failure this month (accessories
+// without their panel, trusses on a roofless deck, skipped transitions) happened where no assembly
+// reasoning ran — the walk makes it mandatory and machine-checkable. Passenger, never pilot: a
+// missing/failed walk flags "assembly not verified" and the estimate proceeds.
+function normalizeWalk(w) {
+  if (!Array.isArray(w)) return [];
+  return w.slice(0, 24).map((s, i) => ({
+    n: Number(s && s.n) > 0 ? Number(s.n) : (i + 1),
+    layer: String((s && s.layer) || "").slice(0, 90),
+    sitsOn: String((s && s.sitsOn) || "").slice(0, 60),
+    lappedBy: String((s && s.lappedBy) || "").slice(0, 60),
+    fastenedWith: String((s && s.fastenedWith) || "").slice(0, 60),
+    produces: Array.isArray(s && s.produces) ? s.produces.map((x) => String(x).slice(0, 90)).filter(Boolean).slice(0, 6) : [],
+  })).filter((s) => s.layer);
+}
+// Coherence (code, cheap): (1) an LLM item tracing to no step; (2) a step whose produced component
+// has no takeoff line (this is where a silently-dropped shingle half or skipped transition surfaces);
+// (3) roofing fasteners whose parent panel is absent (never-omit, made structural). Items ADDED BY
+// CODE (backfill, never-omit, engine rebuild) are exempt from (1) — they're not in rawNames.
+function walkCoherence(walk, items, rawNames, isRoof, checkTrace) {
+  if (!walk.length) return ["assembly not verified — the model returned no walk"];
+  const flags = [];
+  const stepNums = new Set(walk.map((s) => s.n));
+  const toks = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((t) => t.length > 3);
+  const overlap = (a, b) => { const bt = new Set(toks(b)); return toks(a).some((t) => bt.has(t)); };
+  if (checkTrace) {
+    (items || []).forEach((it) => {
+      if (!rawNames.has(String(it.name || "").toLowerCase())) return;
+      const ws = Number(it.walkStep) || 0;
+      if (!ws || !stepNums.has(ws)) flags.push("“" + it.name + "” traces to no assembly step — verify it belongs in this build");
+    });
+    walk.forEach((s) => s.produces.forEach((p) => {
+      if (!(items || []).some((it) => overlap(p, it.name))) flags.push("step " + s.n + " (" + s.layer + ") installs “" + p + "” — no matching takeoff line");
+    }));
+  }
+  if (isRoof) {
+    const hasPanel = (items || []).some((it) => roofPartType(it.name) === "panel");
+    (items || []).forEach((it) => { const pt = roofPartType(it.name); if ((pt === "screw" || pt === "clip") && /panel|seam|flange|cleat/.test(String(it.name || "").toLowerCase()) && !hasPanel) flags.push("“" + it.name + "” fastens a PANEL that is not in the takeoff"); });
+  }
+  return flags.slice(0, 8);
+}
+// Static walks for deterministic-engine trades — templates get a fixed install order so the Assembly
+// section renders (and reads as a crew brief) on engine results too.
+const ENGINE_WALKS = {
+  framing: ["Plates & layout", "Stud walls", "Headers & beams", "Rafters / trusses", "Sheathing", "House wrap"],
+  siding: ["WRB / housewrap", "Starter strip", "Corners & J-channel (openings/rakes — soffit run gets F-channel, not J)", "Field siding (bottom-up)", "Soffit + F-channel receiver", "Fascia & trim"],
+  concrete: ["Excavate / base", "Forms", "Rebar / mesh", "Pour & finish", "Cure / strip forms"],
+  insulation: ["Air sealing", "Batts / blown-in / foam", "Vapor barrier"],
+  electrical: ["Rough-in / boxes", "Wire pulls", "Panel / breakers", "Devices & fixtures"],
+  hvac: ["Equipment set", "Ductwork / lineset", "Registers", "Thermostat / startup"],
+  plumbing: ["DWV rough", "Supply rough", "Fixtures", "Water heater / startup"],
+};
 // F12 — market $-sanity band (ADVISORY, never a block): a per-unit installed price far outside the
 // physically possible band means template fiction (run-6's $19/SF Trex deck) or fat-finger inputs.
 // Bands are deliberately WIDE — only the impossible trips them.
@@ -3747,8 +3805,9 @@ function App() {
         cazaManualBlock(scope, desc, profC.cazaManual) +
         (roofIsMixed(installScope(scope + " " + desc)) ? mixedRoofBlock(dims, installScope(scope + " " + desc), desc, panelW) : "") +
         (__offManual ? "OFF-MANUAL SCOPE: this job type has NO Caza standard assembly on file. Still build a complete, sensible estimate from general building knowledge (materials + approach) — do NOT refuse or force it into a standard that doesn't fit. But BE HONEST about confidence: your labor rate and pricing are NOT from Caza's verified book. Set \"offManual\": true. In \"assumptions\" list what you had to assume (e.g. labor rate estimated, material costs estimated, approach assumptions). In \"questions\" put 1-3 SHORT targeted asks for the contractor's REAL numbers where you're least sure (e.g. \"Your slate labor per square?\", \"Your material cost on the copper?\"). These are the numbers that would make this a verified bid.\n" : "") +
+        "ASSEMBLY WALK (REQUIRED — generate this BEFORE items[]): narrate the build in INSTALLATION ORDER — deck-up / eave-to-ridge for roofing, sheathing-out for siding, footing-up for decks/framing. Each step: what layer goes on, what it sits on, what laps it, what fastens it, and which items[] line(s) that step produces (produces: [] only when the substrate already exists). JUNCTIONS ARE STEPS — band-to-field transitions, valleys, wall intersections, penetrations: say exactly what happens at each; a junction with no treatment is a missing step. Then give EVERY items[] line a \"walkStep\": the n of the step that installs it — a fastener's step must reference the component it fastens (screws with no panel cannot pass). The walk owns ORDER and PRESENCE only; quantities still come from the measurements/formulas above.\n" +
         "FINAL SELF-CHECK before you answer (do this silently, then output ONLY the JSON): (1) SYSTEM PURITY - re-read your items[] and DELETE any line that belongs to a different roofing or siding system than this job's. On an asphalt shingle job, strip out every metal-panel, standing-seam, panel-clip, seam-tape, or metal-trim line. (2) QUANTITIES - sanity-check each qty against the measurements; the primary material is line 1; no zero or absurd quantities. (3) items[] is MATERIALS ONLY (no labor, equipment, or dumpster lines). (4) Record what you verified or removed as 2-4 short plain-English strings in the \"checks\" array. (5) CAZA MANUAL CHECK — IF a CAZA MANUAL is given above, compare your estimate to it and record each deviation in \"deviations\": a material that is NOT Caza's standard (and not a listed sub), a standard ASSEMBLY piece that is MISSING, an EXCLUDED item that is present, a burdened LABOR rate that differs materially from Caza's standard crew rate (kind \"labor\"), or a brand/manufacturer that isn't Caza's preferred (kind \"vendor\"). Name the exact line. Do NOT change the estimate to match — only FLAG it. If everything matches (or no manual was given), return \"deviations\": []. ALSO check primaryOptions (the good/better/best tiers): if ANY tier's material family differs from this job's specified primary material (e.g. a vinyl option on a cedar/wood job), record it as a deviation (kind \"material\", item = the off-family tier product name, found = that product, standard = the correct material family) — the tiers must stay in the job's family.\n" +
-        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
+        "Respond with ONLY raw JSON, no markdown: {\"title\": short job name, \"trade\": one word, \"checks\": [2-4 short strings of what your final self-check verified or fixed], \"offManual\": boolean (true only if told OFF-MANUAL above), \"assumptions\": [short strings — what you assumed; [] if none], \"questions\": [short strings — targeted asks for the contractor's real numbers; [] if none], \"deviations\": [{\"kind\": \"material\"|\"missing\"|\"extra\"|\"labor\"|\"vendor\", \"item\": exact takeoff line name this concerns (for MISSING, the Caza standard name to add; for labor, \"Burdened labor rate\"), \"found\": what the estimate has (or \"—\" if missing), \"standard\": Caza's standard for this (for labor, the $/hr number), \"note\": one short why}], \"assemblyWalk\": [{\"n\": 1, \"layer\": what goes on at this step, \"sitsOn\": str, \"lappedBy\": str, \"fastenedWith\": str, \"produces\": [items[] line names this step adds]}], \"items\": [{\"name\": material name, \"qty\": number, \"unit\": e.g. squares/bundles/pieces/sheets/LF, \"cost\": total $ for this line, \"walkStep\": n of the assemblyWalk step that installs it}], \"primaryOptions\": [{\"tier\": \"Good\"|\"Better\"|\"Best\", \"name\": product line, \"why\": one short line, \"cost\": total $ for the primary material at this tier for this job, \"url\": real link}], \"laborHours\": total man-hours (number), \"laborRate\": burdened $/hr, \"laborSource\": \"ratebook\" or \"estimate\", \"equipment\": $ total, \"taxRate\": decimal, \"crew\": number of workers, \"days\": days on site, \"notes\": one short line of estimator notes — a genuinely useful heads-up (access, tear-off surprises, what really drives the price) with a touch of dry job-site humor, but keep it professional and skip the joke if the job is straightforward}";
       const content = [
         ...photos.slice(0, 3).map((ph) => {
           const mt = ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg";
@@ -3757,8 +3816,8 @@ function App() {
         { type: "text", text: prompt },
       ];
       let text;
-      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
-      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 4000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
+      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload() }); } // 5000: assemblyWalk adds ~300-800 output tokens
+      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
       const __manualLoaded = !!__LAST_MANUAL_USED;
       let d;
       try { d = parseJSON(text); }
@@ -3774,8 +3833,12 @@ function App() {
         const qty = num(it.qty) || 0;
         const cost = Math.round(num(it.cost) || 0);
         const unitPrice = qty > 0 ? cost / qty : cost; // per-unit so qty edits recompute cost
-        return { name: String(it.name || "Item"), qty: qty, unit: String(it.unit || ""), unitPrice: unitPrice, cost: cost, priceTier: it.priceTier || null, matchType: it.matchType || null };
+        return { name: String(it.name || "Item"), qty: qty, unit: String(it.unit || ""), unitPrice: unitPrice, cost: cost, priceTier: it.priceTier || null, matchType: it.matchType || null, walkStep: num(it.walkStep) || 0 };
       }) : [];
+      // ASSEMBLY WALK — the model's install-order narration (order + presence; never quantities).
+      // rawNames = the LLM's own line names; code-added lines are exempt from the trace check.
+      const __walk = normalizeWalk(d.assemblyWalk);
+      const __rawNames = new Set((Array.isArray(d.items) ? d.items : []).map((it) => String((it && it.name) || "").toLowerCase()));
       // DETERMINISTIC quantities: overwrite formula-driven roof lines with code-computed values
       // (AI keeps the line names + unit pricing; code fixes the math). Matches by keyword.
       const sysStr = installScope(scope + " " + desc); // F13: classify by the INSTALL system, not the roof being torn off
@@ -3955,6 +4018,15 @@ function App() {
         manualLoaded: __manualLoaded, manualKey: __manualKey,
         aiBuilt: !!(aiTrade && aiTrade.trade === scope),
         calibKey: calibKey, calibN: calibEntry ? (calibEntry.n || 0) : 0, calibFactor: calibEntry ? calibEntry.factor : 1,
+        // ASSEMBLY WALK — deterministic-engine trades get their spec's static walk; LLM trades carry
+        // the model's walk. Coherence runs on the FINAL items; the full trace check only where LLM
+        // lines survive (mixed / shingle / non-roof LLM) — the rebuild paths replace names wholesale.
+        ...(() => { try {
+          const w = d.deterministic ? normalizeWalk((ENGINE_WALKS[__manualKey] || []).map((l, i) => ({ n: i + 1, layer: l }))) : __walk;
+          const checkTrace = !d.deterministic && !__flatTiers && !(isRoof && !roofIsMixed(sysStr) && roofTypeOf(sysStr) !== "shingle");
+          const wf = d.deterministic ? [] : walkCoherence(w, items, __rawNames, isRoof, checkTrace);
+          return { assemblyWalk: w, walkFlags: wf };
+        } catch (e) { return { assemblyWalk: [], walkFlags: ["assembly not verified — walk check failed"] }; } })(),
         // DIAGNOSTIC capture (stripped from the persisted trade after the run bundle is built): the RAW
         // LLM JSON exactly as parsed (before override/price/dedup) + how this trade was routed.
         __diagRaw: d,
@@ -4320,6 +4392,7 @@ function App() {
         laborHours: t.laborHours, laborRate: t.laborRate, laborSource: t.laborSource, phases: t.phases || [],
         equipment: t.equipment, taxRate: t.taxRate, crew: t.crew, days: t.days, rateFloored: !!t.rateFloored, calibFactor: t.calibFactor,
         cazaDeviations: t.cazaDeviations || [], offManual: !!t.offManual, flatTier: !!t.flatTier, chosenTier: t.chosenTier || null,
+        assemblyWalk: t.assemblyWalk || [], walkFlags: t.walkFlags || [],
         primaryOptions: (t.primaryOptions || []).map((o) => ({ tier: o.tier, name: o.name, cost: o.cost, offFamily: !!o.offFamily })),
         // F5: the trade only KEEPS assumptions/questions when off-manual — fall back to the raw LLM's so
         // the final block is self-describing.
@@ -6993,6 +7066,22 @@ function App() {
                         {t.manualLoaded
                           ? <div className="manualbadge on">📘 Caza {t.manualKey} manual loaded</div>
                           : (t.manualKey ? <div className="manualbadge off">⚪ No manual loaded ({t.manualKey}) — built-in trade logic</div> : null)}
+                        {/* ASSEMBLY WALK — install order at a glance (doubles as a crew brief); coherence flags below. */}
+                        {Array.isArray(t.assemblyWalk) && t.assemblyWalk.length > 0 && (
+                          <details style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 10 }}>
+                            <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 12.5 }}>🔧 Assembly <span className="hint">{t.assemblyWalk.length} steps · install order</span></summary>
+                            <ol style={{ margin: "6px 0 0 18px", padding: 0, fontSize: 12.5 }}>
+                              {t.assemblyWalk.map((s, i) => (
+                                <li key={i} style={{ marginBottom: 3 }}><b>{s.layer}</b>{s.sitsOn ? <span className="hint"> — on {s.sitsOn}</span> : null}{s.lappedBy ? <span className="hint"> · lapped by {s.lappedBy}</span> : null}{s.fastenedWith ? <span className="hint"> · fastened: {s.fastenedWith}</span> : null}</li>
+                              ))}
+                            </ol>
+                          </details>
+                        )}
+                        {Array.isArray(t.walkFlags) && t.walkFlags.length > 0 && (
+                          <div style={{ margin: "4px 0 8px", padding: "8px 11px", background: "#FFF4E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5, color: "#8A5A12" }}>
+                            <b>⚠️ Assembly check:</b>{t.walkFlags.map((f, i) => (<div key={i}>• {f}</div>))}
+                          </div>
+                        )}
                         {t.notes && <p className="hint">{t.notes}</p>}
                         {t.checks && t.checks.length > 0 && (
                           <div style={{ margin: "9px 0 5px", padding: "9px 11px", background: "#F0FAF3", border: "1px solid #BFE6CC", borderRadius: 10 }}>
