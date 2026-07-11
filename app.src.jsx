@@ -2422,7 +2422,17 @@ function App() {
   const alAudioRef = useRef(null);                   // reusable <audio> for ElevenLabs playback
   const audioUnlockedRef = useRef(false);            // <audio> element unlocked by a gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
-  const [pbImportOpen, setPbImportOpen] = useState(false);
+  // Intake tiles (FIX 1 wiring): each tile opens ITS OWN intake, rendered directly beneath the tiles
+  // (not below the whole book editor — that put it off-screen on mobile and made the tiles feel dead).
+  const [pbIntakeMode, setPbIntakeMode] = useState(""); // "" | "csv" | "photo" | "feed"
+  const pbPhotoInputRef = useRef(null); // always-mounted hidden inputs — a tile tap clicks these
+  const pbCsvFileRef = useRef(null);    // SYNCHRONOUSLY (same gesture, so iOS opens the picker)
+  const pbIntakeRef = useRef(null);     // the revealed intake block (scrollIntoView target)
+  const pbOpenIntake = (mode, ref) => {
+    setPbIntakeMode(mode);
+    if (ref && ref.current) ref.current.click();
+    setTimeout(() => { if (pbIntakeRef.current && pbIntakeRef.current.scrollIntoView) pbIntakeRef.current.scrollIntoView({ behavior: "smooth", block: "center" }); }, 80);
+  };
   // FIX 4 — grouped, collapsible price-book view (trade -> category), search, closed by default.
   const [pbSearch, setPbSearch] = useState("");
   const [pbGrpOpen, setPbGrpOpen] = useState({}); // keys: "t:<trade>" and "c:<trade>|<category>"
@@ -6467,12 +6477,98 @@ function App() {
               <div className="matcount" style={{ marginBottom: 0 }}>{enginePB.length} price{enginePB.length === 1 ? "" : "s"} in your book</div>
               {(() => { const n = enginePB.filter(priceIsStale).length; return n ? <span style={{ background: "#F2C98A", color: "#5a4a2a", fontWeight: 700, fontSize: 12, borderRadius: 8, padding: "2px 9px" }}>{n} stale</span> : <span style={{ color: "#1B7A3D", fontWeight: 700, fontSize: 12.5 }}>✓ all fresh</span>; })()}
             </div>
-            {/* FIX 1 — the three intakes as equal, visible tiles on the card face (all open the same reviewed pipeline). */}
+            {/* FIX 1 — three intake tiles, each opening ITS OWN intake right here on the card face.
+                Hidden inputs stay mounted so a tile tap can open the file picker in the same gesture. */}
+            <input ref={pbPhotoInputRef} type="file" accept="image/*,application/pdf,.pdf" style={{ display: "none" }} onChange={(e) => { onPriceFile(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+            <input ref={pbCsvFileRef} type="file" accept=".csv,text/csv,text/plain" style={{ display: "none" }} onChange={(e) => { onCsvFile(e.target.files && e.target.files[0]); e.target.value = ""; }} />
             <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button type="button" className="btn ghost grow1" onClick={() => { setWhPbOpen(true); setPbImportOpen(true); }}>📄 CSV</button>
-              <button type="button" className="btn ghost grow1" onClick={() => { setWhPbOpen(true); setPbImportOpen(true); }}>📷 Photo / PDF</button>
-              <button type="button" className="btn ghost grow1" onClick={() => { setWhPbOpen(true); setPbImportOpen(true); }}>🔗 Supplier feed</button>
+              <button type="button" className="btn ghost grow1" style={pbIntakeMode === "csv" ? { borderColor: "#14a04a", fontWeight: 700 } : undefined} onClick={() => pbOpenIntake("csv", pbCsvFileRef)}>📄 CSV</button>
+              <button type="button" className="btn ghost grow1" style={pbIntakeMode === "photo" ? { borderColor: "#14a04a", fontWeight: 700 } : undefined} onClick={() => pbOpenIntake("photo", pbPhotoInputRef)}>📷 Photo / PDF</button>
+              <button type="button" className="btn ghost grow1" style={pbIntakeMode === "feed" ? { borderColor: "#14a04a", fontWeight: 700 } : undefined} onClick={() => pbOpenIntake("feed", null)}>🔗 Supplier feed</button>
             </div>
+            {/* THE INTAKE — renders directly beneath the tiles (never below the book editor / off-screen). */}
+            {pbIntakeMode && (
+              <div ref={pbIntakeRef} style={{ marginTop: 8, borderTop: "1px solid #eee", paddingTop: 8 }}>
+                {!csvReview && (
+                  <div>
+                    {(() => {
+                      const ven = cazaManualOf(profC.cazaManual).vendors;
+                      const list = [...new Set((((ven && ven.preferred) || []).map((v) => v.name).filter(Boolean)).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+                      return list.length ? (
+                        <div style={{ marginBottom: 6 }}>
+                          <div className="hint">Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                            {list.map((s) => (<button key={s} type="button" className="btn ghost" style={{ padding: "3px 10px", fontSize: 12, fontWeight: csvSupplier === s ? 700 : 400, borderColor: csvSupplier === s ? "#14a04a" : undefined }} onClick={() => setCsvSupplier(s)}>{csvSupplier === s ? "✓ " : ""}{s}</button>))}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+                    <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
+                    {pbIntakeMode === "photo" && (
+                      <div>
+                        <button type="button" className="btn primary full" disabled={csvBusy} style={{ marginTop: 6 }} onClick={() => pbPhotoInputRef.current && pbPhotoInputRef.current.click()}>{csvBusy ? "Reading the price sheet…" : "📷 Choose a photo / PDF of a price sheet"}</button>
+                        <p className="hint" style={{ marginTop: 4 }}>A supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
+                      </div>
+                    )}
+                    {pbIntakeMode === "csv" && (
+                      <div>
+                        <button type="button" className="btn primary full" disabled={csvBusy} style={{ marginTop: 6 }} onClick={() => pbCsvFileRef.current && pbCsvFileRef.current.click()}>📄 Choose a CSV file</button>
+                        <label className="estf" style={{ marginTop: 6 }}><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
+                      </div>
+                    )}
+                    {pbIntakeMode === "feed" && (
+                      <div>
+                        <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
+                        <button className="btn primary full" disabled={csvBusy} style={{ margin: "6px 0 2px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
+                      </div>
+                    )}
+                    {csvBusy && pbIntakeMode !== "photo" && <p className="hint">Working…</p>}
+                    {csvParsed && csvParsed.headers.length > 0 && (
+                      <div>
+                        <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
+                        <div className="estfields">
+                          {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
+                            <label className="estf" key={k}><span>{lbl}</span>
+                              <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
+                                <option value={-1}>—</option>
+                                {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                        <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
+                          {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {csvReview && (
+                  <div>
+                    <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
+                    {csvReview.map((r, i) => (
+                      <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
+                        <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
+                        <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
+                          <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
+                            {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                            <option value="other">other (skip)</option>
+                          </select>
+                        </label>
+                        <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
+                        <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
+                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
+                      <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                <button type="button" className="btn ghost full" style={{ marginTop: 6, padding: "3px 8px", fontSize: 12 }} onClick={() => setPbIntakeMode("")}>▴ Close</button>
+              </div>
+            )}
             <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide price book" : "▸ View / edit price book"}</button>
           </section>
           {whPbOpen && (
@@ -6563,76 +6659,6 @@ function App() {
                   </div>
                 </div>
               ) : (enginePB.length ? <p className="hint" style={{ marginTop: 8, color: "#1B7A3D", fontWeight: 600 }}>✓ All prices fresh (updated within {PRICE_STALE_DAYS} days).</p> : null); })()}
-
-              <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10 }}>
-                <button className="btn ghost full" onClick={() => setPbImportOpen((o) => !o)}>{pbImportOpen ? "▾ Hide" : "＋ Add prices"} <span className="hint">CSV · 📷 photo / PDF · 🔗 supplier feed</span></button>
-                {pbImportOpen && !csvReview && (
-                  <div style={{ marginTop: 8 }}>
-                    <label className="estf"><span>📷 PDF / photo of a price sheet</span><input type="file" accept="image/*,application/pdf,.pdf" disabled={csvBusy} onChange={(e) => onPriceFile(e.target.files && e.target.files[0])} /></label>
-                    <p className="hint">Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves.</p>
-                    {csvBusy && <p className="hint">Reading the price sheet…</p>}
-                    <p className="hint" style={{ textAlign: "center", margin: "8px 0", fontWeight: 600 }}>— or import a CSV —</p>
-                    {(() => {
-                      const ven = cazaManualOf(profC.cazaManual).vendors;
-                      const list = [...new Set((((ven && ven.preferred) || []).map((v) => v.name).filter(Boolean)).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
-                      return list.length ? (
-                        <div style={{ marginBottom: 6 }}>
-                          <div className="hint">Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                            {list.map((s) => (<button key={s} type="button" className="btn ghost" style={{ padding: "3px 10px", fontSize: 12, fontWeight: csvSupplier === s ? 700 : 400, borderColor: csvSupplier === s ? "#14a04a" : undefined }} onClick={() => setCsvSupplier(s)}>{csvSupplier === s ? "✓ " : ""}{s}</button>))}
-                          </div>
-                        </div>
-                      ) : null;
-                    })()}
-                    <label className="estf"><span>Supplier (optional)</span><input value={csvSupplier} onChange={(e) => setCsvSupplier(e.target.value)} placeholder="ABC Supply" /></label>
-                    <label className="estf"><span>Supplier API / feed URL</span><input value={csvUrl} onChange={(e) => setCsvUrl(e.target.value)} placeholder="https://supplier.example/prices.csv" /></label>
-                    <button className="btn ghost full" disabled={csvBusy} style={{ margin: "4px 0 8px" }} onClick={fetchSupplierUrl}>{csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"}</button>
-                    <label className="estf"><span>CSV file</span><input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onCsvFile(e.target.files && e.target.files[0])} /></label>
-                    <label className="estf"><span>…or paste CSV</span><textarea rows={4} onChange={(e) => onCsvText(e.target.value)} placeholder={"material,unit,cost\n2x4x8 SPF,EA,5.85"} /></label>
-                    {csvParsed && csvParsed.headers.length > 0 && (
-                      <div>
-                        <p className="hint">Map your columns ({csvParsed.rows.length} rows found):</p>
-                        <div className="estfields">
-                          {[["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => (
-                            <label className="estf" key={k}><span>{lbl}</span>
-                              <select value={csvMap[k]} onChange={(e) => setCsvMap((m) => ({ ...m, [k]: num(e.target.value) }))}>
-                                <option value={-1}>—</option>
-                                {csvParsed.headers.map((h, i) => <option key={i} value={i}>{h || ("col " + (i + 1))}</option>)}
-                              </select>
-                            </label>
-                          ))}
-                        </div>
-                        <button className="btn primary full" style={{ marginTop: 8 }} disabled={csvBusy} onClick={csvParseAndCategorize}>
-                          {csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {pbImportOpen && csvReview && (
-                  <div style={{ marginTop: 8 }}>
-                    <p className="hint">Review &amp; correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit.</p>
-                    {csvReview.map((r, i) => (
-                      <div className="estfields" key={i} style={{ alignItems: "end", background: r.confidence < 0.6 ? "#fff6e6" : "transparent", borderRadius: 6, padding: 4 }}>
-                        <label className="estf"><span>Material</span><input value={r.material} onChange={(e) => csvReviewSet(i, "material", e.target.value)} /></label>
-                        <label className="estf"><span>Trade {r.confidence < 0.6 ? "⚠️" : ""}</span>
-                          <select value={r.trade} onChange={(e) => csvReviewSet(i, "trade", e.target.value)}>
-                            {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
-                            <option value="other">other (skip)</option>
-                          </select>
-                        </label>
-                        <label className="estf"><span>Category</span><input value={r.category} onChange={(e) => csvReviewSet(i, "category", e.target.value)} /></label>
-                        <label className="estf"><span>Unit</span><input value={r.unit} onChange={(e) => csvReviewSet(i, "unit", e.target.value)} /></label>
-                        <label className="estf"><span>$/unit</span><input type="number" step="0.01" value={r.cost} onChange={(e) => csvReviewSet(i, "cost", num(e.target.value))} /></label>
-                      </div>
-                    ))}
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <button className="btn primary grow1" onClick={csvCommit}>✓ Commit {csvReview.filter((r) => r.trade && r.trade !== "other").length} to price book</button>
-                      <button className="btn ghost" onClick={csvResetImport}>Cancel</button>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           )}
           {/* FIX 1 (demote) — legacy matCosts card: only appears while a legacy list exists; leads with the
