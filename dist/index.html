@@ -5891,7 +5891,22 @@ function App() {
   const alAudioRef = useRef(null); // reusable <audio> for ElevenLabs playback
   const audioUnlockedRef = useRef(false); // <audio> element unlocked by a gesture (iOS)
   // ---- CSV importer (Stage 2b/2c) ----
-  const [pbImportOpen, setPbImportOpen] = useState(false);
+  // Intake tiles (FIX 1 wiring): each tile opens ITS OWN intake, rendered directly beneath the tiles
+  // (not below the whole book editor — that put it off-screen on mobile and made the tiles feel dead).
+  const [pbIntakeMode, setPbIntakeMode] = useState(""); // "" | "csv" | "photo" | "feed"
+  const pbPhotoInputRef = useRef(null); // always-mounted hidden inputs — a tile tap clicks these
+  const pbCsvFileRef = useRef(null); // SYNCHRONOUSLY (same gesture, so iOS opens the picker)
+  const pbIntakeRef = useRef(null); // the revealed intake block (scrollIntoView target)
+  const pbOpenIntake = (mode, ref) => {
+    setPbIntakeMode(mode);
+    if (ref && ref.current) ref.current.click();
+    setTimeout(() => {
+      if (pbIntakeRef.current && pbIntakeRef.current.scrollIntoView) pbIntakeRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+    }, 80);
+  };
   // FIX 4 — grouped, collapsible price-book view (trade -> category), search, closed by default.
   const [pbSearch, setPbSearch] = useState("");
   const [pbGrpOpen, setPbGrpOpen] = useState({}); // keys: "t:<trade>" and "c:<trade>|<category>"
@@ -13686,7 +13701,29 @@ function App() {
         fontSize: 12.5
       }
     }, "✓ all fresh");
-  })()), /*#__PURE__*/React.createElement("div", {
+  })()), /*#__PURE__*/React.createElement("input", {
+    ref: pbPhotoInputRef,
+    type: "file",
+    accept: "image/*,application/pdf,.pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      onPriceFile(e.target.files && e.target.files[0]);
+      e.target.value = "";
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    ref: pbCsvFileRef,
+    type: "file",
+    accept: ".csv,text/csv,text/plain",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      onCsvFile(e.target.files && e.target.files[0]);
+      e.target.value = "";
+    }
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -13695,25 +13732,203 @@ function App() {
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn ghost grow1",
-    onClick: () => {
-      setWhPbOpen(true);
-      setPbImportOpen(true);
-    }
+    style: pbIntakeMode === "csv" ? {
+      borderColor: "#14a04a",
+      fontWeight: 700
+    } : undefined,
+    onClick: () => pbOpenIntake("csv", pbCsvFileRef)
   }, "📄 CSV"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn ghost grow1",
-    onClick: () => {
-      setWhPbOpen(true);
-      setPbImportOpen(true);
-    }
+    style: pbIntakeMode === "photo" ? {
+      borderColor: "#14a04a",
+      fontWeight: 700
+    } : undefined,
+    onClick: () => pbOpenIntake("photo", pbPhotoInputRef)
   }, "📷 Photo / PDF"), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "btn ghost grow1",
-    onClick: () => {
-      setWhPbOpen(true);
-      setPbImportOpen(true);
+    style: pbIntakeMode === "feed" ? {
+      borderColor: "#14a04a",
+      fontWeight: 700
+    } : undefined,
+    onClick: () => pbOpenIntake("feed", null)
+  }, "🔗 Supplier feed")), pbIntakeMode && /*#__PURE__*/React.createElement("div", {
+    ref: pbIntakeRef,
+    style: {
+      marginTop: 8,
+      borderTop: "1px solid #eee",
+      paddingTop: 8
     }
-  }, "🔗 Supplier feed")), /*#__PURE__*/React.createElement("button", {
+  }, !csvReview && /*#__PURE__*/React.createElement("div", null, (() => {
+    const ven = cazaManualOf(profC.cazaManual).vendors;
+    const list = [...new Set((ven && ven.preferred || []).map(v => v.name).filter(Boolean).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
+    return list.length ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "hint"
+    }, "Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 4
+      }
+    }, list.map(s => /*#__PURE__*/React.createElement("button", {
+      key: s,
+      type: "button",
+      className: "btn ghost",
+      style: {
+        padding: "3px 10px",
+        fontSize: 12,
+        fontWeight: csvSupplier === s ? 700 : 400,
+        borderColor: csvSupplier === s ? "#14a04a" : undefined
+      },
+      onClick: () => setCsvSupplier(s)
+    }, csvSupplier === s ? "✓ " : "", s)))) : null;
+  })(), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
+    value: csvSupplier,
+    onChange: e => setCsvSupplier(e.target.value),
+    placeholder: "ABC Supply"
+  })), pbIntakeMode === "photo" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn primary full",
+    disabled: csvBusy,
+    style: {
+      marginTop: 6
+    },
+    onClick: () => pbPhotoInputRef.current && pbPhotoInputRef.current.click()
+  }, csvBusy ? "Reading the price sheet…" : "📷 Choose a photo / PDF of a price sheet"), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 4
+    }
+  }, "A supplier quote or price sheet — AI reads the prices, then you review before anything saves.")), pbIntakeMode === "csv" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn primary full",
+    disabled: csvBusy,
+    style: {
+      marginTop: 6
+    },
+    onClick: () => pbCsvFileRef.current && pbCsvFileRef.current.click()
+  }, "📄 Choose a CSV file"), /*#__PURE__*/React.createElement("label", {
+    className: "estf",
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "…or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
+    rows: 4,
+    onChange: e => onCsvText(e.target.value),
+    placeholder: "material,unit,cost\n2x4x8 SPF,EA,5.85"
+  }))), pbIntakeMode === "feed" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Supplier API / feed URL"), /*#__PURE__*/React.createElement("input", {
+    value: csvUrl,
+    onChange: e => setCsvUrl(e.target.value),
+    placeholder: "https://supplier.example/prices.csv"
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    disabled: csvBusy,
+    style: {
+      margin: "6px 0 2px"
+    },
+    onClick: fetchSupplierUrl
+  }, csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)")), csvBusy && pbIntakeMode !== "photo" && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Working…"), csvParsed && csvParsed.headers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Map your columns (", csvParsed.rows.length, " rows found):"), /*#__PURE__*/React.createElement("div", {
+    className: "estfields"
+  }, [["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => /*#__PURE__*/React.createElement("label", {
+    className: "estf",
+    key: k
+  }, /*#__PURE__*/React.createElement("span", null, lbl), /*#__PURE__*/React.createElement("select", {
+    value: csvMap[k],
+    onChange: e => setCsvMap(m => ({
+      ...m,
+      [k]: num(e.target.value)
+    }))
+  }, /*#__PURE__*/React.createElement("option", {
+    value: -1
+  }, "—"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, h || "col " + (i + 1))))))), /*#__PURE__*/React.createElement("button", {
+    className: "btn primary full",
+    style: {
+      marginTop: 8
+    },
+    disabled: csvBusy,
+    onClick: csvParseAndCategorize
+  }, csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"))), csvReview && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Review & correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    className: "estfields",
+    key: i,
+    style: {
+      alignItems: "end",
+      background: r.confidence < 0.6 ? "#fff6e6" : "transparent",
+      borderRadius: 6,
+      padding: 4
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
+    value: r.material,
+    onChange: e => csvReviewSet(i, "material", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Trade ", r.confidence < 0.6 ? "⚠️" : ""), /*#__PURE__*/React.createElement("select", {
+    value: r.trade,
+    onChange: e => csvReviewSet(i, "trade", e.target.value)
+  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t.trade,
+    value: t.trade
+  }, t.label)), /*#__PURE__*/React.createElement("option", {
+    value: "other"
+  }, "other (skip)"))), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
+    value: r.category,
+    onChange: e => csvReviewSet(i, "category", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
+    value: r.unit,
+    onChange: e => csvReviewSet(i, "unit", e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "estf"
+  }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    value: r.cost,
+    onChange: e => csvReviewSet(i, "cost", num(e.target.value))
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn primary grow1",
+    onClick: csvCommit
+  }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: csvResetImport
+  }, "Cancel"))), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn ghost full",
+    style: {
+      marginTop: 6,
+      padding: "3px 8px",
+      fontSize: 12
+    },
+    onClick: () => setPbIntakeMode("")
+  }, "▴ Close")), /*#__PURE__*/React.createElement("button", {
     className: "btn ghost full",
     style: {
       marginTop: 6
@@ -13953,183 +14168,7 @@ function App() {
         fontWeight: 600
       }
     }, "✓ All prices fresh (updated within ", PRICE_STALE_DAYS, " days).") : null;
-  })(), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 12,
-      borderTop: "1px solid #eee",
-      paddingTop: 10
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    onClick: () => setPbImportOpen(o => !o)
-  }, pbImportOpen ? "▾ Hide" : "＋ Add prices", " ", /*#__PURE__*/React.createElement("span", {
-    className: "hint"
-  }, "CSV · 📷 photo / PDF · 🔗 supplier feed")), pbImportOpen && !csvReview && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "📷 PDF / photo of a price sheet"), /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "image/*,application/pdf,.pdf",
-    disabled: csvBusy,
-    onChange: e => onPriceFile(e.target.files && e.target.files[0])
-  })), /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Upload a supplier quote or price sheet — AI reads the prices, then you review before anything saves."), csvBusy && /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Reading the price sheet…"), /*#__PURE__*/React.createElement("p", {
-    className: "hint",
-    style: {
-      textAlign: "center",
-      margin: "8px 0",
-      fontWeight: 600
-    }
-  }, "— or import a CSV —"), (() => {
-    const ven = cazaManualOf(profC.cazaManual).vendors;
-    const list = [...new Set((ven && ven.preferred || []).map(v => v.name).filter(Boolean).concat(["ABC Supply", "SRS / Beacon", "Home Depot", "Lowe's"]))].slice(0, 8);
-    return list.length ? /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 6
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "hint"
-    }, "Supplier — tap yours or type below (tags these prices so the stale-export groups by supplier):"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 6,
-        marginTop: 4
-      }
-    }, list.map(s => /*#__PURE__*/React.createElement("button", {
-      key: s,
-      type: "button",
-      className: "btn ghost",
-      style: {
-        padding: "3px 10px",
-        fontSize: 12,
-        fontWeight: csvSupplier === s ? 700 : 400,
-        borderColor: csvSupplier === s ? "#14a04a" : undefined
-      },
-      onClick: () => setCsvSupplier(s)
-    }, csvSupplier === s ? "✓ " : "", s)))) : null;
-  })(), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Supplier (optional)"), /*#__PURE__*/React.createElement("input", {
-    value: csvSupplier,
-    onChange: e => setCsvSupplier(e.target.value),
-    placeholder: "ABC Supply"
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Supplier API / feed URL"), /*#__PURE__*/React.createElement("input", {
-    value: csvUrl,
-    onChange: e => setCsvUrl(e.target.value),
-    placeholder: "https://supplier.example/prices.csv"
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost full",
-    disabled: csvBusy,
-    style: {
-      margin: "4px 0 8px"
-    },
-    onClick: fetchSupplierUrl
-  }, csvBusy ? "Fetching feed…" : "Fetch from supplier feed (CSV or JSON)"), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "CSV file"), /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: ".csv,text/csv,text/plain",
-    onChange: e => onCsvFile(e.target.files && e.target.files[0])
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "…or paste CSV"), /*#__PURE__*/React.createElement("textarea", {
-    rows: 4,
-    onChange: e => onCsvText(e.target.value),
-    placeholder: "material,unit,cost\n2x4x8 SPF,EA,5.85"
-  })), csvParsed && csvParsed.headers.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Map your columns (", csvParsed.rows.length, " rows found):"), /*#__PURE__*/React.createElement("div", {
-    className: "estfields"
-  }, [["material", "Material *"], ["cost", "Unit cost *"], ["unit", "Unit"], ["category", "Category"]].map(([k, lbl]) => /*#__PURE__*/React.createElement("label", {
-    className: "estf",
-    key: k
-  }, /*#__PURE__*/React.createElement("span", null, lbl), /*#__PURE__*/React.createElement("select", {
-    value: csvMap[k],
-    onChange: e => setCsvMap(m => ({
-      ...m,
-      [k]: num(e.target.value)
-    }))
-  }, /*#__PURE__*/React.createElement("option", {
-    value: -1
-  }, "—"), csvParsed.headers.map((h, i) => /*#__PURE__*/React.createElement("option", {
-    key: i,
-    value: i
-  }, h || "col " + (i + 1))))))), /*#__PURE__*/React.createElement("button", {
-    className: "btn primary full",
-    style: {
-      marginTop: 8
-    },
-    disabled: csvBusy,
-    onClick: csvParseAndCategorize
-  }, csvBusy ? "Auto-categorizing…" : "Parse & auto-categorize →"))), pbImportOpen && csvReview && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "hint"
-  }, "Review & correct, then commit. ⚠️ low-confidence rows are highlighted — fix the trade before committing. Nothing saves to your book until you commit."), csvReview.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    className: "estfields",
-    key: i,
-    style: {
-      alignItems: "end",
-      background: r.confidence < 0.6 ? "#fff6e6" : "transparent",
-      borderRadius: 6,
-      padding: 4
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Material"), /*#__PURE__*/React.createElement("input", {
-    value: r.material,
-    onChange: e => csvReviewSet(i, "material", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Trade ", r.confidence < 0.6 ? "⚠️" : ""), /*#__PURE__*/React.createElement("select", {
-    value: r.trade,
-    onChange: e => csvReviewSet(i, "trade", e.target.value)
-  }, PRICE_BOOK_TRADES.map(t => /*#__PURE__*/React.createElement("option", {
-    key: t.trade,
-    value: t.trade
-  }, t.label)), /*#__PURE__*/React.createElement("option", {
-    value: "other"
-  }, "other (skip)"))), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Category"), /*#__PURE__*/React.createElement("input", {
-    value: r.category,
-    onChange: e => csvReviewSet(i, "category", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "Unit"), /*#__PURE__*/React.createElement("input", {
-    value: r.unit,
-    onChange: e => csvReviewSet(i, "unit", e.target.value)
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "estf"
-  }, /*#__PURE__*/React.createElement("span", null, "$/unit"), /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    step: "0.01",
-    value: r.cost,
-    onChange: e => csvReviewSet(i, "cost", num(e.target.value))
-  })))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn primary grow1",
-    onClick: csvCommit
-  }, "✓ Commit ", csvReview.filter(r => r.trade && r.trade !== "other").length, " to price book"), /*#__PURE__*/React.createElement("button", {
-    className: "btn ghost",
-    onClick: csvResetImport
-  }, "Cancel"))))), matCosts.length > 0 && /*#__PURE__*/React.createElement("section", {
+  })()), matCosts.length > 0 && /*#__PURE__*/React.createElement("section", {
     className: "card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "h2"
