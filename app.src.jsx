@@ -68,6 +68,8 @@ const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price boo
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
+const COSTJOBS_KEY = "cazbid-costjobs-v1"; // JOB COST TRACKING — contractor jobs independent of estimates (actuals: receipts + hours)
+const CJ_DISMISSED_KEY = "cazbid-costjobs-dismissed-v1"; // estimate ids whose auto-created cost job was deliberately deleted (tombstones — never resurrect)
 const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
 const PERSONA_SPEED_KEY = "cazbid-persona-speeds-v1"; // per-persona TTS speed { name: 0.7..1.2 }
 // Assistant PERSONAS — name + ElevenLabs voiceId + avatar (blank for now → initials fallback).
@@ -1795,6 +1797,69 @@ const estStore = {
   },
   async remove(id) { const all = (await estStore.list()).filter((e) => e.id !== id); await pSet(ESTIMATES_KEY, all); return all; },
 };
+// ===== JOB COST TRACKING — what a job REALLY cost (receipts, labor, man-hours) vs what was figured =====
+// Jobs exist INDEPENDENTLY of estimates: no estimate, estimate-before, or estimate-after are all valid.
+// This is also the calibration engine's data source — real actuals validate the non-roofing labor rates.
+const CJ_CATS = ["Materials", "Labor", "Subcontractor", "Equipment/Rental", "Disposal", "Fuel/Travel", "Permits/Fees", "Other"];
+const CJ_OTHER_CATS = ["Subcontractor", "Equipment/Rental", "Disposal", "Fuel/Travel", "Permits/Fees", "Other"];
+// ACTUALS from the cost entries + hours log. Labor $ is either the summed Labor entries or (toggle)
+// total MH x the job's burdened rate — never both. Real margin = (contract - actual total) / contract.
+function cjTotals(job) {
+  const costs = (job && job.costs) || [];
+  const sum = (cat) => costs.filter((c) => c.category === cat).reduce((a, c) => a + (num(c.amount) || 0), 0);
+  const mh = Math.round(((job && job.hoursLog) || []).reduce((a, h) => a + (num(h.mh) || 0), 0) * 10) / 10;
+  const laborEntries = Math.round(sum("Labor"));
+  const laborComputed = Math.round(mh * (num(job && job.burdenRate) || 0));
+  const labor = (job && job.laborFromHours) ? laborComputed : laborEntries;
+  const mats = Math.round(sum("Materials"));
+  const other = Math.round(CJ_OTHER_CATS.reduce((a, c) => a + sum(c), 0));
+  const total = mats + labor + other;
+  const contract = num(job && job.planned && job.planned.contract) || 0;
+  const margin = contract > 0 ? Math.round(((contract - total) / contract) * 100) : null;
+  return { mats, labor, laborEntries, laborComputed, mh, other, total, contract, margin };
+}
+// ESTIMATE-side values from a saved estStore record's payload (READ-ONLY — the engine is untouched).
+// Total excludes mobilization (job-level, shown on the estimate itself); margin = the bid margin.
+function cjEstVals(rec) {
+  if (!rec || !rec.payload || !Array.isArray(rec.payload.trades) || !rec.payload.trades.length) return null;
+  const ts = rec.payload.trades;
+  const matsOf = (t) => (t.items || []).reduce((s, it) => s + (num(it.cost) || 0), 0);
+  const mats = ts.reduce((a, t) => a + matsOf(t), 0);
+  const mh = ts.reduce((a, t) => a + (num(t.laborHours) || 0), 0);
+  const labor = ts.reduce((a, t) => a + (num(t.laborHours) || 0) * (num(t.laborRate) || 0), 0);
+  const equip = ts.reduce((a, t) => a + (num(t.equipment) || 0), 0);
+  const tax = ts.reduce((a, t) => a + matsOf(t) * (num(t.taxRate) || 0), 0);
+  return { mats: Math.round(mats), labor: Math.round(labor), mh: Math.round(mh), equip: Math.round(equip), total: Math.round(mats + labor + equip + tax), margin: (rec.payload.estMargin != null ? num(rec.payload.estMargin) : null), price: num(rec.price) || 0 };
+}
+// PLANNED (My Bid Figures) as comparison values — Dustin's own numbers, independent of any AI estimate.
+function cjPlanVals(job) {
+  const p = (job && job.planned) || {};
+  const mats = num(p.mats) || 0, labor = num(p.labor) || 0, mh = num(p.mh) || 0, contract = num(p.contract) || 0;
+  if (!mats && !labor && !mh && !contract) return null;
+  const total = mats + labor;
+  return { mats, labor, mh, total, contract, margin: contract > 0 && total > 0 ? Math.round(((contract - total) / contract) * 100) : null };
+}
+// Variance of actual vs a bid figure: $ and % over/under (positive = OVER the bid = red).
+function cjVar(bid, actual) {
+  if (bid == null || !(bid > 0)) return null;
+  const d = Math.round((actual || 0) - bid);
+  return { d, pct: Math.round((d / bid) * 100) };
+}
+// Plain-language verdict: compares actuals to My Figures when present, else the CazBid estimate.
+function cjVerdict(plan, est, act) {
+  const bid = plan || est;
+  if (!bid || !act || !(act.total > 0)) return "";
+  const parts = [];
+  const mv = cjVar(bid.mats, act.mats);
+  if (mv && Math.abs(mv.d) >= 50) parts.push("$" + Math.abs(mv.d).toLocaleString() + (mv.d > 0 ? " over" : " under") + " on materials");
+  const hv = cjVar(bid.mh, act.mh);
+  if (hv && Math.abs(hv.d) >= 2) parts.push(Math.abs(hv.d) + " MH " + (hv.d > 0 ? "over" : "under") + " on labor");
+  else { const lv = cjVar(bid.labor, act.labor); if (lv && Math.abs(lv.d) >= 100) parts.push("$" + Math.abs(lv.d).toLocaleString() + (lv.d > 0 ? " over" : " under") + " on labor"); }
+  let s = parts.length ? ("Came in " + parts.join(", ") + ".") : "Right on the figures.";
+  if (act.margin != null && bid.margin != null) s += " Real margin " + act.margin + "% vs " + bid.margin + "% bid.";
+  else if (act.margin != null) s += " Real margin " + act.margin + "%.";
+  return s;
+}
 
 /* ---------- small components ---------- */
 function Avatar({ user, size, onTap }) {
@@ -2352,6 +2417,7 @@ function App() {
   // saved-estimates library (build-set #3)
   const [estimates, setEstimates] = useState([]);     // the saved list (from estStore)
   const [estId, setEstId] = useState(null);           // id of the estimate currently open/in-progress
+  const estIdRef = useRef(null);                      // live mirror — two persistCurrent calls racing before setEstId commits must mint ONE id, not two records
   const [estCustomer, setEstCustomer] = useState(""); // customer name on the current estimate
   const [estAddress, setEstAddress] = useState("");   // job address on the current estimate
   const [estEmail, setEstEmail] = useState("");       // customer email (feeds DocuSign send / emailed copy / JobNimbus later)
@@ -2896,6 +2962,10 @@ function App() {
       if (clb && typeof clb === "object") setCalib(clb);
       const ests = await estStore.list();
       if (ests && ests.length) setEstimates(ests);
+      const cjs = await pGet(COSTJOBS_KEY);
+      if (Array.isArray(cjs)) setCostJobs(cjs);
+      const cjd = await pGet(CJ_DISMISSED_KEY);
+      if (cjd && typeof cjd === "object") cjDismissedRef.current = cjd;
       const pna = await pGet(PERSONA_KEY);
       if (pna && personaByName(pna)) { setPersona(personaByName(pna).name); personaRef.current = personaByName(pna).name; }
       const psp = await pGet(PERSONA_SPEED_KEY);
@@ -2914,9 +2984,9 @@ function App() {
   // autosave: the in-progress estimate (build-set #3) — survives close/reopen; never lost mid-session.
   const estSaveTimer = useRef(null);
   useEffect(() => {
+    clearTimeout(estSaveTimer.current); // above the guards — clearing estResult must also kill the pending timer
     if (!loaded.current) return;
     if (!estResult || !(estResult.trades && estResult.trades.length)) return;
-    clearTimeout(estSaveTimer.current);
     estSaveTimer.current = setTimeout(() => { persistCurrent(); }, 600);
   }, [estResult, estMargin, estMiles, estMobOn, estCustomer, estAddress, estEmail, estStatus, estNotes, estJobPhotos]);
   useEffect(() => {
@@ -4442,9 +4512,107 @@ function App() {
     try { await fetch("/.netlify/functions/estimate-debug?id=" + encodeURIComponent(id), { method: "DELETE" }); flash("Link deleted — the URL no longer works."); } catch (e) { flash("Couldn't delete — " + errMsg(e)); }
     setDiagLink("");
   };
+  // ===== JOB COST TRACKING — state + handlers (store follows the estStore pattern: pGet/pSet, local-first) =====
+  const [costJobs, setCostJobs] = useState([]);          // [{id,name,customerName,address,trade,planned{mats,labor,mh,contract},costs[],hoursLog[],burdenRate,laborFromHours,estimateId,afterTheFact,status,actualPerUnit?}]
+  const [cjOpen, setCjOpen] = useState(null);            // open job id (detail view on My Jobs)
+  const [cjReceiptBusy, setCjReceiptBusy] = useState(false);
+  const [cjDraft, setCjDraft] = useState(null);          // cost entry awaiting confirm (receipt-prefilled or manual)
+  const [cjHoursDraft, setCjHoursDraft] = useState(null);// hours entry being typed {jobId,date,guys,hrs,mh}
+  const [cjNumDraft, setCjNumDraft] = useState(null);    // raw string for a committed-number field while typing (keeps "05"/"1." intact; commits num() on blur)
+  const [cjLinkTarget, setCjLinkTarget] = useState(null);// job id waiting for an after-the-fact estimate
+  const cjReceiptRef = useRef(null);                     // hidden receipt file input (always mounted — same-gesture picker)
+  const cjAttachedRef = useRef({});                      // estimate ids already attached this session (auto-save fires every 600ms)
+  const cjDismissedRef = useRef({});                     // tombstones: estimate ids whose auto-job was deleted (loaded at boot)
+  // FUNCTIONAL updates ONLY — the 600ms auto-save timer holds stale closures over costJobs; a plain
+  // setCostJobs(next) from that snapshot would silently erase jobs created/edited in the window (and
+  // pSet would persist the loss). Updaters always see fresh state; pSet writes exactly what commits.
+  const saveCostJobs = (nextOrFn) => setCostJobs((prev) => { const next = (typeof nextOrFn === "function") ? nextOrFn(prev) : nextOrFn; pSet(COSTJOBS_KEY, next); return next; });
+  // shallow clone is sufficient: every mut() sets top-level scalars, planned.X, or REASSIGNS costs/
+  // hoursLog with fresh arrays (map/filter/concat) — never mutates nested entries in place.
+  const cjUpdate = (id, mut) => saveCostJobs((prev) => prev.map((j) => { if (j.id !== id) return j; const c = { ...j, planned: { ...(j.planned || {}) } }; mut(c); c.updatedAt = new Date().toISOString(); return c; }));
+  // props for a number input that commits through cjUpdate ON BLUR (typing stays a local raw string —
+  // committing num() per keystroke eats leading zeros and persists transient 0s to IndexedDB)
+  const cjNumField = (job, field, getV, setV) => ({
+    type: "number",
+    value: (cjNumDraft && cjNumDraft.jobId === job.id && cjNumDraft.field === field) ? cjNumDraft.raw : (getV() || ""),
+    onChange: (e) => setCjNumDraft({ jobId: job.id, field: field, raw: e.target.value }),
+    onBlur: () => { if (cjNumDraft && cjNumDraft.jobId === job.id && cjNumDraft.field === field) { const v = num(cjNumDraft.raw); cjUpdate(job.id, (j) => setV(j, v)); setCjNumDraft(null); } },
+  });
+  const cjNew = () => {
+    const name = window.prompt("Job name (e.g. Miller — cedar shake tear-off)");
+    if (!name || !name.trim()) return;
+    const now = new Date().toISOString();
+    const j = { id: "cj" + Date.now().toString(36) + rid().slice(0, 3), createdAt: now, updatedAt: now, name: name.trim(), customerName: "", address: "", trade: "", planned: { mats: 0, labor: 0, mh: 0, contract: 0 }, costs: [], hoursLog: [], burdenRate: 0, laborFromHours: false, estimateId: null, afterTheFact: false, status: "active" };
+    saveCostJobs((prev) => [j, ...prev]); setCjOpen(j.id);
+  };
+  const cjDelete = (id) => {
+    if (!window.confirm("Delete this job and all its cost entries?")) return;
+    const job = costJobs.find((j) => j.id === id);
+    if (job && job.estimateId) { cjDismissedRef.current[job.estimateId] = true; pSet(CJ_DISMISSED_KEY, cjDismissedRef.current); } // tombstone — the estimate's next auto-save must not resurrect it
+    if (cjLinkTarget === id) setCjLinkTarget(null);
+    saveCostJobs((prev) => prev.filter((j) => j.id !== id));
+    if (cjOpen === id) setCjOpen(null);
+  };
+  // RECEIPT photo -> the EXISTING /.netlify/functions/estimate endpoint (image blocks it already accepts;
+  // trade:"" so no manual loads). Compressed to 1200px; the small copy stores with the entry.
+  const CJ_RECEIPT_PROMPT = 'Read this receipt. Return ONLY raw JSON: {"vendor":"...","date":"YYYY-MM-DD","total":number,"tax":number or 0,"category":one of ["Materials","Labor","Subcontractor","Equipment/Rental","Disposal","Fuel/Travel","Permits/Fees","Other"],"note":"short description of what was bought (e.g. 32 sq Timberline HDZ + accessories)","confidence":"high"|"low"}. A lumberyard/supplier receipt is Materials. A dumpster/transfer-station ticket is Disposal. If unreadable, set confidence "low" and best-guess.';
+  const onReceiptFile = async (jobId, file) => {
+    if (!file || !jobId) return;
+    setCjReceiptBusy(true);
+    try {
+      const dataUrl = await imageToJpeg(file, 1200, 0.7);
+      const text = await callClaude([{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: dataUrl.split(",")[1] } }, { type: "text", text: CJ_RECEIPT_PROMPT }] }], { maxTokens: 400, trade: "" });
+      const d = parseJSON(text) || {};
+      const thumb = await dataUrlResize(dataUrl, 480, 0.5).catch(() => dataUrl); // store a small copy — the 1200px went to the OCR call only
+      setCjDraft({ jobId: jobId, vendor: String(d.vendor || ""), date: (typeof d.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(d.date)) ? d.date.slice(0, 10) : new Date().toISOString().slice(0, 10), amount: num(d.total) || 0, category: CJ_CATS.indexOf(d.category) >= 0 ? d.category : "Materials", note: String(d.note || ""), source: "receipt", confidence: d.confidence === "low" ? "low" : "high", photo: thumb });
+    } catch (e) { flash("Couldn't read the receipt — " + errMsg(e) + ". Add it manually instead."); }
+    setCjReceiptBusy(false);
+  };
+  const cjOpenReceipt = (jobId) => { setCjDraft(null); if (cjReceiptRef.current) { cjReceiptRef.current.dataset.job = jobId; cjReceiptRef.current.click(); } };
+  const cjManualEntry = (jobId) => setCjDraft({ jobId: jobId, vendor: "", date: new Date().toISOString().slice(0, 10), amount: 0, category: "Materials", note: "", source: "manual", confidence: "high", photo: null });
+  const cjSaveDraft = () => {
+    const d = cjDraft; if (!d || !(num(d.amount) > 0)) { flash("Enter the amount."); return; }
+    const entry = { id: d.editId || ("cjc" + rid()), date: d.date, vendor: d.vendor, amount: Math.round(num(d.amount) * 100) / 100, category: d.category, note: d.note, source: d.source, photo: d.photo || null };
+    cjUpdate(d.jobId, (j) => { j.costs = d.editId ? (j.costs || []).map((c) => (c.id === d.editId ? entry : c)) : [entry].concat(j.costs || []); });
+    setCjDraft(null); flash("Cost saved.");
+  };
+  const cjDelCost = (jobId, cid) => cjUpdate(jobId, (j) => { j.costs = (j.costs || []).filter((c) => c.id !== cid); });
+  const cjSaveHours = () => {
+    const h = cjHoursDraft; if (!h) return;
+    const mh = num(h.mh) > 0 ? num(h.mh) : (num(h.guys) || 0) * (num(h.hrs) || 0);
+    if (!(mh > 0)) { flash("Enter guys × hours (or total MH)."); return; }
+    cjUpdate(h.jobId, (j) => { j.hoursLog = [{ id: "cjh" + rid(), date: h.date, guys: num(h.guys) || 0, hrs: num(h.hrs) || 0, mh: Math.round(mh * 10) / 10 }].concat(j.hoursLog || []); });
+    setCjHoursDraft(null);
+  };
+  const cjDelHours = (jobId, hid) => cjUpdate(jobId, (j) => { j.hoursLog = (j.hoursLog || []).filter((x) => x.id !== hid); });
+  // AFTER-THE-FACT estimate: normal estimate flow, result attaches to THIS job flagged afterTheFact —
+  // "what would CazBid have bid?" vs actuals measures the ENGINE's accuracy (the calibration data).
+  const cjEstimateJob = async (job) => {
+    await startNewEstimate();
+    setEstCustomer(job.customerName || job.name || ""); setEstAddress(job.address || "");
+    setCjLinkTarget(job.id); goTab("estimator");
+    flash("Build the estimate — it attaches to “" + (job.name || "this job") + "” when it saves.");
+  };
+  // CLOSE + CALIBRATE: actual MH per primary unit vs the rate book, and one tap feeds the EXISTING
+  // logActuals loop (dampened blending) — this is how non-roofing rates finally get validated.
+  const cjCloseJob = (job) => {
+    const act = cjTotals(job);
+    const rec = job.estimateId ? estimates.find((e) => e.id === job.estimateId) : null;
+    const est = rec ? cjEstVals(rec) : null;
+    let perUnit = null;
+    if (rec && rec.payload && Array.isArray(rec.payload.trades) && rec.payload.trades[0]) {
+      // PRIMARY trade only (whole-job MH / another trade's sq would corrupt the rate); sq ≠ sqft
+      let sq = 0; (rec.payload.trades[0].items || []).forEach((it) => { const u = String(it.unit || "").toLowerCase(); const isSF = /sq\s*ft|sqft|\bsf\b/.test(u); if (!isSF && (u === "sq" || /\bsq\b|square/.test(u))) sq = Math.max(sq, num(it.qty) || 0); });
+      if (sq > 0 && act.mh > 0) perUnit = { unit: "sq", qty: sq, mhPerUnit: Math.round((act.mh / sq) * 10) / 10, bidPerUnit: (est && est.mh > 0) ? Math.round((est.mh / sq) * 10) / 10 : null };
+    }
+    cjUpdate(job.id, (j) => { j.status = "closed"; j.closedAt = new Date().toISOString(); if (perUnit) j.actualPerUnit = perUnit; });
+    flash("Job closed." + (perUnit ? " Ran " + perUnit.mhPerUnit + " MH/" + perUnit.unit + (perUnit.bidPerUnit ? " vs " + perUnit.bidPerUnit + " bid" : "") + "." : ""));
+  };
   const persistCurrent = async (extra) => {
     if (!estResult || !(estResult.trades && estResult.trades.length)) return null;
-    const id = estId || ("est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+    clearTimeout(estSaveTimer.current); // a manual save supersedes any pending auto-save (same closure would double-fire)
+    const id = estIdRef.current || estId || ("est" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+    estIdRef.current = id;
     const price = sellOf(jobCostOf(estResult.trades), estMargin);
     const title = (estResult.trades.length === 1 ? estResult.trades[0].title : estResult.trades.length + " trades");
     const rec = Object.assign({
@@ -4454,13 +4622,31 @@ function App() {
     if (!estId) setEstId(id);
     const { all } = await estStore.save(rec);
     setEstimates(all);
+    // JOB COSTING — every saved estimate attaches to a cost job (created if none). Idempotent by
+    // estimateId + a session ref (auto-save fires every 600ms). An "Estimate this job" link target
+    // attaches to THAT job flagged afterTheFact instead of creating a new one.
+    try {
+      if (!cjAttachedRef.current[id] && !cjDismissedRef.current[id] && !costJobs.some((j) => j.estimateId === id)) {
+        cjAttachedRef.current[id] = true;
+        const target = cjLinkTarget ? costJobs.find((j) => j.id === cjLinkTarget && !j.estimateId) : null;
+        if (target) {
+          cjUpdate(target.id, (j) => { j.estimateId = id; j.afterTheFact = true; if (!j.customerName) j.customerName = estCustomer.trim(); if (!j.address) j.address = estAddress.trim(); });
+          setCjLinkTarget(null); flash("Estimate attached to “" + target.name + "”.");
+        } else {
+          const now = new Date().toISOString();
+          const newJob = { id: "cj" + Date.now().toString(36) + rid().slice(0, 3), createdAt: now, updatedAt: now, name: (estCustomer.trim() || title), customerName: estCustomer.trim(), address: estAddress.trim(), trade: (estResult.trades[0] && estResult.trades[0].tradeKey) || "", planned: { mats: 0, labor: 0, mh: 0, contract: 0 }, costs: [], hoursLog: [], burdenRate: 0, laborFromHours: false, estimateId: id, afterTheFact: false, status: "active" };
+          // dedupe INSIDE the updater — the outer .some() reads a possibly-stale snapshot
+          saveCostJobs((prev) => prev.some((j) => j.estimateId === id) ? prev : [newJob, ...prev]);
+        }
+      }
+    } catch (e) { /* job-cost attach never blocks an estimate save */ }
     return id;
   };
   // Reopen a saved estimate into the editor (result view).
   const openSavedEstimate = (rec) => {
     if (!rec || !rec.payload) return;
     const p = rec.payload;
-    setEstId(rec.id); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
+    setEstId(rec.id); estIdRef.current = rec.id; setCjLinkTarget(null); setEstCustomer(rec.customerName || ""); setEstAddress(rec.jobAddress || ""); setEstEmail(rec.customerEmail || ""); setEstStatus(rec.status || "draft");
     setEstMargin(num(p.estMargin) || 30); setEstMiles(num(p.estMiles) || 0); setEstMobOn(p.estMobOn === true); setHouseScope(p.houseScope || {}); setHousePanelW(p.housePanelW || {});
     setWhDims(p.whDims || ""); setWhScopeLines(p.whScopeLines || {}); setWhPhotos(Array.isArray(p.whPhotos) ? p.whPhotos : []); setHouseView(p.houseView || "exterior");
     setEstNotes(p.jobNotes || ""); setEstJobPhotos(Array.isArray(p.jobPhotos) ? p.jobPhotos : []);
@@ -4469,7 +4655,10 @@ function App() {
   };
   const deleteSavedEstimate = async (id) => {
     const all = await estStore.remove(id); setEstimates(all);
-    if (estId === id) { setEstId(null); }
+    if (estId === id) { setEstId(null); estIdRef.current = null; }
+    // heal any cost job pointing at the deleted estimate: back to "no estimate" so re-linking works
+    saveCostJobs((prev) => prev.some((j) => j.estimateId === id) ? prev.map((j) => j.estimateId === id ? { ...j, estimateId: null, afterTheFact: false, updatedAt: new Date().toISOString() } : j) : prev);
+    delete cjAttachedRef.current[id];
     flash("Estimate deleted.");
   };
   const renameSavedEstimate = async (rec) => {
@@ -4483,7 +4672,7 @@ function App() {
   // "Start new": SAVE the current one first (never destroy work), then clear to a fresh scope.
   const startNewEstimate = async () => {
     await persistCurrent();
-    setEstResult(null); setEstId(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
+    setEstResult(null); setEstId(null); estIdRef.current = null; setCjLinkTarget(null); setEstCustomer(""); setEstAddress(""); setEstEmail(""); setEstStatus("draft");
     setEstMiles(0); setEstMobOn(true); setEstNotes(""); setEstJobPhotos([]);
     setHouseScope({}); setHousePanelW({}); setWhDims(""); setWhScopeLines({}); setWhPhotos([]); setActiveTrade(null); setSelStep("category"); setAlThread([]);
     flash("Saved. Starting a fresh estimate.");
@@ -6148,6 +6337,196 @@ function App() {
       {me.role === "contractor" && tab === "myjobs" && !overlay && (
         <main className="page">
           <div className="pagetitle">My Jobs</div>
+          {/* ===== JOB COSTING — what each job REALLY cost vs what was figured (contractor-only) ===== */}
+          {/* no `capture` attr — iOS then offers BOTH camera and photo library ("take/upload") */}
+          <input ref={cjReceiptRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const jid = e.target.dataset.job; onReceiptFile(jid, e.target.files && e.target.files[0]); e.target.value = ""; }} />
+          {!cjOpen && (
+            <section className="card">
+              <div className="h2" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>💵 Job costing <button className="btn primary" style={{ padding: "4px 12px", fontSize: 13 }} onClick={cjNew}>＋ New Job</button></div>
+              <p className="hint" style={{ marginTop: -2 }}>Receipts, labor, man-hours — compared against what you figured and what CazBid estimated.</p>
+              {costJobs.length === 0 && <p className="hint">No jobs yet. Tap ＋ New Job — or build an estimate; every saved estimate creates its job here automatically.</p>}
+              {costJobs.map((j) => { const a = cjTotals(j); return (
+                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjOpen(j.id); }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontSize: 13.5 }}>{j.name}{j.status === "closed" ? " · ✓ closed" : ""}</b>
+                    <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[j.customerName, j.address, j.estimateId ? (j.afterTheFact ? "estimate (after the fact)" : "estimate ✓") : "no estimate"].filter(Boolean).join(" · ")}</span>
+                  </span>
+                  <b style={{ whiteSpace: "nowrap", fontSize: 13 }}>{a.total > 0 ? $0(a.total) : "—"}{a.contract > 0 ? <span className="hint"> / {$0(a.contract)}</span> : null}</b>
+                </button>
+              ); })}
+            </section>
+          )}
+          {cjOpen && (() => {
+            const job = costJobs.find((j) => j.id === cjOpen);
+            if (!job) return null;
+            const act = cjTotals(job);
+            const rec = job.estimateId ? estimates.find((e) => e.id === job.estimateId) : null;
+            const est = rec ? cjEstVals(rec) : null;
+            const plan = cjPlanVals(job);
+            const bid = plan || est;
+            const cols = [plan ? { k: "My figures", v: plan } : null, est ? { k: "CazBid est.", v: est } : null, { k: "Actual", v: act }].filter(Boolean);
+            const vCell = (bidV, actV, k) => { const v = cjVar(bidV, actV); if (!v) return null; const mag = Math.abs(v.d).toLocaleString(); return <div style={{ color: v.d > 0 ? "#b3261e" : "#1B7A3D", fontWeight: 600, fontSize: 10.5 }}>{(v.d < 0 ? "-" : "+") + (k === "mh" ? mag + " MH" : "$" + mag)} ({v.pct > 0 ? "+" : ""}{v.pct}%)</div>; };
+            const today = new Date().toISOString().slice(0, 10);
+            return (
+              <section className="card">
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button className="btn ghost" style={{ padding: "3px 9px" }} onClick={() => { setCjOpen(null); setCjDraft(null); setCjHoursDraft(null); }}>←</button>
+                  <b style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }} onClick={() => { const n = window.prompt("Job name", job.name); if (n && n.trim()) cjUpdate(job.id, (j) => { j.name = n.trim(); }); }}>{job.name} ✏️</b>
+                  {job.status === "closed" && <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1B7A3D" }}>✓ closed</span>}
+                  <button className="btn ghost" style={{ padding: "3px 8px" }} title="Delete job" onClick={() => cjDelete(job.id)}>🗑</button>
+                </div>
+                <div className="estfields" style={{ marginTop: 8 }}>
+                  <label className="estf"><span>Customer</span><input value={job.customerName || ""} onChange={(e) => cjUpdate(job.id, (j) => { j.customerName = e.target.value; })} placeholder="name" /></label>
+                  <label className="estf"><span>Address / town</span><input value={job.address || ""} onChange={(e) => cjUpdate(job.id, (j) => { j.address = e.target.value; })} placeholder="address" /></label>
+                  <label className="estf"><span>Trade</span>
+                    <select value={job.trade || ""} onChange={(e) => cjUpdate(job.id, (j) => { j.trade = e.target.value; })}>
+                      <option value="">—</option>
+                      {PRICE_BOOK_TRADES.map((t) => <option key={t.trade} value={t.trade}>{t.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {/* MY BID FIGURES — Dustin's own numbers, independent of any AI estimate */}
+                <div className="seclabel" style={{ marginTop: 10 }}>My bid figures <span className="hint">your numbers — not the AI's</span></div>
+                <div className="estfields">
+                  <label className="estf"><span>Materials $</span><input {...cjNumField(job, "pmats", () => job.planned.mats, (j, v) => { j.planned.mats = v; })} /></label>
+                  <label className="estf"><span>Labor $</span><input {...cjNumField(job, "plabor", () => job.planned.labor, (j, v) => { j.planned.labor = v; })} /></label>
+                  <label className="estf"><span>Man-hours</span><input {...cjNumField(job, "pmh", () => job.planned.mh, (j, v) => { j.planned.mh = v; })} /></label>
+                  <label className="estf"><span>Contract price $</span><input {...cjNumField(job, "pcontract", () => job.planned.contract, (j, v) => { j.planned.contract = v; })} /></label>
+                </div>
+                {/* ESTIMATE VS ACTUAL — the payoff: up to three columns, variance colored, verdict on top */}
+                {(act.total > 0 || bid) && (
+                  <div style={{ marginTop: 10, padding: "9px 11px", background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 10 }}>
+                    <div style={{ fontWeight: 800, fontSize: 12.5 }}>Estimate vs Actual</div>
+                    {(() => { const v = cjVerdict(plan, est, act); return v ? <div style={{ fontSize: 12.5, margin: "3px 0 6px" }}>{v}</div> : null; })()}
+                    <div style={{ display: "grid", gridTemplateColumns: "1.1fr " + cols.map(() => "1fr").join(" "), gap: "3px 6px", fontSize: 12, alignItems: "start" }}>
+                      <span></span>{cols.map((c) => <b key={c.k} style={{ textAlign: "right", fontSize: 11 }}>{c.k}</b>)}
+                      {[["Materials", "mats", (v) => $0(v)], ["Labor", "labor", (v) => $0(v)], ["Man-hours", "mh", (v) => v + " MH"], ["Other costs", "other", (v) => $0(v)], ["Total cost", "total", (v) => $0(v)], ["Margin", "margin", (v) => v + "%"]].map(([lbl, k, fmt]) => (
+                        <React.Fragment key={k}>
+                          <span className="hint">{lbl}</span>
+                          {cols.map((c, i) => { const v = c.v[k]; const isAct = i === cols.length - 1; const show = v != null && (k === "margin" ? true : (v > 0 || (isAct && (k === "total" || (bid && bid[k] > 0))))); return (
+                            <span key={c.k} style={{ textAlign: "right" }}>{show ? fmt(v) : "—"}{isAct && bid && k !== "other" && k !== "margin" && show ? vCell(bid[k], v, k) : null}</span>
+                          ); })}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* COSTS — receipts + manual entries; per-category totals live in the comparison above */}
+                <div className="seclabel" style={{ marginTop: 10 }}>Costs <span className="hint">{(job.costs || []).length} entr{(job.costs || []).length === 1 ? "y" : "ies"}{act.total > 0 ? " · " + $0(act.total) + " total" : ""}</span></div>
+                {job.laborFromHours && act.laborComputed > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
+                    <span style={{ width: 34, textAlign: "center" }}>⚙</span>
+                    <span style={{ flex: 1 }}><b style={{ fontSize: 12.5 }}>Labor — computed from hours</b><span className="hint" style={{ display: "block" }}>{act.mh} MH × {$0(job.burdenRate)}/hr{act.laborEntries > 0 ? " (Labor entries ignored: " + $0(act.laborEntries) + ")" : ""}</span></span>
+                    <b>{$0(act.laborComputed)}</b>
+                  </div>
+                )}
+                {(job.costs || []).map((c) => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
+                    {c.photo ? <img src={c.photo} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} /> : <span style={{ width: 34, textAlign: "center" }}>{c.source === "receipt" ? "🧾" : "✎"}</span>}
+                    <span style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setCjDraft({ jobId: job.id, editId: c.id, vendor: c.vendor || "", date: c.date || today, amount: c.amount, category: c.category, note: c.note || "", source: c.source, confidence: "high", photo: c.photo || null })}>
+                      <b style={{ display: "block", fontSize: 12.5 }}>{c.vendor || c.category}</b>
+                      <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[c.date, c.category, c.note].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <b style={{ whiteSpace: "nowrap" }}>{$0(c.amount)}</b>
+                    <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelCost(job.id, c.id)}>✕</button>
+                  </div>
+                ))}
+                {cjDraft && cjDraft.jobId === job.id && (
+                  <div style={{ border: "1px solid " + (cjDraft.confidence === "low" ? "#F2C98A" : "#DCE8DF"), background: cjDraft.confidence === "low" ? "#FFF7E6" : "#F6F8F7", borderRadius: 10, padding: "8px 10px", margin: "6px 0" }}>
+                    {cjDraft.source === "receipt" && !cjDraft.editId && <div className="hint" style={{ fontWeight: 600, marginBottom: 4 }}>{cjDraft.confidence === "low" ? "⚠️ Hard to read — check everything before saving:" : "Read from the receipt — confirm:"}</div>}
+                    <div className="estfields" style={{ alignItems: "end" }}>
+                      <label className="estf"><span>Amount $</span><input type="number" step="0.01" value={cjDraft.amount || ""} onChange={(e) => setCjDraft({ ...cjDraft, amount: e.target.value })} /></label>
+                      <label className="estf"><span>Category</span><select value={cjDraft.category} onChange={(e) => setCjDraft({ ...cjDraft, category: e.target.value })}>{CJ_CATS.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+                      <label className="estf"><span>Vendor</span><input value={cjDraft.vendor} onChange={(e) => setCjDraft({ ...cjDraft, vendor: e.target.value })} placeholder="ABC Supply" /></label>
+                      <label className="estf"><span>Date</span><input type="date" value={cjDraft.date} onChange={(e) => setCjDraft({ ...cjDraft, date: e.target.value })} /></label>
+                    </div>
+                    <label className="estf" style={{ marginTop: 4 }}><span>Note</span><input value={cjDraft.note} onChange={(e) => setCjDraft({ ...cjDraft, note: e.target.value })} placeholder="what was bought" /></label>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button className="btn primary grow1" onClick={cjSaveDraft}>✓ Save cost</button>
+                      <button className="btn ghost" onClick={() => setCjDraft(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button className="btn ghost grow1" disabled={cjReceiptBusy} onClick={() => cjOpenReceipt(job.id)}>{cjReceiptBusy ? "Reading receipt…" : "🧾 Receipt photo"}</button>
+                  <button className="btn ghost grow1" onClick={() => cjManualEntry(job.id)}>＋ Manual entry</button>
+                </div>
+                {/* MAN-HOURS LOG — the number that calibrates the rate book */}
+                <div className="seclabel" style={{ marginTop: 10 }}>Man-hours log <span className="hint">total {act.mh} MH</span></div>
+                {(job.hoursLog || []).map((h) => (
+                  <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f0f0f0", fontSize: 12.5 }}>
+                    <span style={{ flex: 1 }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}</span>
+                    <b>{h.mh} MH</b>
+                    <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelHours(job.id, h.id)}>✕</button>
+                  </div>
+                ))}
+                {cjHoursDraft && cjHoursDraft.jobId === job.id ? (
+                  <div style={{ marginTop: 4 }}>
+                    <div className="estfields" style={{ alignItems: "end" }}>
+                      <label className="estf"><span>Date</span><input type="date" value={cjHoursDraft.date} onChange={(e) => setCjHoursDraft({ ...cjHoursDraft, date: e.target.value })} /></label>
+                      <label className="estf"><span>Guys</span><input type="number" value={cjHoursDraft.guys} onChange={(e) => setCjHoursDraft({ ...cjHoursDraft, guys: e.target.value })} placeholder="3" /></label>
+                      <label className="estf"><span>Hrs each</span><input type="number" step="0.5" value={cjHoursDraft.hrs} onChange={(e) => setCjHoursDraft({ ...cjHoursDraft, hrs: e.target.value })} placeholder="8" /></label>
+                      <label className="estf"><span>MH <span className="hint">auto or type</span></span><input type="number" step="0.5" value={cjHoursDraft.mh} onChange={(e) => setCjHoursDraft({ ...cjHoursDraft, mh: e.target.value })} placeholder={String((num(cjHoursDraft.guys) || 0) * (num(cjHoursDraft.hrs) || 0) || "")} /></label>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      <button className="btn primary grow1" onClick={cjSaveHours}>✓ Log hours</button>
+                      <button className="btn ghost" onClick={() => setCjHoursDraft(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn ghost full" style={{ marginTop: 4 }} onClick={() => setCjHoursDraft({ jobId: job.id, date: today, guys: "", hrs: "", mh: "" })}>＋ Log hours <span className="hint">e.g. 3 guys × 8 hrs = 24 MH</span></button>
+                )}
+                <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginTop: 6 }}>
+                  <label className="estf" style={{ maxWidth: 150 }}><span>Burdened $/hr</span><input {...cjNumField(job, "burdenRate", () => job.burdenRate, (j, v) => { j.burdenRate = v; })} placeholder={String(cazaCrewRate(job.trade || job.name, "", profC.cazaManual) || 50)} /></label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, paddingBottom: 6 }}>
+                    <input type="checkbox" checked={!!job.laborFromHours} onChange={(e) => cjUpdate(job.id, (j) => { j.laborFromHours = e.target.checked; if (e.target.checked && !(num(j.burdenRate) > 0)) j.burdenRate = cazaCrewRate(j.trade || j.name, "", profC.cazaManual) || 50; })} />
+                    Compute labor $ from hours
+                  </label>
+                </div>
+                {/* ESTIMATE — attached (before or after the fact) or offered */}
+                {rec ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
+                    <span className="hint" style={{ flex: 1, minWidth: 0 }}>📄 {job.afterTheFact ? "After-the-fact estimate" : "Estimate"} attached — {rec.title || ""} · {$0(rec.price || 0)}</span>
+                    <button className="btn ghost" style={{ padding: "3px 10px" }} onClick={() => { openSavedEstimate(rec); goTab("estimator"); }}>Open</button>
+                  </div>
+                ) : (
+                  <button className="btn ghost full" style={{ marginTop: 8 }} onClick={() => cjEstimateJob(job)}>🧮 Estimate this job <span className="hint">what would CazBid have bid?</span></button>
+                )}
+                {/* CLOSE + CALIBRATION — actuals flow into the EXISTING logActuals loop + rate-book blend */}
+                {job.status !== "closed" ? (
+                  <button className="btn primary full" style={{ marginTop: 8 }} onClick={() => cjCloseJob(job)}>✓ Close job{act.total > 0 ? " — lock in " + $0(act.total) + " actual" : ""}</button>
+                ) : (() => {
+                  const sys = ((rec && rec.payload && rec.payload.trades[0] && (rec.payload.trades[0].phaseSys || rec.payload.trades[0].title)) || job.trade || job.name || "").toLowerCase();
+                  const task = (() => {
+                    const kws = /standing.?seam|\blok\b/.test(sys) ? ["standing seam"] : /slate/.test(sys) ? ["slate"] : /shake/.test(sys) ? ["shake"] : /shingle|asphalt|roof/.test(sys) ? ["shingle install", "shingle"] : /vinyl|siding|hardie/.test(sys) ? ["siding install", "vinyl siding", "siding"] : /deck|trex/.test(sys) ? ["decking"] : null;
+                    if (!kws) return null;
+                    for (const r of rateBook) { const t = (r.task || "").toLowerCase(); for (const k of kws) { if (t.indexOf(k) >= 0) return r; } }
+                    return null;
+                  })();
+                  const calibKeyJob = manualTradeKey((job.trade || "") + " " + (job.name || ""), (rec && rec.title) || "") || job.trade || "";
+                  return (
+                    <div style={{ marginTop: 8, padding: "9px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10, fontSize: 12.5 }}>
+                      <div style={{ fontWeight: 800 }}>📈 Calibration</div>
+                      {job.actualPerUnit && <div style={{ marginTop: 3 }}>This job ran <b>{job.actualPerUnit.mhPerUnit} MH/{job.actualPerUnit.unit}</b> on {job.actualPerUnit.qty} {job.actualPerUnit.unit}{job.actualPerUnit.bidPerUnit ? <> — the bid figured <b>{job.actualPerUnit.bidPerUnit} MH/{job.actualPerUnit.unit}</b> all-in</> : null}{task ? <span className="hint"> (rate book task “{task.task}”: {task.rate} MH/{task.unit})</span> : null}.</div>}
+                      {job.actualPerUnit && task && est && est.mh > 0 && act.mh > 0 && (() => {
+                        // scale the task rate by the DAMPED actual/bid ratio (an on-bid job blends to no change) —
+                        // never average whole-job MH/sq into a single-task rate (they're different denominators)
+                        const nr = Math.round(num(task.rate) * ((2 + act.mh / est.mh) / 3) * 100) / 100;
+                        return nr !== num(task.rate) ? (
+                          <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => { saveRateBook(rateBook.map((r) => r.id === task.id ? { ...r, rate: nr } : r)); flash("“" + task.task + "” blended: " + task.rate + " → " + nr + " MH/" + task.unit + "."); }}>⇄ Blend into rate book ({task.rate} → {nr} MH/{task.unit})</button>
+                        ) : <div className="hint" style={{ marginTop: 4 }}>✓ On the bid — no rate-book change needed.</div>;
+                      })()}
+                      {est && est.mh > 0 && act.mh > 0 && calibKeyJob && (
+                        <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => logActuals(calibKeyJob, est.mh, act.mh, job.name)}>📊 Log to labor calibration <span className="hint">bid {est.mh} MH → actual {act.mh} MH ({calibKeyJob})</span></button>
+                      )}
+                      {!job.actualPerUnit && !(est && est.mh > 0) && <div className="hint" style={{ marginTop: 3 }}>Attach an estimate (or log hours before closing) to compare actual rates against the book.</div>}
+                      <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => cjUpdate(job.id, (j) => { j.status = "active"; })}>↩ Reopen job</button>
+                    </div>
+                  );
+                })()}
+              </section>
+            );
+          })()}
           {needsSetup && (
             <section className="card setupbanner">
               <b>Welcome! Set up your profile first</b>
@@ -6784,6 +7163,13 @@ function App() {
           ) : !estResult ? (
             <>
               {/* SAVED ESTIMATES library (build-set #3) */}
+              {/* pending after-the-fact link — visible + cancellable so it can never silently hijack an unrelated estimate */}
+              {cjLinkTarget && (() => { const t = costJobs.find((j) => j.id === cjLinkTarget); return t ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 10, marginBottom: 8, fontSize: 12.5 }}>
+                  <span style={{ flex: 1 }}>🔗 This estimate will attach to <b>{t.name}</b> (after the fact)</span>
+                  <button className="btn ghost" style={{ padding: "2px 9px" }} onClick={() => { setCjLinkTarget(null); flash("Link cancelled — the estimate will create its own job."); }}>✕ cancel</button>
+                </div>
+              ) : null; })()}
               {estimates.length > 0 && (
                 <section className="card">
                   <button className="btn ghost full" style={{ justifyContent: "space-between", display: "flex" }} onClick={() => setSavedOpen((o) => !o)}>
