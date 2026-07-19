@@ -1814,12 +1814,18 @@ function cjTotals(job) {
   const mats = Math.round(sum("Materials"));
   const other = Math.round(CJ_OTHER_CATS.reduce((a, c) => a + sum(c), 0));
   const total = mats + labor + other;
-  const contract = num(job && job.planned && job.planned.contract) || 0;
+  // CHANGE ORDERS — only APPROVED ones touch the math; drafts are parked. Adjusted contract =
+  // base + Σ approved CO prices, and ALL margin math uses the adjusted number (a job with paid
+  // additions must not read as an overrun).
+  const approvedCOs = ((job && job.changeOrders) || []).filter((c) => c.status === "approved");
+  const coPrice = Math.round(approvedCOs.reduce((a, c) => a + (num(c.price) || 0), 0));
+  const baseContract = num(job && job.planned && job.planned.contract) || 0;
+  const contract = baseContract + coPrice;
   // Margin sanity: contract < 25% of cost is almost always a data-entry slip, not a -599% job —
   // suppress the extreme number and let the UI show "check the contract price" instead.
   const marginSuspect = contract > 0 && total > 0 && contract < total * 0.25;
   const margin = contract > 0 && !marginSuspect ? Math.round(((contract - total) / contract) * 100) : null;
-  return { mats, labor, laborEntries, laborComputed, mh, other, total, contract, margin, marginSuspect };
+  return { mats, labor, laborEntries, laborComputed, mh, other, total, contract, baseContract, coPrice, coCount: approvedCOs.length, margin, marginSuspect };
 }
 // ESTIMATE-side values from a saved estStore record's payload (READ-ONLY — the engine is untouched).
 // Total excludes mobilization (job-level, shown on the estimate itself); margin = the bid margin.
@@ -1837,10 +1843,15 @@ function cjEstVals(rec) {
 // PLANNED (My Bid Figures) as comparison values — Dustin's own numbers, independent of any AI estimate.
 function cjPlanVals(job) {
   const p = (job && job.planned) || {};
-  const mats = num(p.mats) || 0, labor = num(p.labor) || 0, mh = num(p.mh) || 0, contract = num(p.contract) || 0;
+  let mats = num(p.mats) || 0, labor = num(p.labor) || 0, mh = num(p.mh) || 0, contract = num(p.contract) || 0;
   if (!mats && !labor && !mh && !contract) return null;
+  // APPROVED change orders grow My Figures: expected costs add to mats/labor/MH (when entered),
+  // CO price adds to the contract. A priced CO with no expected costs grows only the contract —
+  // that's fine, it just reads as pure margin.
+  const approvedCOs = ((job && job.changeOrders) || []).filter((c) => c.status === "approved");
+  approvedCOs.forEach((c) => { mats += num(c.expMaterials) || 0; labor += num(c.expLabor) || 0; mh += num(c.expManHours) || 0; contract += num(c.price) || 0; });
   const total = mats + labor;
-  return { mats, labor, mh, total, contract, margin: contract > 0 && total > 0 ? Math.round(((contract - total) / contract) * 100) : null };
+  return { mats: Math.round(mats), labor: Math.round(labor), mh: Math.round(mh * 10) / 10, total: Math.round(total), contract, withCOs: approvedCOs.length > 0, margin: contract > 0 && total > 0 ? Math.round(((contract - total) / contract) * 100) : null };
 }
 // Variance of actual vs a bid figure: $ and % over/under (positive = OVER the bid = red).
 function cjVar(bid, actual) {
@@ -1859,8 +1870,9 @@ function cjVerdict(plan, est, act) {
   if (hv && Math.abs(hv.d) >= 2) parts.push(Math.abs(hv.d) + " MH " + (hv.d > 0 ? "over" : "under") + " on labor");
   else { const lv = cjVar(bid.labor, act.labor); if (lv && Math.abs(lv.d) >= 100) parts.push("$" + Math.abs(lv.d).toLocaleString() + (lv.d > 0 ? " over" : " under") + " on labor"); }
   let s = parts.length ? ("Came in " + parts.join(", ") + ".") : "Right on the figures.";
-  if (act.margin != null && bid.margin != null) s += " Real margin " + act.margin + "% vs " + bid.margin + "% bid.";
-  else if (act.margin != null) s += " Real margin " + act.margin + "%.";
+  const coPre = (act.coCount > 0) ? ("With " + act.coCount + " approved change order" + (act.coCount === 1 ? "" : "s") + ", real") : "Real";
+  if (act.margin != null && bid.margin != null) s += " " + coPre + " margin " + act.margin + "% vs " + bid.margin + "% bid.";
+  else if (act.margin != null) s += " " + coPre + " margin " + act.margin + "%.";
   return s;
 }
 
@@ -4584,6 +4596,28 @@ function App() {
   // list estimates use), qty × unit price. Price override applies to THIS entry only — never the book.
   const [cjPbPick, setCjPbPick] = useState(null);        // {jobId, q} list stage; + {item, qty, price} once picked
   const [cjEstPick, setCjEstPick] = useState(null);      // {jobId, checked:{}} — copy estimate lines as costs (explicit checkboxes only)
+  // CHANGE ORDERS — mid-job scope changes; only APPROVED ones touch the math (drafts are parked).
+  const [cjCoDraft, setCjCoDraft] = useState(null);      // CO being added/edited {jobId, id?, title, description, price, expMaterials, expLabor, expManHours, photo, status,...}
+  const cjCoPhotoRef = useRef(null);                     // hidden input — condition photo / signed slip
+  const cjSaveCo = () => {
+    const d = cjCoDraft; if (!d) return;
+    if (!String(d.title || "").trim()) { flash("Give the change order a title."); return; }
+    if (!(num(d.price) > 0)) { flash("Enter the price charged for this change."); return; }
+    const entry = { id: d.id || ("cjo" + rid()), date: d.date || new Date().toISOString().slice(0, 10), title: String(d.title).trim(), description: String(d.description || ""), price: Math.round(num(d.price) * 100) / 100, expMaterials: num(d.expMaterials) || 0, expLabor: num(d.expLabor) || 0, expManHours: num(d.expManHours) || 0, status: d.status || "draft", approvedDate: d.approvedDate || null, approvedNote: d.approvedNote || "", photo: d.photo || null };
+    cjUpdate(d.jobId, (j) => { j.changeOrders = d.id ? (j.changeOrders || []).map((c) => (c.id === d.id ? entry : c)) : [entry].concat(j.changeOrders || []); });
+    setCjCoDraft(null); flash("Change order saved" + (entry.status === "draft" ? " (draft — approve it to affect the numbers)." : "."));
+  };
+  const cjDelCo = (jobId, coid) => cjUpdate(jobId, (j) => { j.changeOrders = (j.changeOrders || []).filter((c) => c.id !== coid); });
+  const cjApproveCo = (jobId, coid) => {
+    const note = window.prompt("Approval note (optional) — e.g. “texted OK 7/18”", "");
+    if (note === null) return; // cancelled — stay draft
+    cjUpdate(jobId, (j) => { j.changeOrders = (j.changeOrders || []).map((c) => (c.id === coid ? { ...c, status: "approved", approvedDate: new Date().toISOString().slice(0, 10), approvedNote: String(note).trim() } : c)); });
+  };
+  const onCoPhotoFile = async (file) => {
+    if (!file || !cjCoDraft) return;
+    try { const dataUrl = await imageToJpeg(file, 800, 0.6); setCjCoDraft((d) => (d ? { ...d, photo: dataUrl } : d)); } // 800px — a signed slip must stay legible
+    catch (e) { flash("Couldn't load the photo — " + errMsg(e)); }
+  };
   const cjSavePbEntry = () => {
     const p = cjPbPick; if (!p || !p.item) return;
     const qty = num(p.qty), price = num(p.price);
@@ -6370,7 +6404,7 @@ function App() {
               <p className="hint" style={{ marginTop: -2 }}>Receipts, labor, man-hours — compared against what you figured and what CazBid estimated.</p>
               {costJobs.length === 0 && <p className="hint">No jobs yet. Tap ＋ New Job — or build an estimate; every saved estimate creates its job here automatically.</p>}
               {costJobs.map((j) => { const a = cjTotals(j); return (
-                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjOpen(j.id); }}>
+                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjCoDraft(null); setCjOpen(j.id); }}>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontSize: 13.5 }}>{j.name}{j.status === "closed" ? " · ✓ closed" : ""}</b>
                     <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[j.customerName, j.address, j.estimateId ? (j.afterTheFact ? "estimate (after the fact)" : "estimate ✓") : "no estimate"].filter(Boolean).join(" · ")}</span>
@@ -6388,13 +6422,13 @@ function App() {
             const est = rec ? cjEstVals(rec) : null;
             const plan = cjPlanVals(job);
             const bid = plan || est;
-            const cols = [plan ? { k: "My figures", v: plan } : null, est ? { k: "CazBid est.", v: est } : null, { k: "Actual", v: act }].filter(Boolean);
+            const cols = [plan ? { k: "My figures", note: plan.withCOs ? "incl. COs" : null, v: plan } : null, est ? { k: "CazBid est.", v: est } : null, { k: "Actual", v: act }].filter(Boolean);
             const vCell = (bidV, actV, k) => { const v = cjVar(bidV, actV); if (!v) return null; const mag = Math.abs(v.d).toLocaleString(); return <div style={{ color: v.d > 0 ? "#b3261e" : "#1B7A3D", fontWeight: 600, fontSize: 10.5 }}>{(v.d < 0 ? "-" : "+") + (k === "mh" ? mag + " MH" : "$" + mag)} ({v.pct > 0 ? "+" : ""}{v.pct}%)</div>; };
             const today = new Date().toISOString().slice(0, 10);
             return (
               <section className="card">
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <button className="btn ghost" style={{ padding: "3px 9px" }} onClick={() => { setCjOpen(null); setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); }}>←</button>
+                  <button className="btn ghost" style={{ padding: "3px 9px" }} onClick={() => { setCjOpen(null); setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjCoDraft(null); }}>←</button>
                   <b style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }} onClick={() => { const n = window.prompt("Job name", job.name); if (n && n.trim()) cjUpdate(job.id, (j) => { j.name = n.trim(); }); }}>{job.name} ✏️</b>
                   {job.status === "closed" && <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1B7A3D" }}>✓ closed</span>}
                   <button className="btn ghost" style={{ padding: "3px 8px" }} title="Delete job" onClick={() => cjDelete(job.id)}>🗑</button>
@@ -6417,13 +6451,57 @@ function App() {
                   <label className="estf"><span>Man-hours</span><input {...cjNumField(job, "pmh", () => job.planned.mh, (j, v) => { j.planned.mh = v; })} /></label>
                   <label className="estf"><span>Contract price $</span><input {...cjNumField(job, "pcontract", () => job.planned.contract, (j, v) => { j.planned.contract = v; })} /></label>
                 </div>
+                {/* CHANGE ORDERS — mid-job scope changes; only APPROVED ones touch the math (drafts parked) */}
+                <div className="seclabel" style={{ marginTop: 10 }}>Change orders {act.coCount > 0 && <span className="hint">{act.coCount} approved · +{$0(act.coPrice)}</span>}</div>
+                {(job.changeOrders || []).map((c) => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
+                    {c.photo ? <img src={c.photo} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} /> : <span style={{ width: 34, textAlign: "center" }}>🔀</span>}
+                    <span style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setCjCoDraft({ jobId: job.id, ...c })}>
+                      <b style={{ display: "block", fontSize: 12.5 }}>{c.title}</b>
+                      <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[c.date, c.status === "approved" ? (c.approvedNote || "approved") : null, c.description].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <b style={{ whiteSpace: "nowrap" }}>+{$0(c.price)}</b>
+                    {c.status === "approved"
+                      ? <span style={{ fontSize: 10.5, fontWeight: 700, color: "#1B7A3D", background: "#EAF6EE", borderRadius: 7, padding: "1px 7px" }}>Approved</span>
+                      : <button className="btn ghost" style={{ padding: "2px 8px", fontSize: 11.5 }} onClick={() => cjApproveCo(job.id, c.id)}>Mark approved</button>}
+                    <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => { if (window.confirm("Delete this change order?")) cjDelCo(job.id, c.id); }}>✕</button>
+                  </div>
+                ))}
+                {cjCoDraft && cjCoDraft.jobId === job.id ? (
+                  <div style={{ border: "1px solid #DCE8DF", background: "#F6F8F7", borderRadius: 10, padding: "8px 10px", margin: "6px 0" }}>
+                    <input ref={cjCoPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { onCoPhotoFile(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+                    <label className="estf"><span>Title</span><input value={cjCoDraft.title || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, title: e.target.value })} placeholder="Replace rotted decking" /></label>
+                    <div className="estfields" style={{ alignItems: "end", marginTop: 4 }}>
+                      <label className="estf"><span>Price to customer $</span><input type="number" step="0.01" value={cjCoDraft.price || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, price: e.target.value })} /></label>
+                      <label className="estf"><span>Date</span><input type="date" value={cjCoDraft.date || new Date().toISOString().slice(0, 10)} onChange={(e) => setCjCoDraft({ ...cjCoDraft, date: e.target.value })} /></label>
+                    </div>
+                    <label className="estf" style={{ marginTop: 4 }}><span>Detail <span className="hint">optional</span></span><input value={cjCoDraft.description || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, description: e.target.value })} placeholder={"12 sheets 1/2\" CDX, found on tear-off"} /></label>
+                    <div className="estfields" style={{ alignItems: "end", marginTop: 4 }}>
+                      <label className="estf"><span>Exp. materials $ <span className="hint">opt</span></span><input type="number" value={cjCoDraft.expMaterials || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, expMaterials: e.target.value })} /></label>
+                      <label className="estf"><span>Exp. labor $ <span className="hint">opt</span></span><input type="number" value={cjCoDraft.expLabor || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, expLabor: e.target.value })} /></label>
+                      <label className="estf"><span>Exp. MH <span className="hint">opt</span></span><input type="number" value={cjCoDraft.expManHours || ""} onChange={(e) => setCjCoDraft({ ...cjCoDraft, expManHours: e.target.value })} /></label>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <button className="btn ghost" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => cjCoPhotoRef.current && cjCoPhotoRef.current.click()}>📷 {cjCoDraft.photo ? "Replace photo" : "Photo (condition / signed slip)"}</button>
+                      {cjCoDraft.photo && <img src={cjCoDraft.photo} alt="" style={{ width: 30, height: 30, objectFit: "cover", borderRadius: 6 }} />}
+                      {cjCoDraft.id && cjCoDraft.status === "approved" && <button className="btn ghost" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setCjCoDraft({ ...cjCoDraft, status: "draft", approvedDate: null, approvedNote: "" })}>↩ Revert to draft</button>}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button className="btn primary grow1" onClick={cjSaveCo}>✓ Save change order</button>
+                      <button className="btn ghost" onClick={() => setCjCoDraft(null)}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn ghost full" style={{ marginTop: 4 }} onClick={() => { setCjDraft(null); setCjPbPick(null); setCjEstPick(null); setCjCoDraft({ jobId: job.id, title: "", description: "", price: "", expMaterials: "", expLabor: "", expManHours: "", photo: null, status: "draft" }); }}>＋ Change order <span className="hint">approved COs adjust contract + figures</span></button>
+                )}
                 {/* ESTIMATE VS ACTUAL — the payoff: up to three columns, variance colored, verdict on top */}
                 {(act.total > 0 || bid) && (
                   <div style={{ marginTop: 10, padding: "9px 11px", background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 10 }}>
                     <div style={{ fontWeight: 800, fontSize: 12.5 }}>Estimate vs Actual</div>
                     {(() => { const v = cjVerdict(plan, est, act); return v ? <div style={{ fontSize: 12.5, margin: "3px 0 6px" }}>{v}</div> : null; })()}
+                    {act.coPrice > 0 && <div style={{ fontSize: 12, margin: "0 0 6px" }}>Contract {$0(act.baseContract)} <span style={{ color: "#1B7A3D", fontWeight: 700 }}>(+{$0(act.coPrice)} COs)</span> = <b>{$0(act.contract)}</b></div>}
                     <div style={{ display: "grid", gridTemplateColumns: "1.1fr " + cols.map(() => "1fr").join(" "), gap: "3px 6px", fontSize: 12, alignItems: "start" }}>
-                      <span></span>{cols.map((c) => <b key={c.k} style={{ textAlign: "right", fontSize: 11 }}>{c.k}</b>)}
+                      <span></span>{cols.map((c) => <b key={c.k} style={{ textAlign: "right", fontSize: 11 }}>{c.k}{c.note ? <div className="hint" style={{ fontSize: 9.5, fontWeight: 400 }}>{c.note}</div> : null}</b>)}
                       {[["Materials", "mats", (v) => $0(v)], ["Labor", "labor", (v) => $0(v)], ["Man-hours", "mh", (v) => v + " MH"], ["Other costs", "other", (v) => $0(v)], ["Total cost", "total", (v) => $0(v)], ["Margin", "margin", (v) => v + "%"]].map(([lbl, k, fmt]) => (
                         <React.Fragment key={k}>
                           <span className="hint">{lbl}</span>
