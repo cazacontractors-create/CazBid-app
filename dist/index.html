@@ -3152,7 +3152,9 @@ function flatTierAssembly(dims, membrane, tier, reroof) {
   items.push(sline("Polyiso insulation R-" + tier.isoR + (isoLayers > 1 ? " (2 layers, staggered)" : ""), sqr(sq * isoLayers), "SQ", FLAT_SEED.isoPerR * (tier.isoR / isoLayers)));
   if (tier.coverboard) items.push(sline("Coverboard (1/2in HD)", sqr(sq), "SQ", FLAT_SEED.cover));
   if (tier.attach === "adhered") items.push(sline("Bonding adhesive", up(sq / 3) || 1, "bucket", FLAT_SEED.adhesive));else items.push(sline("Fasteners & plates", up(m.area / 1.6), "ea", FLAT_SEED.fastener));
-  items.push(sline("Seam / cover tape", up(m.area / 100) || 1, "roll", FLAT_SEED.seam));
+  // seam tape follows SEAM LF (area / ~10ft sheet width, 100' rolls) — the old 1-roll-per-SQ
+  // heuristic was ~10x reality on wide-sheet membrane (317 rolls on a 311-SQ job vs ~31 real)
+  items.push(sline("Seam / cover tape", up(m.area / 10 / 100) || 1, "roll", FLAT_SEED.seam));
   if (eaveRake) items.push(sline("Termination bar", up(eaveRake), "LF", FLAT_SEED.term));
   if (eaveRake) items.push(sline("Edge metal / drip / coping", up(eaveRake), "LF", FLAT_SEED.edge));
   if (m.pens) items.push(sline("Pipe boots / drains", m.pens, "ea", FLAT_SEED.pen));
@@ -3392,9 +3394,9 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
     out.push({
       key: "seam",
       name: "Seam / cover tape",
-      qty: up(m.area / 100) || 1,
+      qty: up(m.area / 10 / 100) || 1,
       unit: "roll"
-    });
+    }); // seam LF (10ft sheets) / 100' rolls — not 1/SQ
     if (eaveRake) out.push({
       key: "term",
       name: "Termination bar",
@@ -6672,7 +6674,8 @@ function App() {
         items = reconcileBandPanel(items, whDims, sysStr, mat, 0); // H2: one depth drives both halves
       } else if (q && q.length) {
         if (roofTypeOf(sysStr) !== "shingle") {
-          items = priceRoofTakeoff(q, books, items);
+          // fallback-for-thin-results only: a ratebook-sourced or >=10-line AI takeoff IS the spec
+          if (String(d.laborSource || "").toLowerCase() === "ratebook" || items.length >= 10) items = repriceLlmItems(items, books);else items = priceRoofTakeoff(q, books, items);
         } else {
           const matchers = [{
             key: "panel",
@@ -8584,9 +8587,18 @@ function App() {
       const sysStr = installScope(scope + " " + desc); // F13: classify by the INSTALL system, not the roof being torn off
       items = stripCrossSystem(items, sysStr); // BUG 8 — drop incompatible-system lines (shingle job can't keep metal-panel lines)
       const isRoof = /roof|shingle|standing seam|slate|nu-?lok|metal panel|tpo|epdm|membrane|lok|snap.?lock/.test(sysStr);
+      // ENGINE REBUILDS ARE FALLBACKS FOR THIN AI RESULTS — never post-processors of a full,
+      // ratebook-sourced takeoff. The $120K SA-EPDM underbid: 20 spec-correct lines + 1,518
+      // ratebook MH (coverboard, fasteners, primer, 1,068 LF coping) replaced by a 7-line
+      // per-square assembly at 1,168 MH. A ratebook laborSource or a >=10-line itemized list
+      // IS the spec — keep it and run the price-only pass instead.
+      const __substantialLLM = String(d.laborSource || "").toLowerCase() === "ratebook" || Array.isArray(d.items) && d.items.length >= 10;
       // COMMERCIAL FLAT (TPO/EPDM): engine builds 3 good/better/best assemblies (membrane mil +
       // attachment + insulation R + NDL warranty). Bypasses the generic LLM takeoff/options/labor.
-      const __flatTiers = isRoof && !d.deterministic && roofTypeOf(sysStr) === "flat" ? flatTierAssemblies(dims, sysStr, desc) : null;
+      // SCALE GATE: per-square assembly pricing is a residential-scale shortcut — block it above
+      // ~30 SQ or when a parapet is in play (commercial detail the assembly can't carry).
+      const __bigFlat = parseMeas(dims).area / 100 > 30 || /parapet/i.test(String(dims || "") + " " + String(desc || ""));
+      const __flatTiers = isRoof && !d.deterministic && !__substantialLLM && !__bigFlat && roofTypeOf(sysStr) === "flat" ? flatTierAssemblies(dims, sysStr, desc) : null;
       let __flatDef = null;
       if (__flatTiers && __flatTiers.tiers.length) {
         __flatDef = __flatTiers.tiers.find(x => x.tier === FLAT_DEFAULT_TIER) || __flatTiers.tiers[Math.min(1, __flatTiers.tiers.length - 1)];
@@ -8633,19 +8645,26 @@ function App() {
           items = reconcileBandPanel(items, dims, sysStr, desc, num(panelW)); // H2: one depth drives both halves
         } else if (q && q.length) {
           if (roofTypeOf(sysStr) !== "shingle") {
-            // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
-            // price it from the cost book (the LLM under-itemizes these → the $295 bug).
-            items = priceRoofTakeoff(q, books, items).map(it => ({
-              name: it.name,
-              qty: it.qty,
-              unit: it.unit,
-              unitPrice: it.unitPrice,
-              cost: it.cost,
-              unpriced: it.unpriced,
-              priceTier: null,
-              matchType: null,
-              priceNote: it.priceNote || ""
-            }));
+            if (__substantialLLM) {
+              // A full ratebook-sourced takeoff is the SPEC — keep its lines/quantities and
+              // price-only against the book (the rebuild below is only for thin, under-itemized
+              // results — the "$295 bug" — not a post-processor for complete ones).
+              items = repriceLlmItems(items, books);
+            } else {
+              // NON-shingle (metal/flat/tile): build the complete deterministic takeoff and
+              // price it from the cost book (the LLM under-itemizes these → the $295 bug).
+              items = priceRoofTakeoff(q, books, items).map(it => ({
+                name: it.name,
+                qty: it.qty,
+                unit: it.unit,
+                unitPrice: it.unitPrice,
+                cost: it.cost,
+                unpriced: it.unpriced,
+                priceTier: null,
+                matchType: null,
+                priceNote: it.priceNote || ""
+              }));
+            }
           } else {
             const matchers = [{
               key: "panel",
@@ -8876,7 +8895,7 @@ function App() {
         membrane: __flatTiers ? __flatTiers.membrane : null,
         cazaDeviations: __flatTiers ? [] : __rateFloored ? cazaDeviationsFinal.filter(dv => dv.kind !== "labor") : cazaDeviationsFinal,
         // flat tiers own the takeoff; a floored rate is already conformed to Caza's — drop the redundant labor flag; cazaDeviationsFinal drops phantom "missing" flags for lines that exist
-        offManual: __flatTiers ? false : __offManual,
+        offManual: __offManual,
         offManualKey: (scope || desc || "").toLowerCase().trim().slice(0, 48),
         assumptions: assumptions,
         questions: questions,
@@ -8898,7 +8917,9 @@ function App() {
         crew: crewN,
         days: daysFinal,
         notes: String(d.notes || ""),
-        checks: Array.isArray(d.checks) ? d.checks.map(c => String(c)).filter(Boolean).slice(0, 6) : [],
+        // when the flat-tier engine replaced the items, the AI's checks describe a system that no
+        // longer exists in items[] — regenerate them, never ship engine items with foreign checks.
+        checks: __flatTiers ? ["Tier-priced by the flat-roof engine (thin AI takeoff) — AI checks/assumptions were regenerated, not carried over"] : Array.isArray(d.checks) ? d.checks.map(c => String(c)).filter(Boolean).slice(0, 6) : [],
         manualLoaded: __manualLoaded,
         manualKey: __manualKey,
         aiBuilt: !!(aiTrade && aiTrade.trade === scope),
@@ -8916,6 +8937,11 @@ function App() {
             }))) : __walk;
             const checkTrace = !d.deterministic && !__flatTiers && !(isRoof && !roofIsMixed(sysStr) && roofTypeOf(sysStr) !== "shingle");
             const wf = d.deterministic ? [] : walkCoherence(w, items, __rawNames, isRoof, checkTrace);
+            // SHRINK ALARM: an engine pass that cut materials below HALF the AI's total is exactly
+            // how the $120K flat-tier underbid was caught by hand — flag it automatically now.
+            const __rawMats = (Array.isArray(d.items) ? d.items : []).reduce((a, it) => a + (num(it.cost) || 0), 0);
+            const __finMats = items.reduce((a, it) => a + (num(it.cost) || 0), 0);
+            if (!d.deterministic && __rawMats > 0 && __finMats < __rawMats * 0.5) wf.push("engine pass cut materials from " + $0(__rawMats) + " to " + $0(__finMats) + " — review against the AI takeoff (the diagnostic bundle carries both)");
             return {
               assemblyWalk: w,
               walkFlags: wf
