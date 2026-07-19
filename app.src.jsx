@@ -1815,8 +1815,11 @@ function cjTotals(job) {
   const other = Math.round(CJ_OTHER_CATS.reduce((a, c) => a + sum(c), 0));
   const total = mats + labor + other;
   const contract = num(job && job.planned && job.planned.contract) || 0;
-  const margin = contract > 0 ? Math.round(((contract - total) / contract) * 100) : null;
-  return { mats, labor, laborEntries, laborComputed, mh, other, total, contract, margin };
+  // Margin sanity: contract < 25% of cost is almost always a data-entry slip, not a -599% job —
+  // suppress the extreme number and let the UI show "check the contract price" instead.
+  const marginSuspect = contract > 0 && total > 0 && contract < total * 0.25;
+  const margin = contract > 0 && !marginSuspect ? Math.round(((contract - total) / contract) * 100) : null;
+  return { mats, labor, laborEntries, laborComputed, mh, other, total, contract, margin, marginSuspect };
 }
 // ESTIMATE-side values from a saved estStore record's payload (READ-ONLY — the engine is untouched).
 // Total excludes mobilization (job-level, shown on the estimate itself); margin = the bid margin.
@@ -4577,6 +4580,27 @@ function App() {
     setCjDraft(null); flash("Cost saved.");
   };
   const cjDelCost = (jobId, cid) => cjUpdate(jobId, (j) => { j.costs = (j.costs || []).filter((c) => c.id !== cid); });
+  // FROM PRICE BOOK — third intake: pick a material from the merged book (the same enginePB-first
+  // list estimates use), qty × unit price. Price override applies to THIS entry only — never the book.
+  const [cjPbPick, setCjPbPick] = useState(null);        // {jobId, q} list stage; + {item, qty, price} once picked
+  const [cjEstPick, setCjEstPick] = useState(null);      // {jobId, checked:{}} — copy estimate lines as costs (explicit checkboxes only)
+  const cjSavePbEntry = () => {
+    const p = cjPbPick; if (!p || !p.item) return;
+    const qty = num(p.qty), price = num(p.price);
+    if (!(qty > 0) || !(price > 0)) { flash("Enter the quantity" + (price > 0 ? "." : " and unit price.")); return; }
+    const amount = Math.round(qty * price * 100) / 100;
+    cjUpdate(p.jobId, (j) => { j.costs = [{ id: "cjc" + rid(), date: new Date().toISOString().slice(0, 10), vendor: "", amount: amount, category: "Materials", note: qty + " " + (p.item.unit || "x") + " × " + p.item.name + " @ $" + price + (p.item.unit ? "/" + p.item.unit : ""), source: "pricebook", photo: null }].concat(j.costs || []); });
+    flash("Cost saved — " + $0(amount) + ".");
+    setCjPbPick({ jobId: p.jobId, q: p.q || "" }); // back to the list: several items in one session = one entry per item
+  };
+  const cjSaveEstPick = (job, rec) => {
+    const picked = [];
+    ((rec && rec.payload && rec.payload.trades) || []).forEach((t, ti) => (t.items || []).forEach((it, ii) => { if (cjEstPick && cjEstPick.checked[ti + ":" + ii] && num(it.cost) > 0) picked.push(it); }));
+    if (!picked.length) { flash("Check at least one line."); return; }
+    const today = new Date().toISOString().slice(0, 10);
+    cjUpdate(job.id, (j) => { j.costs = picked.map((it) => ({ id: "cjc" + rid(), date: today, vendor: "", amount: Math.round(num(it.cost)), category: "Materials", note: (num(it.qty) || "") + " " + (it.unit || "") + " × " + it.name + " (from estimate — adjust to actual)", source: "estimate", photo: null })).concat(j.costs || []); });
+    setCjEstPick(null); flash(picked.length + " line" + (picked.length === 1 ? "" : "s") + " copied — adjust them to actuals.");
+  };
   const cjSaveHours = () => {
     const h = cjHoursDraft; if (!h) return;
     const mh = num(h.mh) > 0 ? num(h.mh) : (num(h.guys) || 0) * (num(h.hrs) || 0);
@@ -6346,7 +6370,7 @@ function App() {
               <p className="hint" style={{ marginTop: -2 }}>Receipts, labor, man-hours — compared against what you figured and what CazBid estimated.</p>
               {costJobs.length === 0 && <p className="hint">No jobs yet. Tap ＋ New Job — or build an estimate; every saved estimate creates its job here automatically.</p>}
               {costJobs.map((j) => { const a = cjTotals(j); return (
-                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjOpen(j.id); }}>
+                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjOpen(j.id); }}>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontSize: 13.5 }}>{j.name}{j.status === "closed" ? " · ✓ closed" : ""}</b>
                     <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[j.customerName, j.address, j.estimateId ? (j.afterTheFact ? "estimate (after the fact)" : "estimate ✓") : "no estimate"].filter(Boolean).join(" · ")}</span>
@@ -6370,7 +6394,7 @@ function App() {
             return (
               <section className="card">
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <button className="btn ghost" style={{ padding: "3px 9px" }} onClick={() => { setCjOpen(null); setCjDraft(null); setCjHoursDraft(null); }}>←</button>
+                  <button className="btn ghost" style={{ padding: "3px 9px" }} onClick={() => { setCjOpen(null); setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); }}>←</button>
                   <b style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }} onClick={() => { const n = window.prompt("Job name", job.name); if (n && n.trim()) cjUpdate(job.id, (j) => { j.name = n.trim(); }); }}>{job.name} ✏️</b>
                   {job.status === "closed" && <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1B7A3D" }}>✓ closed</span>}
                   <button className="btn ghost" style={{ padding: "3px 8px" }} title="Delete job" onClick={() => cjDelete(job.id)}>🗑</button>
@@ -6409,6 +6433,7 @@ function App() {
                         </React.Fragment>
                       ))}
                     </div>
+                    {act.marginSuspect && <div style={{ fontSize: 12, color: "#8A5A12", fontWeight: 600, marginTop: 5 }}>⚠️ Margin looks off — check the contract price ({$0(act.contract)} contract vs {$0(act.total)} cost).</div>}
                   </div>
                 )}
                 {/* COSTS — receipts + manual entries; per-category totals live in the comparison above */}
@@ -6447,10 +6472,73 @@ function App() {
                     </div>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                  <button className="btn ghost grow1" disabled={cjReceiptBusy} onClick={() => cjOpenReceipt(job.id)}>{cjReceiptBusy ? "Reading receipt…" : "🧾 Receipt photo"}</button>
-                  <button className="btn ghost grow1" onClick={() => cjManualEntry(job.id)}>＋ Manual entry</button>
+                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  <button className="btn ghost grow1" disabled={cjReceiptBusy} onClick={() => { setCjPbPick(null); setCjEstPick(null); cjOpenReceipt(job.id); }}>{cjReceiptBusy ? "Reading receipt…" : "🧾 Receipt photo"}</button>
+                  <button className="btn ghost grow1" onClick={() => { setCjPbPick(null); setCjEstPick(null); cjManualEntry(job.id); }}>＋ Manual entry</button>
+                  <button className="btn ghost grow1" onClick={() => { setCjDraft(null); setCjEstPick(null); setCjPbPick({ jobId: job.id, q: "" }); }}>📗 From price book</button>
+                  {rec && <button className="btn ghost grow1" onClick={() => { setCjDraft(null); setCjPbPick(null); setCjEstPick({ jobId: job.id, checked: {} }); }}>📄 From estimate</button>}
                 </div>
+                {/* FROM PRICE BOOK — search the merged book, qty × price (override = this entry only, never the book) */}
+                {cjPbPick && cjPbPick.jobId === job.id && (
+                  <div style={{ border: "1px solid #DCE8DF", background: "#F6F8F7", borderRadius: 10, padding: "8px 10px", margin: "6px 0" }}>
+                    {!cjPbPick.item ? (
+                      <div>
+                        <input className="in" value={cjPbPick.q || ""} onChange={(e) => setCjPbPick({ ...cjPbPick, q: e.target.value })} placeholder="🔍 Search your price book… (e.g. hdz)" />
+                        {(() => {
+                          const book = contractorPriceBook();
+                          if (!book.length) return <p className="hint" style={{ marginTop: 6 }}>Your price book is empty — add prices in Profile → Pricing.</p>;
+                          const q = (cjPbPick.q || "").trim().toLowerCase();
+                          const rows = (q ? book.filter((b) => b.name.toLowerCase().includes(q)) : book).slice(0, 30);
+                          return (
+                            <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 6 }}>
+                              {rows.map((b, i) => (
+                                <button type="button" key={i} style={{ display: "flex", width: "100%", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #eceeed", padding: "6px 2px", cursor: "pointer", textAlign: "left", fontSize: 12.5 }} onClick={() => setCjPbPick({ ...cjPbPick, item: b, qty: "", price: b.cost })}>
+                                  <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.name}</span>
+                                  <b style={{ whiteSpace: "nowrap" }}>{$0(b.cost)}{b.unit ? <span className="hint">/{b.unit}</span> : null}</b>
+                                </button>
+                              ))}
+                              {rows.length === 0 && <p className="hint">No match for “{cjPbPick.q}”.</p>}
+                            </div>
+                          );
+                        })()}
+                        <button className="btn ghost full" style={{ marginTop: 6, padding: "3px 8px", fontSize: 12 }} onClick={() => setCjPbPick(null)}>▴ Close</button>
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 12.5 }}>{cjPbPick.item.name}</div>
+                        <div className="estfields" style={{ alignItems: "end", marginTop: 4 }}>
+                          <label className="estf"><span>Qty{cjPbPick.item.unit ? " (" + cjPbPick.item.unit + ")" : ""}</span><input type="number" step="0.1" value={cjPbPick.qty} onChange={(e) => setCjPbPick({ ...cjPbPick, qty: e.target.value })} /></label>
+                          <label className="estf"><span>$/{cjPbPick.item.unit || "unit"} <span className="hint">this entry only</span></span><input type="number" step="0.01" value={cjPbPick.price} onChange={(e) => setCjPbPick({ ...cjPbPick, price: e.target.value })} /></label>
+                        </div>
+                        <div style={{ fontWeight: 800, fontSize: 13.5, margin: "4px 0" }}>= {$0((num(cjPbPick.qty) || 0) * (num(cjPbPick.price) || 0))}</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn primary grow1" onClick={cjSavePbEntry}>✓ Save cost</button>
+                          <button className="btn ghost" onClick={() => setCjPbPick({ jobId: job.id, q: cjPbPick.q || "" })}>← Back</button>
+                          <button className="btn ghost" onClick={() => setCjPbPick(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* FROM ESTIMATE TAKEOFF — explicit checkboxes only; never auto-copied into actuals */}
+                {cjEstPick && cjEstPick.jobId === job.id && rec && rec.payload && (
+                  <div style={{ border: "1px solid #DCE8DF", background: "#F6F8F7", borderRadius: 10, padding: "8px 10px", margin: "6px 0" }}>
+                    <div className="hint" style={{ fontWeight: 600 }}>Check estimate lines to copy as cost entries — then adjust each to what you actually paid:</div>
+                    <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 4 }}>
+                      {(rec.payload.trades || []).map((t, ti) => (t.items || []).map((it, ii) => { const k = ti + ":" + ii; return (
+                        <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", fontSize: 12.5, cursor: "pointer" }}>
+                          <input type="checkbox" checked={!!cjEstPick.checked[k]} onChange={(e) => setCjEstPick({ ...cjEstPick, checked: { ...cjEstPick.checked, [k]: e.target.checked } })} />
+                          <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name} <span className="hint">{it.qty} {it.unit}</span></span>
+                          <b>{$0(it.cost)}</b>
+                        </label>
+                      ); }))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button className="btn primary grow1" onClick={() => cjSaveEstPick(job, rec)}>✓ Copy {Object.values(cjEstPick.checked).filter(Boolean).length} checked</button>
+                      <button className="btn ghost" onClick={() => setCjEstPick(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
                 {/* MAN-HOURS LOG — the number that calibrates the rate book */}
                 <div className="seclabel" style={{ marginTop: 10 }}>Man-hours log <span className="hint">total {act.mh} MH</span></div>
                 {(job.hoursLog || []).map((h) => (
