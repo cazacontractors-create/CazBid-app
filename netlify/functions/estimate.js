@@ -116,7 +116,15 @@ exports.handler = async function (event) {
   }
 
   // NEW: load the relevant trade manual as a system prompt (if we have one)
-  const sys = buildSystemPrompt(trade);
+  let sys = buildSystemPrompt(trade);
+  const manualLoaded = !!sys; // captured BEFORE standing rules append — rules alone must not report a loaded manual
+  // STANDING RULES — contractor-authored, newer than the manual by definition; they override it.
+  const srs = Array.isArray(body.standingRules) ? body.standingRules.map((r) => String(r || "").slice(0, 400)).filter(Boolean).slice(0, 40) : [];
+  if (srs.length) {
+    const block = "\n\nCAZA STANDING RULES — added by the contractor AFTER this manual was written. These are current requirements and OVERRIDE the manual and your general knowledge where they conflict:\n" + srs.map((r) => "- " + r).join("\n");
+    sys = (sys || "You are AL, the estimator for Caza Contractors.") + block;
+  }
+
 
   // DETERMINISTIC TRADE PATH: any trade with a spec in tradeEngine.SPECS gets the
   // extract -> JS-compute -> prose flow. (Two Opus calls — best run via
@@ -171,7 +179,7 @@ exports.handler = async function (event) {
       });
     }
     // include which manual was used, for transparency/debugging (browser can ignore)
-    return { statusCode: 200, headers, body: JSON.stringify({ text: text, manualUsed: sys ? trade : null }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ text: text, manualUsed: manualLoaded ? trade : null }) };
   } catch (e) {
     return { statusCode: 500, headers, body: JSON.stringify({ error: "Request failed: " + (e.message || String(e)) }) };
   }

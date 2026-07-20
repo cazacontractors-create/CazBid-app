@@ -118,7 +118,15 @@ exports.handler = async function (event) {
     messages = [{ role: "user", content: prompt }];
   }
 
-  const sys = buildSystemPrompt(trade);
+  let sys = buildSystemPrompt(trade);
+  const manualLoaded = !!sys; // captured BEFORE standing rules append — rules alone must not report a loaded manual
+  // STANDING RULES — contractor-authored, newer than the manual by definition; they override it.
+  const srs = Array.isArray(body.standingRules) ? body.standingRules.map((r) => String(r || "").slice(0, 400)).filter(Boolean).slice(0, 40) : [];
+  if (srs.length) {
+    const block = "\n\nCAZA STANDING RULES — added by the contractor AFTER this manual was written. These are current requirements and OVERRIDE the manual and your general knowledge where they conflict:\n" + srs.map((r) => "- " + r).join("\n");
+    sys = (sys || "You are AL, the estimator for Caza Contractors.") + block;
+  }
+
 
   // DETERMINISTIC TRADE PATH: any trade with a spec in tradeEngine.SPECS gets the
   // extract -> JS-compute -> prose flow. On any failure we fall through to the
@@ -158,7 +166,7 @@ exports.handler = async function (event) {
     if (Array.isArray(data.content)) {
       data.content.forEach(function (block) { if (block && block.type === "text" && block.text) text += block.text; });
     }
-    await writeResult(store, jobId, { status: "done", text: text, manualUsed: sys ? trade : null, engine: tradeErr ? "llm-fallback" : undefined, tradeError: tradeErr || undefined });
+    await writeResult(store, jobId, { status: "done", text: text, manualUsed: manualLoaded ? trade : null, engine: tradeErr ? "llm-fallback" : undefined, tradeError: tradeErr || undefined });
   } catch (e) {
     await writeResult(store, jobId, { status: "error", error: "Request failed: " + (e.message || String(e)) });
   }
