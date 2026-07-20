@@ -68,6 +68,11 @@ const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price boo
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
+const STANDING_RULES_KEY = "cazbid-standing-rules-v1"; // STANDING RULES ("Tell AL") — contractor-authored knowledge injected into every estimate; rules > manual > model
+const RULES_CHAR_BUDGET = 5000;
+// Rule scopes must be keys manualTradeKey can PRODUCE — a rule scoped to a key that never routes
+// (trim/drywall/other) would be accepted but never injected. Drywall/trim jobs route to "interior".
+const SR_SCOPES = ["roofing", "siding", "framing", "concrete", "decks", "insulation", "interior", "flooring", "cabinetry", "electrical", "hvac", "plumbing"]; // cap on total ACTIVE rule text — near it, merge/retire, never silently truncate
 const COSTJOBS_KEY = "cazbid-costjobs-v1"; // JOB COST TRACKING — contractor jobs independent of estimates (actuals: receipts + hours)
 const CJ_DISMISSED_KEY = "cazbid-costjobs-dismissed-v1"; // estimate ids whose auto-created cost job was deliberately deleted (tombstones — never resurrect)
 const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
@@ -251,6 +256,11 @@ function colorLineFor(tradeKey, mat) {
 }
 const SEED_PRICES = [
   { id: "pb_acm_aluminum_roll_valley_flashing", cat: "Sloped roof", name: "ACM Aluminum Roll Valley Flashing", unit: "roll", price: 56.5 },
+  { id: "pb_rms_kynar_sheet_24g", cat: "Flat / low slope", name: "24G Fabral Kynar 4x10 Sheet — custom fab included (Roof Metals Supply)", unit: "sheet", price: 155.5 },
+  { id: "pb_rms_cap_95", cat: "Flat / low slope", name: "24G Kynar Custom Cap Metal 9.5in cut, 10ft pcs (Roof Metals Supply)", unit: "LF", price: 3.11 },
+  { id: "pb_rms_locker", cat: "Flat / low slope", name: "24G Galvanized Continuous Locker 10ft (Roof Metals Supply)", unit: "LF", price: 1.79 },
+  { id: "pb_rms_underplate", cat: "Flat / low slope", name: "Underplate — cap seam (Roof Metals Supply)", unit: "ea", price: 4.75 },
+  { id: "pb_membrane_pipe_boot", cat: "Flat / low slope", name: "Pre-molded Membrane Pipe Boot (QuickSeam EPDM / weldable TPO)", unit: "ea", price: 34.0 },
   { id: "pb_american_flash_kickout_with_j_chan", cat: "Sloped roof", name: "American Flash Kickout with J-Channel", unit: "ea", price: 16.0 },
   { id: "pb_atlas_roofing_pinnacle_pristine_ar", cat: "Sloped roof", name: "Atlas Roofing Pinnacle Pristine Architectural Shingles", unit: "sq", price: 127.99 },
   { id: "pb_atlas_roofing_pro_cut_hp42_starter", cat: "Sloped roof", name: "Atlas Roofing Pro-Cut HP42 Starter Shingles", unit: "bndl", price: 77.2 },
@@ -874,6 +884,8 @@ function bestBookRowByName(name, books, lineKey, jobShingle) {
     const c = Number(b && b.cost);
     if (!(c > 0)) continue;
     if (guard) { const rp = roofPartType(b.name); if (rp && STRICT_PARTS[rp] && rp !== expected) continue; } // C.5: skip cross-product rows
+    // membrane boots: a flat/membrane line must never price off a shingle-style boot SKU
+    if (/membrane|epdm|\btpo\b|\bpvc\b/i.test(String(name)) && /lifetime|ult\s*pipe|pipe\s*flash\s*#?\s*300/i.test(String(b.name || ""))) continue;
     if (jobShingle && looksSteelSystem(b.name)) continue; // F6: no steel-system SKU on a shingle job
     const bt = toks(b.name);
     if (!bt.length) continue;
@@ -984,10 +996,13 @@ function repriceLlmItems(items, books) {
 // (mechanically fastened vs fully adhered), insulation R-value, and NDL warranty term.
 // Seed $/unit costs are placeholders (flagged ⚠️ in the takeoff) — the contractor tunes
 // them; the TIER DELTAS (mil/R/coverboard/attachment) drive the good/better/best spread.
+// NY ENERGY CODE (locked): flat-roof insulation default = TWO staggered layers of 3in polyiso
+// (~R-34 total) on any tear-off-to-deck — NEVER a single layer. All tiers carry it; they
+// differentiate on membrane mil / attachment / coverboard / NDL term.
 const FLAT_TIERS = [
-  { tier: "Good",   mil: 45, attach: "mech",    attachLabel: "Mechanically fastened", isoR: 20, coverboard: false, ndl: 15 },
-  { tier: "Better", mil: 60, attach: "adhered", attachLabel: "Fully adhered",         isoR: 25, coverboard: false, ndl: 20 },
-  { tier: "Best",   mil: 80, attach: "adhered", attachLabel: "Fully adhered",         isoR: 30, coverboard: true,  ndl: 30 },
+  { tier: "Good",   mil: 45, attach: "mech",    attachLabel: "Mechanically fastened", isoR: 34, coverboard: false, ndl: 15 },
+  { tier: "Better", mil: 60, attach: "adhered", attachLabel: "Fully adhered",         isoR: 34, coverboard: false, ndl: 20 },
+  { tier: "Best",   mil: 80, attach: "adhered", attachLabel: "Fully adhered",         isoR: 34, coverboard: true,  ndl: 30 },
 ];
 const FLAT_DEFAULT_TIER = "Better"; // middle tier = the one shown in the editable takeoff + MOST POPULAR
 const FLAT_SEED = {
@@ -996,12 +1011,50 @@ const FLAT_SEED = {
   isoPerR: 4.6,   // $/SQ per R-point (polyiso)
   cover: 46,      // $/SQ HD coverboard
   adhesive: 145,  // $/bucket (~3 SQ bonded)
-  fastener: 0.12, // $/ea (membrane + plate)
+  fastener: 0.12, // $/ea iso fastener + plate (short); long screws priced up in-line
+  hdSeamFast: 0.85, // $/ea heavy-duty seam fastener + plate (mech-attached membrane seams)
   seam: 82,       // $/roll seam tape
   term: 2.6,      // $/LF termination bar
-  edge: 6.2,      // $/LF edge metal / coping
-  pen: 38,        // $/ea boot / drain
+  lockerLF: 1.79, // $/LF galvanized 24ga continuous locker (invoice #1851, Roof Metals Supply)
+  underplate: 4.75, // $/ea underplate — one at every 10ft cap seam (invoice #1851)
+  memBoot: 34,    // $/ea pre-molded membrane pipe boot (QuickSeam / weldable TPO)
+  pen: 38,        // $/ea boot / drain (legacy generic)
 };
+// CUSTOM METAL FAB priced by 4x10 SHEET YIELD (how the supplier actually prices — a STEP
+// function, don't smooth it): piecesPerSheet = floor(48 / cutWidthIn) (cut width = inches of
+// FLAT STOCK consumed incl. hems/kicks, not the finished face); LF/sheet = pieces x 10;
+// $/LF = sheetRate / LFperSheet. Calibration: invoice #1851 (Roof Metals Supply, 06/2026,
+// 24-ga Fabral Kynar) — 9.5in cut @ $3.11/LF → 5/sheet → 50 LF/sheet → sheetRate $155.50.
+const SHEET_RATE_24_KYNAR = 155.5;
+function sheetYield(cutWidthIn, sheetRate) {
+  const cw = Number(cutWidthIn) || 0, rate = Number(sheetRate) > 0 ? Number(sheetRate) : SHEET_RATE_24_KYNAR;
+  if (!(cw > 0) || cw > 48) return null;
+  const pieces = Math.floor(48 / cw);
+  if (!(pieces > 0)) return null;
+  const lfPerSheet = pieces * 10;
+  return { pieces, lfPerSheet, perLF: Math.round((rate / lfPerSheet) * 100) / 100 };
+}
+// Deck type from the job text — drives iso-fastener LENGTH and family on flat jobs.
+function deckTypeOf(s) {
+  const t = String(s || "").toLowerCase();
+  if (/steel deck|metal deck|\bb-?deck\b|fluted/.test(t)) return "steel";
+  if (/wood deck|plank|plywood|osb|wood fiber/.test(t)) return "wood";
+  if (/concrete deck|structural concrete/.test(t)) return "concrete";
+  if (/gypsum|tectum|lightweight fill/.test(t)) return "gypsum";
+  return "";
+}
+// Iso fastener length: thread must reach >=1in PAST the deck bottom, rounded UP to stocked
+// lengths. Steel (22-20ga): stack + ~1in past the flute. Wood: stack + deck (~3/4in) + 1in.
+// Concrete/gypsum: different fastener family entirely — never standard HD screws.
+const FASTENER_STOCK = [3, 4, 5, 6, 7, 8, 10, 12];
+function isoFastenerLength(stackIn, deck) {
+  if (!(stackIn > 0)) return null;
+  if (deck === "concrete") return { special: "structural concrete — masonry anchors / adhesive-set, price manually" };
+  if (deck === "gypsum") return { special: "gypsum/tectum deck — specialty toggle fasteners, price manually" };
+  const need = stackIn + (deck === "wood" ? 1.75 : 1);
+  const len = FASTENER_STOCK.find((L) => L >= need) || FASTENER_STOCK[FASTENER_STOCK.length - 1];
+  return { need: Math.round(need * 10) / 10, len };
+}
 function flatMembraneOf(sys) { return /\bepdm\b|rubber/.test((sys || "").toLowerCase()) ? "EPDM" : "TPO"; }
 function flatMilFor(membrane, mil) { return (membrane === "EPDM" && mil === 80) ? 90 : mil; } // EPDM's premium is 90mil, not 80
 function flatIsoLayers(r) { return r >= 28 ? 2 : 1; }
@@ -1016,28 +1069,47 @@ function flatLaborHours(sq, membrane, tier, reroof) {
   if (reroof) mh += sq * 1.5;                 // tear-off (one layer)
   return Math.max(1, Math.round(mh));
 }
-function flatTierAssembly(dims, membrane, tier, reroof) {
+function flatTierAssembly(dims, membrane, tier, reroof, ctx) {
   const m = parseMeas(dims);
   if (!m.area) return null;
   const up = Math.ceil, sqr = (n) => Math.round(n * 10) / 10;
   const sq = m.area / 100;
   const eaveRake = (m.eaves + m.rakes) || (m.drip || 0);
   const mil = flatMilFor(membrane, tier.mil);
-  const isoLayers = flatIsoLayers(tier.isoR);
+  const isoLayers = flatIsoLayers(tier.isoR); // R-34 -> 2 (NY code: 2 x 3in staggered)
   const seed = FLAT_SEED[membrane.toLowerCase()] || FLAT_SEED.tpo;
-  const sline = (name, qty, unit, unitPrice) => ({ name, qty, unit, unitPrice: Math.round(unitPrice * 100) / 100, cost: Math.round(unitPrice * qty), placeholder: true, priceTier: "seed", unpriced: false, matchType: null });
+  const sline = (name, qty, unit, unitPrice, extra) => Object.assign({ name, qty, unit, unitPrice: Math.round(unitPrice * 100) / 100, cost: Math.round(unitPrice * qty), placeholder: true, priceTier: "seed", unpriced: false, matchType: null }, extra || {});
   const items = [];
   items.push(sline(mil + "mil " + membrane + " membrane (" + tier.attachLabel.toLowerCase() + ")", sqr(sq * 1.10), "SQ", seed[mil] || (membrane === "EPDM" ? 74 : 62)));
-  items.push(sline("Polyiso insulation R-" + tier.isoR + (isoLayers > 1 ? " (2 layers, staggered)" : ""), sqr(sq * isoLayers), "SQ", FLAT_SEED.isoPerR * (tier.isoR / isoLayers)));
+  // NY code: 2 x 3in staggered polyiso, priced AS 3in board (never thickness built from 1in
+  // sheet counts). ~area/32 boards per layer +5% waste rides in the note for ordering.
+  items.push(sline("Polyiso insulation 3in x 2 staggered layers (R-" + tier.isoR + ", NY code)", sqr(sq * isoLayers), "SQ", FLAT_SEED.isoPerR * (tier.isoR / isoLayers), { priceNote: up((m.area / 32) * 1.05) + " boards/layer (4x8, +5% waste) x " + isoLayers + " layers — joints staggered" }));
   if (tier.coverboard) items.push(sline("Coverboard (1/2in HD)", sqr(sq), "SQ", FLAT_SEED.cover));
   if (tier.attach === "adhered") items.push(sline("Bonding adhesive", up(sq / 3) || 1, "bucket", FLAT_SEED.adhesive));
-  else items.push(sline("Fasteners & plates", up(m.area / 1.6), "ea", FLAT_SEED.fastener));
+  // ISO ATTACHMENT — density by method (Caza/Elevate field rates): fully adhered (incl. SA)
+  // membrane = 16 fasteners+plates per 32SF board (top layer); mech-attached = 6/board + 1 HD
+  // seam fastener per LF of membrane seam. Length: stack + penetration by DECK, rounded up.
+  const deck = deckTypeOf(ctx || "");
+  const stack = isoLayers * 3 + (tier.coverboard ? 0.5 : 0);
+  const fl = isoFastenerLength(stack, deck || "steel");
+  const perBoard = tier.attach === "adhered" ? 16 : 6;
+  items.push(sline("Iso fasteners" + (fl && fl.len ? " " + fl.len + "in" : "") + " + plates (" + perBoard + "/board" + (deck ? ", " + deck + " deck" : ", deck assumed steel — confirm") + ")", up((m.area / 32) * perBoard), "ea", FLAT_SEED.fastener + (fl && fl.len >= 7 ? 0.1 : 0), { priceNote: (fl && fl.special) ? fl.special : (fl ? (stack + "in stack + penetration → " + fl.len + "in screws · field-rate density — verify perimeter/corner enhancement (Elevate zones)") : "") }));
+  if (tier.attach === "mech") items.push(sline("HD seam fasteners + plates (1 per LF of membrane seam)", up(m.area / 10), "ea", FLAT_SEED.hdSeamFast));
   // seam tape follows SEAM LF (area / ~10ft sheet width, 100' rolls) — the old 1-roll-per-SQ
   // heuristic was ~10x reality on wide-sheet membrane (317 rolls on a 311-SQ job vs ~31 real)
   items.push(sline("Seam / cover tape", up((m.area / 10) / 100) || 1, "roll", FLAT_SEED.seam));
   if (eaveRake) items.push(sline("Termination bar", up(eaveRake), "LF", FLAT_SEED.term));
-  if (eaveRake) items.push(sline("Edge metal / drip / coping", up(eaveRake), "LF", FLAT_SEED.edge));
-  if (m.pens) items.push(sline("Pipe boots / drains", m.pens, "ea", FLAT_SEED.pen));
+  // CAZA PERIMETER METAL DETAIL — an ASSEMBLY, never one line: 24ga Kynar cap (sheet-yield
+  // priced, +5% waste) + galvanized continuous locker the SAME LF + underplates at every 10ft
+  // seam + substrate fasteners (invoice #1851 rates — national coping $/LF is ~4x Caza's real cost).
+  if (eaveRake) {
+    const capY = sheetYield(9.5, SHEET_RATE_24_KYNAR);
+    items.push(sline("Perimeter cap metal 24ga Kynar (custom fab, 10ft pcs)", up(eaveRake * 1.05), "LF", capY.perLF, { fabMetal: true, cutW: 9.5, sheetRate: SHEET_RATE_24_KYNAR, priceNote: "9.5in cut → " + capY.pieces + "/sheet → $" + capY.perLF + "/LF @ $" + SHEET_RATE_24_KYNAR + "/4x10 sheet — set the real cut width (✂) per job; coping girth 20-24in ≈ $7.78/LF" }));
+    items.push(sline("Continuous locker 24ga galvanized (full perimeter — cap hooks on)", up(eaveRake), "LF", FLAT_SEED.lockerLF));
+    items.push(sline("Underplates (one at every 10ft cap seam)", up(eaveRake / 10), "ea", FLAT_SEED.underplate));
+  }
+  // FLAT/MEMBRANE roofs take PRE-MOLDED MEMBRANE BOOTS only — never shingle-style Lifetime boots.
+  if (m.pens) items.push(sline("Membrane pipe boots (pre-molded " + membrane + ", clamped + lap-sealed)", m.pens, "ea", FLAT_SEED.memBoot));
   const matCost = items.reduce((a, b) => a + (b.cost || 0), 0);
   return {
     tier: tier.tier, membrane, mil, attachLabel: tier.attachLabel, isoR: tier.isoR, coverboard: tier.coverboard, ndl: tier.ndl,
@@ -1051,7 +1123,7 @@ function flatTierAssemblies(dims, sys, desc) {
   const ctx = ((sys || "") + " " + (desc || "")).toLowerCase();
   const membrane = flatMembraneOf(ctx);
   const reroof = /tear|re-?roof|existing|replace|remove|recover|overlay/.test(ctx);
-  const tiers = FLAT_TIERS.map((t) => flatTierAssembly(dims, membrane, t, reroof)).filter(Boolean);
+  const tiers = FLAT_TIERS.map((t) => flatTierAssembly(dims, membrane, t, reroof, ctx)).filter(Boolean);
   return tiers.length ? { membrane, tiers } : null;
 }
 // ===== deterministic ROOF material takeoff from measurements (code does the math) =====
@@ -1102,14 +1174,18 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
     if (m.pens) out.push({ key: "pen", name: "Pipe boots / penetration flashings", qty: m.pens, unit: "ea" });
   } else if (type === "flat") {
     out.push({ key: "field", name: "Membrane (60mil TPO/EPDM)", qty: sqr(sq * 1.10), unit: "SQ" });
-    out.push({ key: "iso", name: "Polyiso insulation", qty: sqr(sq), unit: "SQ" });
+    // NY code: TWO staggered layers of 3in polyiso (~R-34) — never a single layer; 3in priced as 3in board
+    out.push({ key: "iso", name: "Polyiso insulation 3in x 2 staggered layers (R-34, NY code)", qty: sqr(sq * 2), unit: "SQ" });
     out.push({ key: "cover", name: "Coverboard (1/2in HD)", qty: sqr(sq), unit: "SQ" });
-    out.push({ key: "fast", name: "Fasteners & plates", qty: up(m.area / 1.6), unit: "ea" });
+    out.push({ key: "fast", name: "Iso fasteners + plates (16/board, fully-adhered spec)", qty: up(m.area / 2), unit: "ea" }); // 16 per 32SF board
     out.push({ key: "adh", name: "Bonding adhesive", qty: up(sq) || 1, unit: "bucket" });
     out.push({ key: "seam", name: "Seam / cover tape", qty: up((m.area / 10) / 100) || 1, unit: "roll" }); // seam LF (10ft sheets) / 100' rolls — not 1/SQ
     if (eaveRake) out.push({ key: "term", name: "Termination bar", qty: up(eaveRake), unit: "LF" });
-    if (eaveRake) out.push({ key: "edge", name: "Edge metal / drip / coping", qty: up(eaveRake), unit: "LF" });
-    if (m.pens) out.push({ key: "pen", name: "Pipe boots / drains", qty: m.pens, unit: "ea" });
+    // CAZA PERIMETER DETAIL: cap + continuous locker (same LF) + underplates at every 10ft seam
+    if (eaveRake) out.push({ key: "edge", name: "Perimeter cap metal 24ga Kynar (custom fab, 10ft pcs)", qty: up(eaveRake * 1.05), unit: "LF" });
+    if (eaveRake) out.push({ key: "locker", name: "Continuous locker 24ga galvanized (full perimeter)", qty: up(eaveRake), unit: "LF" });
+    if (eaveRake) out.push({ key: "uplate", name: "Underplates (one per 10ft cap seam)", qty: up(eaveRake / 10), unit: "ea" });
+    if (m.pens) out.push({ key: "pen", name: "Membrane pipe boots (pre-molded)", qty: m.pens, unit: "ea" });
   } else if (type === "tile") {
     out.push({ key: "field", name: "Roof tiles (concrete/clay)", qty: sqr(sq * 1.12), unit: "SQ" });
     out.push({ key: "iw", name: "2-ply / high-temp underlayment", qty: sqr(sq * 1.10), unit: "SQ" });
@@ -1312,7 +1388,11 @@ const CAZA_MANUAL_DEFAULT = {
     { id: "cm_m_ss_smp", role: "Standing seam — Good (economy grade)", standard: "26-ga SMP, 1in seam, integral screw flange, 16in coverage; concealed pancake screws 12in o.c. up the flange, NO clips", subs: [], note: "Flange-screw grade. Screw count ~= panel LF (12in o.c. on one flange). SKU e.g. 26G SMP A1101." },
     { id: "cm_m_ss_kynar", role: "Standing seam — Better/Best (premium grade)", standard: "24-ga Kynar, 1-1/2in seam, clip-fastened, 16in coverage; concealed clips 16in o.c. up the seam, 2 pancake screws per clip", subs: [], note: "Clip grade. Clips ~= panel LF x 0.75; screws = clips x 2." },
     { id: "cm_m_underlay", role: "Underlayment / ice & water", standard: "Synthetic underlayment; REGULAR ice & water at eaves/valleys on shingle roofs; HIGH-TEMP ice & water under ALL steel. On a MIXED roof: high-temp on the metal band, regular at the shingle field's eaves/valleys — two separate SKUs, each scoped to its own area.", subs: [], note: "I&W grade follows the system: regular = asphalt, high-temp = steel. Neither product runs across the whole roof on a mixed job." },
-    { id: "cm_m_pipeflash", role: "Pipe flashing", standard: "Lifetime Tool pipe flashing", subs: [], note: "" },
+    { id: "cm_m_pipeflash", role: "Pipe flashing (STEEP-slope shingle/metal only)", standard: "Lifetime Tool pipe flashing", subs: [], note: "Steep-slope only — flat/membrane roofs use pre-molded membrane boots, never these." },
+    { id: "cm_m_memboot", role: "Pipe boots (flat/membrane roofs)", standard: "Pre-molded membrane boots ONLY — Elevate QuickSeam (EPDM) / weldable TPO boots, ~$25-45/ea, clamped + lap-sealed or welded with the system", subs: [], note: "NEVER shingle-style Lifetime boots on membrane." },
+    { id: "cm_m_flatiso", role: "Flat-roof insulation (NY energy code)", standard: "TWO staggered layers of 3in polyiso (~R-34 total) on any tear-off-to-deck — never a single layer. Existing-insulation-stays jobs: add iso to bring the TOTAL assembly to >=R-34 and ask about the moisture survey.", subs: [], note: "Price 3in board AS 3in board — never build thickness from 1in sheet counts. Insulation labor scales with LAYER COUNT (2 layers = 2 passes)." },
+    { id: "cm_m_perimmetal", role: "Perimeter edge/coping metal (Caza detail — all roofs)", standard: "ASSEMBLY, not one line: 24ga Kynar cap metal (custom fab, 10ft pieces, full perimeter +5% waste) + galvanized 24ga continuous locker the SAME LF (cap hooks onto it) + underplates ONE at every 10ft seam (LF/10, round up) + fasteners per substrate (pancake screws into wood nailer / masonry fasteners into parapet)", subs: [], note: "Sheet-yield pricing (Roof Metals Supply inv #1851): $155.50 per 24ga Kynar 4x10 sheet, fab included — 9.5in cut = $3.11/LF, locker $1.79/LF, underplates $4.75/ea. National coping pricing ($28-45/LF) is ~4x Caza's real cost — do not use it." },
+    { id: "cm_m_fastdensity", role: "Iso/coverboard fastening (flat roofs)", standard: "Fully adhered (incl. SA) membrane: 16 fasteners + plates per 32SF board (top layer). Mechanically fastened: 6 per board PLUS 1 heavy-duty seam fastener per LF of membrane seam (seam LF = area / sheet width, not squares). Fastener length: stack above deck + penetration (steel +1in past flute; wood + deck + 1in), rounded UP to stocked 3/4/5/6/7/8in. Structural concrete = masonry anchors; gypsum/tectum = specialty toggles — flag both for manual pricing.", subs: [], note: "Field-rate density — verify perimeter/corner enhancement per the Elevate zone tables (detail book pending)." },
     { id: "cm_m_cedartrim", role: "Cedar siding trim / J-channel", standard: "Metal J-channel (copper / bronze / aluminum)", subs: [], note: "No vinyl trim on cedar." },
     { id: "cm_m_soffitfascia", role: "Fascia (vinyl soffit job)", standard: "Aluminum fascia", subs: ["Vinyl fascia"], note: "" },
     { id: "cm_m_soffitrecv", role: "Soffit receiver (soffit-wall connection)", standard: "F-channel", subs: [], note: "ONE receiver at the wall. J-channel LF must exclude the soffit run — F-channel AND J on the same run is a double-count." },
@@ -1324,6 +1404,7 @@ const CAZA_MANUAL_DEFAULT = {
       { id: "cm_v_abc", name: "ABC Supply", note: "primary roofing / exterior supplier" },
       { id: "cm_v_srs", name: "SRS / Beacon", note: "" },
       { id: "cm_v_ss", name: "Standing-seam panel supplier", note: "standing-seam metal" },
+      { id: "cm_v_rms", name: "Roof Metals Supply", note: "metal fab (Utica) — 4x10 sheet-yield pricing, 24ga Fabral Kynar" },
     ],
     brands: [
       { id: "cm_b_oc", name: "Owens Corning", note: "roofing system (Total Protection)" },
@@ -1552,7 +1633,7 @@ async function callClaudeBackground(messages, opts) {
     startRes = await fetch("/.netlify/functions/estimate-background", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, prompt: norm, maxTokens: opts.maxTokens || 4000, search: !!opts.search, trade: opts.trade || "", priceBook: opts.priceBook || null }),
+      body: JSON.stringify({ jobId, prompt: norm, maxTokens: opts.maxTokens || 4000, search: !!opts.search, trade: opts.trade || "", priceBook: opts.priceBook || null, standingRules: opts.standingRules || null }),
     });
   } catch (e) {
     throw new Error("Network: couldn't start the estimate — check your connection and try again");
@@ -2809,7 +2890,7 @@ function App() {
       ...whPhotos.slice(0, 3).map((ph) => ({ type: "image", source: { type: "base64", media_type: ph.startsWith("data:") ? (ph.substring(5, ph.indexOf(";")) || "image/jpeg") : "image/jpeg", data: ph.split(",")[1] } })),
       { type: "text", text: prompt },
     ];
-    const text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: mkey, priceBook: enginePriceBookPayload() });
+    const text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 4000, trade: mkey, priceBook: enginePriceBookPayload(), standingRules: activeRuleTexts(mkey) });
     const d = parseJSON(text);
     let items = Array.isArray(d.items) ? d.items.map((it) => ({ name: String(it.name || "Item"), qty: num(it.qty), unit: String(it.unit || ""), cost: Math.round(num(it.cost)) })) : [];
     const sysStr = installScope(label + " " + mat); // F13: classify by the INSTALL system, not the roof being torn off
@@ -2983,6 +3064,8 @@ function App() {
       if (ests && ests.length) setEstimates(ests);
       const cjs = await pGet(COSTJOBS_KEY);
       if (Array.isArray(cjs)) setCostJobs(cjs);
+      const srs = await pGet(STANDING_RULES_KEY);
+      if (Array.isArray(srs)) setStandingRules(srs);
       const cjd = await pGet(CJ_DISMISSED_KEY);
       if (cjd && typeof cjd === "object") cjDismissedRef.current = cjd;
       const pna = await pGet(PERSONA_KEY);
@@ -3537,9 +3620,10 @@ function App() {
     "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " +
     "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " +
     "SCOPE PARTITION (critical — each physical item belongs to EXACTLY ONE trade, never counted in two): when one physical item could touch several trades, assign it to ONE owning trade and do NOT also list it under others. The cedar boards on a cedar-siding job belong to Siding ONLY — not also Trim or Paint. A PVC drain line belongs to Plumbing ONLY — not also Trim. A gutter splash-guard / drainage piece with no dedicated trade → assign it to ONE block, don't scatter it. Do NOT stand up a finish/paint trade unless the contractor EXPLICITLY asked to paint or finish — never invent a phantom 'repaint'. For each trade you put in `select`, also set `scope` to a short line describing ONLY that trade's slice of the work (e.g. Siding scope: 'cedar bevel siding + cedar starter, 120 SF') so each block bids only what it owns, exactly once. " +
+    "STANDING RULES — when the contractor states a lasting requirement ('from now on…', 'always…', 'new code says…', 'never use X on Y'), that's a STANDING RULE to save, not a one-job note: restate it as ONE clean factual sentence with any code/warranty source, infer the scope (a specific trade key from the list, or global), and set standingRule {text, scope}; the app confirms before saving. Rules are KNOWLEDGE (codes, warranty terms, approved products, supplier notes, always-include lines). DECLINE to save anything that changes deterministic math or the app itself (margin formula, fastener-length calc, new input fields) — say that needs an app update and suggest a one-line spec for the queue. " +
     "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " +
     "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" +
-    "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\", \"scope\": one-line description of THIS trade's slice of the work only (else \"\")}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+    "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\", \"scope\": one-line description of THIS trade's slice of the work only (else \"\")}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false, \"standingRule\": {\"text\": one clean dated-worthy rule sentence, \"scope\": trade key or \"global\"} ONLY when they stated a lasting requirement this turn, else null}";
   };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
@@ -3790,6 +3874,21 @@ function App() {
       // COMMIT on confirm: build + save the estimate (auto-save effect persists it). Guard against
       // re-firing once it's already built (kills the confirm→re-propose loop).
       if (d.save === true && Object.keys(houseScope).length && estBusy !== "run" && !(estResult && estResult.trades && estResult.trades.length)) { buildUnifiedEstimate(); }
+      // STANDING RULE capture — AL proposed one; confirm (never silent), check conflicts, respect the budget.
+      if (d.standingRule && d.standingRule.text) {
+        try {
+          const txt = String(d.standingRule.text).trim().slice(0, 300);
+          const scope = SR_SCOPES.indexOf(d.standingRule.scope) >= 0 ? d.standingRule.scope : "global";
+          const toks = txt.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+          const conflict = standingRules.find((r) => r.active && toks.filter((w) => r.text.toLowerCase().includes(w)).length >= Math.max(3, Math.floor(toks.length / 2)));
+          const q = conflict
+            ? ("A similar rule exists:\n\u201c" + conflict.text + "\u201d\n\nREPLACE it with:\n\u201c" + txt + "\u201d (" + scope + ")?\n\n(Cancel keeps both unsaved — nothing stacks silently.)")
+            : ("Save standing rule (" + scope + ")?\n\n\u201c" + txt + "\u201d\n\nIt will be injected into every future " + (scope === "global" ? "estimate" : scope + " estimate") + ".");
+          if (window.confirm(q)) {
+            if (srAdd(txt, scope, conflict ? conflict.id : null)) flash("Standing rule saved — it now rides into every " + (scope === "global" ? "" : scope + " ") + "estimate.");
+          }
+        } catch (e) { /* rule capture never breaks the conversation */ }
+      }
       return;
     } catch (e) {
       setAlThread([...msgs, { role: "ai", text: "Hmm, that one didn't go through — mind trying again?" }]);
@@ -3915,8 +4014,8 @@ function App() {
         { type: "text", text: prompt },
       ];
       let text;
-      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload() }); } // 5000: assemblyWalk adds ~300-800 output tokens
-      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload() }); }
+      try { text = await callClaudeBackground([{ role: "user", content }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload(), standingRules: activeRuleTexts(__manualKey) }); } // 5000: assemblyWalk adds ~300-800 output tokens
+      catch (e1) { text = await callClaudeBackground([{ role: "user", content: prompt }], { search: true, maxTokens: 5000, trade: __manualKey, priceBook: enginePriceBookPayload(), standingRules: activeRuleTexts(__manualKey) }); }
       const __manualLoaded = !!__LAST_MANUAL_USED;
       let d;
       try { d = parseJSON(text); }
@@ -4154,7 +4253,7 @@ function App() {
         __diagRaw: d,
         // F7: roofType/mixed only mean something on ROOFING trades — null them elsewhere so they stop
         // polluting siding/deck/etc. diagnostics. (installScope so a tear-off system doesn't skew it.)
-        __diagPipe: (() => { const __rt = /\broof|shingle|standing.?seam|metal panel|\btpo\b|\bepdm\b|slate|\btile\b|membrane/.test((scope + " " + desc).toLowerCase()); const __ins = installScope(scope + " " + desc); return { scope: scope, desc: desc, dims: dims, panelW: num(panelW), roofType: __rt ? roofTypeOf(__ins) : null, mixed: __rt ? roofIsMixed(__ins) : false, deterministic: !!d.deterministic, flat: !!__flatTiers, manualLoaded: __manualLoaded, manualKey: __manualKey, offManual: __offManual, model: "claude-opus-4-8", endpoint: "estimate-background", laborSource: laborSrc, rateFloored: !!__rateFloored }; })(),
+        __diagPipe: (() => { const __rt = /\broof|shingle|standing.?seam|metal panel|\btpo\b|\bepdm\b|slate|\btile\b|membrane/.test((scope + " " + desc).toLowerCase()); const __ins = installScope(scope + " " + desc); return { scope: scope, desc: desc, dims: dims, panelW: num(panelW), roofType: __rt ? roofTypeOf(__ins) : null, mixed: __rt ? roofIsMixed(__ins) : false, deterministic: !!d.deterministic, flat: !!__flatTiers, manualLoaded: __manualLoaded, manualKey: __manualKey, offManual: __offManual, model: "claude-opus-4-8", endpoint: "estimate-background", laborSource: laborSrc, rateFloored: !!__rateFloored, rulesApplied: activeRuleTexts(__manualKey) }; })(),
       };
     }
   };
@@ -4229,6 +4328,7 @@ function App() {
           if (idx !== i) return it;
           if (field === "name" || field === "unit") return { ...it, [field]: val };
           const v = num(val);
+          if (field === "cutW") { const y = sheetYield(v, it.sheetRate); if (!y) return { ...it, cutW: v }; return { ...it, cutW: v, unitPrice: y.perLF, cost: Math.round(y.perLF * (num(it.qty) || 0)), priceNote: v + "in cut → " + y.pieces + "/sheet → $" + y.perLF + "/LF @ $" + (num(it.sheetRate) > 0 ? it.sheetRate : SHEET_RATE_24_KYNAR) + "/4x10 sheet" }; }
           if (field === "qty") { const up = num(it.unitPrice); return { ...it, qty: v, cost: Math.round(up * v) }; }
           if (field === "unitPrice") { return { ...it, unitPrice: v, cost: Math.round(v * (num(it.qty) || 0)) }; }
           if (field === "cost") { const q = num(it.qty) || 0; return { ...it, cost: Math.round(v), unitPrice: q > 0 ? v / q : v }; }
@@ -4555,6 +4655,24 @@ function App() {
     setDiagLink("");
   };
   // ===== JOB COST TRACKING — state + handlers (store follows the estStore pattern: pGet/pSet, local-first) =====
+  // ===== STANDING RULES ("Tell AL") — user-writable knowledge layer on top of the manuals =====
+  // Precedence: standing rules > manual > model knowledge (rules are newer than the manual by
+  // definition). KNOWLEDGE only (codes, warranty terms, details, supplier notes) — deterministic
+  // math/UI stays code (AL declines those and suggests a spec one-liner).
+  const [standingRules, setStandingRules] = useState([]); // [{id,text,scope:"global"|tradeKey,createdDate,active}]
+  const saveStandingRules = (nextOrFn) => setStandingRules((prev) => { const next = (typeof nextOrFn === "function") ? nextOrFn(prev) : nextOrFn; pSet(STANDING_RULES_KEY, next); return next; });
+  const activeRulesChars = (rules) => (rules || []).filter((r) => r.active).reduce((a, r) => a + String(r.text || "").length, 0);
+  const activeRuleTexts = (tradeKey) => standingRules.filter((r) => r.active && (r.scope === "global" || r.scope === tradeKey)).map((r) => String(r.text || "") + " (added " + (r.createdDate || "") + ")");
+  // ATOMIC add/replace: the budget check runs on the post-replace set BEFORE anything mutates, and
+  // a replace is ONE updater (never delete-then-maybe-fail-to-add). Text capped at 400 chars to
+  // match the server exactly — nothing silently truncates in flight.
+  const srAdd = (text, scope, replaceId) => {
+    const t = String(text || "").trim().slice(0, 400); if (!t) return false;
+    const base = replaceId ? standingRules.filter((r) => r.id !== replaceId) : standingRules;
+    if (activeRulesChars(base) + t.length > RULES_CHAR_BUDGET) { flash("Standing rules are at the size cap — merge or retire stale rules first (Profile → Caza Manual). Nothing was changed."); return false; }
+    saveStandingRules((prev) => [{ id: "sr" + rid(), text: t, scope: scope || "global", createdDate: new Date().toISOString().slice(0, 10), active: true }, ...(replaceId ? prev.filter((r) => r.id !== replaceId) : prev)]);
+    return true;
+  };
   const [costJobs, setCostJobs] = useState([]);          // [{id,name,customerName,address,trade,planned{mats,labor,mh,contract},costs[],hoursLog[],burdenRate,laborFromHours,estimateId,afterTheFact,status,actualPerUnit?}]
   const [cjOpen, setCjOpen] = useState(null);            // open job id (detail view on My Jobs)
   const [cjReceiptBusy, setCjReceiptBusy] = useState(false);
@@ -7006,6 +7124,38 @@ function App() {
               </div>
             ); })()}
           </section>
+          {/* STANDING RULES ("Tell AL") — contractor-taught knowledge injected into every estimate.
+              Precedence: rules > manual > model. Capture happens in the AL chat; this is management. */}
+          <section className="card">
+            <div className="h2">Standing rules <span className="hint">tell AL once — applies to every estimate</span></div>
+            <p className="hint" style={{ marginTop: -2 }}>Teach AL new facts by talking to it ("From now on, flat roofs need 2 layers of 3-inch iso") — or add one here. Rules override the manual where they conflict. Knowledge only; math/app changes still need an update.</p>
+            {(() => { const used = standingRules.filter((r) => r.active).reduce((a, r) => a + String(r.text || "").length, 0); const pct = Math.min(100, Math.round((used / RULES_CHAR_BUDGET) * 100)); return (
+              <div className="hint" style={{ marginBottom: 6 }}>{standingRules.filter((r) => r.active).length} active · budget {pct}%{pct >= 80 ? <span style={{ color: "#8A5A12", fontWeight: 700 }}> — near the cap: merge or retire stale rules</span> : null}</div>
+            ); })()}
+            {standingRules.map((r) => (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0", opacity: r.active ? 1 : 0.55 }}>
+                <input type="checkbox" checked={!!r.active} title={r.active ? "Active — injected into estimates" : "Off — kept but not injected"} onChange={(e) => saveStandingRules((prev) => prev.map((x) => x.id === r.id ? { ...x, active: e.target.checked } : x))} />
+                <span style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => { const n = window.prompt("Edit rule (max 400 chars)", r.text); if (!n || !n.trim()) return; const t = n.trim().slice(0, 400); if (activeRulesChars(standingRules) - String(r.text || "").length + t.length > RULES_CHAR_BUDGET) { flash("That edit exceeds the size cap — shorten it or retire another rule."); return; } saveStandingRules((prev) => prev.map((x) => x.id === r.id ? { ...x, text: t } : x)); }}>
+                  <span style={{ display: "block", fontSize: 12.5 }}>{r.text}</span>
+                  <span className="hint" style={{ display: "block" }}>{r.scope === "global" ? "all trades" : r.scope} · added {r.createdDate}</span>
+                </span>
+                <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => { if (window.confirm("Delete this rule?")) saveStandingRules((prev) => prev.filter((x) => x.id !== r.id)); }}>✕</button>
+              </div>
+            ))}
+            {standingRules.length === 0 && <p className="hint">No rules yet. Say one to AL ("from now on…") or add it here.</p>}
+            {(() => { return (
+              <div style={{ marginTop: 6 }}>
+                <textarea className="desc" rows={2} id="srNewText" placeholder={'e.g. NY code: flat-roof insulation is 2 staggered layers of 3" polyiso (~R-34).'} />
+                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  <select id="srNewScope" className="in" style={{ maxWidth: 160 }} defaultValue="global">
+                    <option value="global">All trades</option>
+                    {SR_SCOPES.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                  </select>
+                  <button className="btn primary grow1" onClick={() => { const ta = document.getElementById("srNewText"); const sc = document.getElementById("srNewScope"); if (ta && ta.value.trim() && srAdd(ta.value.trim(), sc ? sc.value : "global")) { ta.value = ""; flash("Standing rule saved."); } }}>＋ Add rule</button>
+                </div>
+              </div>
+            ); })()}
+          </section>
           </div>
           <button type="button" className={"secgroup accord" + (gOpen.al ? " open" : "")} onClick={() => toggleGroup("al")}>Assistant <span className="hint">private — your estimate voice · auto-saves</span><span className="accchev">{gOpen.al ? "▾" : "▸"}</span></button>
           <div id="prof-al" className="secbody" style={{ display: gOpen.al ? undefined : "none" }}>
@@ -7743,6 +7893,7 @@ function App() {
                               <input className="toname" value={it.name} onChange={(e) => estItemSet(ti, i, "name", e.target.value)} />
                               <input className="toqty" type="number" value={it.qty} onChange={(e) => estItemSet(ti, i, "qty", e.target.value)} />
                               <input className="tounit" value={it.unit} onChange={(e) => estItemSet(ti, i, "unit", e.target.value)} placeholder="unit" />
+                              {it.fabMetal ? <span className="todollar" title="cut width — inches of flat stock (incl. hems); $/LF derives from 4x10 sheet yield">✂<input className="tocost" type="number" step="0.5" value={it.cutW || ""} onChange={(e) => estItemSet(ti, i, "cutW", e.target.value)} /></span> : null}
                               <span className="todollar" title="unit price">$<input className="tocost" type="number" value={it.unitPrice != null ? Math.round(num(it.unitPrice) * 100) / 100 : 0} onChange={(e) => estItemSet(ti, i, "unitPrice", e.target.value)} /></span>
                               <b className="tolinecost" title={(it.priceNote ? it.priceNote + " · " : "") + (it.unpriced ? "No price in your cost book — add this material's price" : (it.placeholder || it.priceTier === "seed") ? "Placeholder/seed price — not your real cost yet; tune it before this rolls into a sell price" : it.priceTier === "pricebook" ? "Priced from your price book" : it.priceTier === "retail" ? "HD/Lowe's retail — verify" : "")}>{it.unpriced ? "⚠️ " : (it.placeholder || it.priceTier === "seed") ? "⚠️ " : it.priceTier === "pricebook" ? "📗 " : it.priceTier === "retail" ? "🏷️ " : ""}{$0(it.cost)}</b>
                               <button className="todel" onClick={() => estItemDel(ti, i)}><X size={14} /></button>

@@ -584,6 +584,11 @@ const ENGINE_PB_KEY = "cazbid-engine-pricebook-v1"; // trade-organized price boo
 const AI_TRADES_KEY = "cazbid-ai-trades-v1"; // contractor's AI-built trade definitions (Feature A; flagged until calibrated)
 const CALIB_KEY = "cazbid-calibration-v1"; // per-trade job-cost calibration (Feature B): logged actuals + labor factor
 const ESTIMATES_KEY = "cazbid-estimates-v1"; // saved-estimates library (build-set #3, Phase 1 local)
+const STANDING_RULES_KEY = "cazbid-standing-rules-v1"; // STANDING RULES ("Tell AL") — contractor-authored knowledge injected into every estimate; rules > manual > model
+const RULES_CHAR_BUDGET = 5000;
+// Rule scopes must be keys manualTradeKey can PRODUCE — a rule scoped to a key that never routes
+// (trim/drywall/other) would be accepted but never injected. Drywall/trim jobs route to "interior".
+const SR_SCOPES = ["roofing", "siding", "framing", "concrete", "decks", "insulation", "interior", "flooring", "cabinetry", "electrical", "hvac", "plumbing"]; // cap on total ACTIVE rule text — near it, merge/retire, never silently truncate
 const COSTJOBS_KEY = "cazbid-costjobs-v1"; // JOB COST TRACKING — contractor jobs independent of estimates (actuals: receipts + hours)
 const CJ_DISMISSED_KEY = "cazbid-costjobs-dismissed-v1"; // estimate ids whose auto-created cost job was deliberately deleted (tombstones — never resurrect)
 const PERSONA_KEY = "cazbid-persona-v1"; // selected assistant persona (name + voiceId + avatar)
@@ -1219,6 +1224,36 @@ const SEED_PRICES = [{
   name: "ACM Aluminum Roll Valley Flashing",
   unit: "roll",
   price: 56.5
+}, {
+  id: "pb_rms_kynar_sheet_24g",
+  cat: "Flat / low slope",
+  name: "24G Fabral Kynar 4x10 Sheet — custom fab included (Roof Metals Supply)",
+  unit: "sheet",
+  price: 155.5
+}, {
+  id: "pb_rms_cap_95",
+  cat: "Flat / low slope",
+  name: "24G Kynar Custom Cap Metal 9.5in cut, 10ft pcs (Roof Metals Supply)",
+  unit: "LF",
+  price: 3.11
+}, {
+  id: "pb_rms_locker",
+  cat: "Flat / low slope",
+  name: "24G Galvanized Continuous Locker 10ft (Roof Metals Supply)",
+  unit: "LF",
+  price: 1.79
+}, {
+  id: "pb_rms_underplate",
+  cat: "Flat / low slope",
+  name: "Underplate — cap seam (Roof Metals Supply)",
+  unit: "ea",
+  price: 4.75
+}, {
+  id: "pb_membrane_pipe_boot",
+  cat: "Flat / low slope",
+  name: "Pre-molded Membrane Pipe Boot (QuickSeam EPDM / weldable TPO)",
+  unit: "ea",
+  price: 34.0
 }, {
   id: "pb_american_flash_kickout_with_j_chan",
   cat: "Sloped roof",
@@ -2867,6 +2902,8 @@ function bestBookRowByName(name, books, lineKey, jobShingle) {
       const rp = roofPartType(b.name);
       if (rp && STRICT_PARTS[rp] && rp !== expected) continue;
     } // C.5: skip cross-product rows
+    // membrane boots: a flat/membrane line must never price off a shingle-style boot SKU
+    if (/membrane|epdm|\btpo\b|\bpvc\b/i.test(String(name)) && /lifetime|ult\s*pipe|pipe\s*flash\s*#?\s*300/i.test(String(b.name || ""))) continue;
     if (jobShingle && looksSteelSystem(b.name)) continue; // F6: no steel-system SKU on a shingle job
     const bt = toks(b.name);
     if (!bt.length) continue;
@@ -3053,12 +3090,15 @@ function repriceLlmItems(items, books) {
 // (mechanically fastened vs fully adhered), insulation R-value, and NDL warranty term.
 // Seed $/unit costs are placeholders (flagged ⚠️ in the takeoff) — the contractor tunes
 // them; the TIER DELTAS (mil/R/coverboard/attachment) drive the good/better/best spread.
+// NY ENERGY CODE (locked): flat-roof insulation default = TWO staggered layers of 3in polyiso
+// (~R-34 total) on any tear-off-to-deck — NEVER a single layer. All tiers carry it; they
+// differentiate on membrane mil / attachment / coverboard / NDL term.
 const FLAT_TIERS = [{
   tier: "Good",
   mil: 45,
   attach: "mech",
   attachLabel: "Mechanically fastened",
-  isoR: 20,
+  isoR: 34,
   coverboard: false,
   ndl: 15
 }, {
@@ -3066,7 +3106,7 @@ const FLAT_TIERS = [{
   mil: 60,
   attach: "adhered",
   attachLabel: "Fully adhered",
-  isoR: 25,
+  isoR: 34,
   coverboard: false,
   ndl: 20
 }, {
@@ -3074,7 +3114,7 @@ const FLAT_TIERS = [{
   mil: 80,
   attach: "adhered",
   attachLabel: "Fully adhered",
-  isoR: 30,
+  isoR: 34,
   coverboard: true,
   ndl: 30
 }];
@@ -3098,15 +3138,68 @@ const FLAT_SEED = {
   adhesive: 145,
   // $/bucket (~3 SQ bonded)
   fastener: 0.12,
-  // $/ea (membrane + plate)
+  // $/ea iso fastener + plate (short); long screws priced up in-line
+  hdSeamFast: 0.85,
+  // $/ea heavy-duty seam fastener + plate (mech-attached membrane seams)
   seam: 82,
   // $/roll seam tape
   term: 2.6,
   // $/LF termination bar
-  edge: 6.2,
-  // $/LF edge metal / coping
-  pen: 38 // $/ea boot / drain
+  lockerLF: 1.79,
+  // $/LF galvanized 24ga continuous locker (invoice #1851, Roof Metals Supply)
+  underplate: 4.75,
+  // $/ea underplate — one at every 10ft cap seam (invoice #1851)
+  memBoot: 34,
+  // $/ea pre-molded membrane pipe boot (QuickSeam / weldable TPO)
+  pen: 38 // $/ea boot / drain (legacy generic)
 };
+// CUSTOM METAL FAB priced by 4x10 SHEET YIELD (how the supplier actually prices — a STEP
+// function, don't smooth it): piecesPerSheet = floor(48 / cutWidthIn) (cut width = inches of
+// FLAT STOCK consumed incl. hems/kicks, not the finished face); LF/sheet = pieces x 10;
+// $/LF = sheetRate / LFperSheet. Calibration: invoice #1851 (Roof Metals Supply, 06/2026,
+// 24-ga Fabral Kynar) — 9.5in cut @ $3.11/LF → 5/sheet → 50 LF/sheet → sheetRate $155.50.
+const SHEET_RATE_24_KYNAR = 155.5;
+function sheetYield(cutWidthIn, sheetRate) {
+  const cw = Number(cutWidthIn) || 0,
+    rate = Number(sheetRate) > 0 ? Number(sheetRate) : SHEET_RATE_24_KYNAR;
+  if (!(cw > 0) || cw > 48) return null;
+  const pieces = Math.floor(48 / cw);
+  if (!(pieces > 0)) return null;
+  const lfPerSheet = pieces * 10;
+  return {
+    pieces,
+    lfPerSheet,
+    perLF: Math.round(rate / lfPerSheet * 100) / 100
+  };
+}
+// Deck type from the job text — drives iso-fastener LENGTH and family on flat jobs.
+function deckTypeOf(s) {
+  const t = String(s || "").toLowerCase();
+  if (/steel deck|metal deck|\bb-?deck\b|fluted/.test(t)) return "steel";
+  if (/wood deck|plank|plywood|osb|wood fiber/.test(t)) return "wood";
+  if (/concrete deck|structural concrete/.test(t)) return "concrete";
+  if (/gypsum|tectum|lightweight fill/.test(t)) return "gypsum";
+  return "";
+}
+// Iso fastener length: thread must reach >=1in PAST the deck bottom, rounded UP to stocked
+// lengths. Steel (22-20ga): stack + ~1in past the flute. Wood: stack + deck (~3/4in) + 1in.
+// Concrete/gypsum: different fastener family entirely — never standard HD screws.
+const FASTENER_STOCK = [3, 4, 5, 6, 7, 8, 10, 12];
+function isoFastenerLength(stackIn, deck) {
+  if (!(stackIn > 0)) return null;
+  if (deck === "concrete") return {
+    special: "structural concrete — masonry anchors / adhesive-set, price manually"
+  };
+  if (deck === "gypsum") return {
+    special: "gypsum/tectum deck — specialty toggle fasteners, price manually"
+  };
+  const need = stackIn + (deck === "wood" ? 1.75 : 1);
+  const len = FASTENER_STOCK.find(L => L >= need) || FASTENER_STOCK[FASTENER_STOCK.length - 1];
+  return {
+    need: Math.round(need * 10) / 10,
+    len
+  };
+}
 function flatMembraneOf(sys) {
   return /\bepdm\b|rubber/.test((sys || "").toLowerCase()) ? "EPDM" : "TPO";
 }
@@ -3126,7 +3219,7 @@ function flatLaborHours(sq, membrane, tier, reroof) {
   if (reroof) mh += sq * 1.5; // tear-off (one layer)
   return Math.max(1, Math.round(mh));
 }
-function flatTierAssembly(dims, membrane, tier, reroof) {
+function flatTierAssembly(dims, membrane, tier, reroof, ctx) {
   const m = parseMeas(dims);
   if (!m.area) return null;
   const up = Math.ceil,
@@ -3134,9 +3227,9 @@ function flatTierAssembly(dims, membrane, tier, reroof) {
   const sq = m.area / 100;
   const eaveRake = m.eaves + m.rakes || m.drip || 0;
   const mil = flatMilFor(membrane, tier.mil);
-  const isoLayers = flatIsoLayers(tier.isoR);
+  const isoLayers = flatIsoLayers(tier.isoR); // R-34 -> 2 (NY code: 2 x 3in staggered)
   const seed = FLAT_SEED[membrane.toLowerCase()] || FLAT_SEED.tpo;
-  const sline = (name, qty, unit, unitPrice) => ({
+  const sline = (name, qty, unit, unitPrice, extra) => Object.assign({
     name,
     qty,
     unit,
@@ -3146,18 +3239,47 @@ function flatTierAssembly(dims, membrane, tier, reroof) {
     priceTier: "seed",
     unpriced: false,
     matchType: null
-  });
+  }, extra || {});
   const items = [];
   items.push(sline(mil + "mil " + membrane + " membrane (" + tier.attachLabel.toLowerCase() + ")", sqr(sq * 1.10), "SQ", seed[mil] || (membrane === "EPDM" ? 74 : 62)));
-  items.push(sline("Polyiso insulation R-" + tier.isoR + (isoLayers > 1 ? " (2 layers, staggered)" : ""), sqr(sq * isoLayers), "SQ", FLAT_SEED.isoPerR * (tier.isoR / isoLayers)));
+  // NY code: 2 x 3in staggered polyiso, priced AS 3in board (never thickness built from 1in
+  // sheet counts). ~area/32 boards per layer +5% waste rides in the note for ordering.
+  items.push(sline("Polyiso insulation 3in x 2 staggered layers (R-" + tier.isoR + ", NY code)", sqr(sq * isoLayers), "SQ", FLAT_SEED.isoPerR * (tier.isoR / isoLayers), {
+    priceNote: up(m.area / 32 * 1.05) + " boards/layer (4x8, +5% waste) x " + isoLayers + " layers — joints staggered"
+  }));
   if (tier.coverboard) items.push(sline("Coverboard (1/2in HD)", sqr(sq), "SQ", FLAT_SEED.cover));
-  if (tier.attach === "adhered") items.push(sline("Bonding adhesive", up(sq / 3) || 1, "bucket", FLAT_SEED.adhesive));else items.push(sline("Fasteners & plates", up(m.area / 1.6), "ea", FLAT_SEED.fastener));
+  if (tier.attach === "adhered") items.push(sline("Bonding adhesive", up(sq / 3) || 1, "bucket", FLAT_SEED.adhesive));
+  // ISO ATTACHMENT — density by method (Caza/Elevate field rates): fully adhered (incl. SA)
+  // membrane = 16 fasteners+plates per 32SF board (top layer); mech-attached = 6/board + 1 HD
+  // seam fastener per LF of membrane seam. Length: stack + penetration by DECK, rounded up.
+  const deck = deckTypeOf(ctx || "");
+  const stack = isoLayers * 3 + (tier.coverboard ? 0.5 : 0);
+  const fl = isoFastenerLength(stack, deck || "steel");
+  const perBoard = tier.attach === "adhered" ? 16 : 6;
+  items.push(sline("Iso fasteners" + (fl && fl.len ? " " + fl.len + "in" : "") + " + plates (" + perBoard + "/board" + (deck ? ", " + deck + " deck" : ", deck assumed steel — confirm") + ")", up(m.area / 32 * perBoard), "ea", FLAT_SEED.fastener + (fl && fl.len >= 7 ? 0.1 : 0), {
+    priceNote: fl && fl.special ? fl.special : fl ? stack + "in stack + penetration → " + fl.len + "in screws · field-rate density — verify perimeter/corner enhancement (Elevate zones)" : ""
+  }));
+  if (tier.attach === "mech") items.push(sline("HD seam fasteners + plates (1 per LF of membrane seam)", up(m.area / 10), "ea", FLAT_SEED.hdSeamFast));
   // seam tape follows SEAM LF (area / ~10ft sheet width, 100' rolls) — the old 1-roll-per-SQ
   // heuristic was ~10x reality on wide-sheet membrane (317 rolls on a 311-SQ job vs ~31 real)
   items.push(sline("Seam / cover tape", up(m.area / 10 / 100) || 1, "roll", FLAT_SEED.seam));
   if (eaveRake) items.push(sline("Termination bar", up(eaveRake), "LF", FLAT_SEED.term));
-  if (eaveRake) items.push(sline("Edge metal / drip / coping", up(eaveRake), "LF", FLAT_SEED.edge));
-  if (m.pens) items.push(sline("Pipe boots / drains", m.pens, "ea", FLAT_SEED.pen));
+  // CAZA PERIMETER METAL DETAIL — an ASSEMBLY, never one line: 24ga Kynar cap (sheet-yield
+  // priced, +5% waste) + galvanized continuous locker the SAME LF + underplates at every 10ft
+  // seam + substrate fasteners (invoice #1851 rates — national coping $/LF is ~4x Caza's real cost).
+  if (eaveRake) {
+    const capY = sheetYield(9.5, SHEET_RATE_24_KYNAR);
+    items.push(sline("Perimeter cap metal 24ga Kynar (custom fab, 10ft pcs)", up(eaveRake * 1.05), "LF", capY.perLF, {
+      fabMetal: true,
+      cutW: 9.5,
+      sheetRate: SHEET_RATE_24_KYNAR,
+      priceNote: "9.5in cut → " + capY.pieces + "/sheet → $" + capY.perLF + "/LF @ $" + SHEET_RATE_24_KYNAR + "/4x10 sheet — set the real cut width (✂) per job; coping girth 20-24in ≈ $7.78/LF"
+    }));
+    items.push(sline("Continuous locker 24ga galvanized (full perimeter — cap hooks on)", up(eaveRake), "LF", FLAT_SEED.lockerLF));
+    items.push(sline("Underplates (one at every 10ft cap seam)", up(eaveRake / 10), "ea", FLAT_SEED.underplate));
+  }
+  // FLAT/MEMBRANE roofs take PRE-MOLDED MEMBRANE BOOTS only — never shingle-style Lifetime boots.
+  if (m.pens) items.push(sline("Membrane pipe boots (pre-molded " + membrane + ", clamped + lap-sealed)", m.pens, "ea", FLAT_SEED.memBoot));
   const matCost = items.reduce((a, b) => a + (b.cost || 0), 0);
   return {
     tier: tier.tier,
@@ -3179,7 +3301,7 @@ function flatTierAssemblies(dims, sys, desc) {
   const ctx = ((sys || "") + " " + (desc || "")).toLowerCase();
   const membrane = flatMembraneOf(ctx);
   const reroof = /tear|re-?roof|existing|replace|remove|recover|overlay/.test(ctx);
-  const tiers = FLAT_TIERS.map(t => flatTierAssembly(dims, membrane, t, reroof)).filter(Boolean);
+  const tiers = FLAT_TIERS.map(t => flatTierAssembly(dims, membrane, t, reroof, ctx)).filter(Boolean);
   return tiers.length ? {
     membrane,
     tiers
@@ -3367,10 +3489,11 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
       qty: sqr(sq * 1.10),
       unit: "SQ"
     });
+    // NY code: TWO staggered layers of 3in polyiso (~R-34) — never a single layer; 3in priced as 3in board
     out.push({
       key: "iso",
-      name: "Polyiso insulation",
-      qty: sqr(sq),
+      name: "Polyiso insulation 3in x 2 staggered layers (R-34, NY code)",
+      qty: sqr(sq * 2),
       unit: "SQ"
     });
     out.push({
@@ -3381,10 +3504,10 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
     });
     out.push({
       key: "fast",
-      name: "Fasteners & plates",
-      qty: up(m.area / 1.6),
+      name: "Iso fasteners + plates (16/board, fully-adhered spec)",
+      qty: up(m.area / 2),
       unit: "ea"
-    });
+    }); // 16 per 32SF board
     out.push({
       key: "adh",
       name: "Bonding adhesive",
@@ -3403,15 +3526,28 @@ function computeRoofQuantities(dims, system, panelWidthIn) {
       qty: up(eaveRake),
       unit: "LF"
     });
+    // CAZA PERIMETER DETAIL: cap + continuous locker (same LF) + underplates at every 10ft seam
     if (eaveRake) out.push({
       key: "edge",
-      name: "Edge metal / drip / coping",
+      name: "Perimeter cap metal 24ga Kynar (custom fab, 10ft pcs)",
+      qty: up(eaveRake * 1.05),
+      unit: "LF"
+    });
+    if (eaveRake) out.push({
+      key: "locker",
+      name: "Continuous locker 24ga galvanized (full perimeter)",
       qty: up(eaveRake),
       unit: "LF"
     });
+    if (eaveRake) out.push({
+      key: "uplate",
+      name: "Underplates (one per 10ft cap seam)",
+      qty: up(eaveRake / 10),
+      unit: "ea"
+    });
     if (m.pens) out.push({
       key: "pen",
-      name: "Pipe boots / drains",
+      name: "Membrane pipe boots (pre-molded)",
       qty: m.pens,
       unit: "ea"
     });
@@ -3775,10 +3911,34 @@ const CAZA_MANUAL_DEFAULT = {
     note: "I&W grade follows the system: regular = asphalt, high-temp = steel. Neither product runs across the whole roof on a mixed job."
   }, {
     id: "cm_m_pipeflash",
-    role: "Pipe flashing",
+    role: "Pipe flashing (STEEP-slope shingle/metal only)",
     standard: "Lifetime Tool pipe flashing",
     subs: [],
-    note: ""
+    note: "Steep-slope only — flat/membrane roofs use pre-molded membrane boots, never these."
+  }, {
+    id: "cm_m_memboot",
+    role: "Pipe boots (flat/membrane roofs)",
+    standard: "Pre-molded membrane boots ONLY — Elevate QuickSeam (EPDM) / weldable TPO boots, ~$25-45/ea, clamped + lap-sealed or welded with the system",
+    subs: [],
+    note: "NEVER shingle-style Lifetime boots on membrane."
+  }, {
+    id: "cm_m_flatiso",
+    role: "Flat-roof insulation (NY energy code)",
+    standard: "TWO staggered layers of 3in polyiso (~R-34 total) on any tear-off-to-deck — never a single layer. Existing-insulation-stays jobs: add iso to bring the TOTAL assembly to >=R-34 and ask about the moisture survey.",
+    subs: [],
+    note: "Price 3in board AS 3in board — never build thickness from 1in sheet counts. Insulation labor scales with LAYER COUNT (2 layers = 2 passes)."
+  }, {
+    id: "cm_m_perimmetal",
+    role: "Perimeter edge/coping metal (Caza detail — all roofs)",
+    standard: "ASSEMBLY, not one line: 24ga Kynar cap metal (custom fab, 10ft pieces, full perimeter +5% waste) + galvanized 24ga continuous locker the SAME LF (cap hooks onto it) + underplates ONE at every 10ft seam (LF/10, round up) + fasteners per substrate (pancake screws into wood nailer / masonry fasteners into parapet)",
+    subs: [],
+    note: "Sheet-yield pricing (Roof Metals Supply inv #1851): $155.50 per 24ga Kynar 4x10 sheet, fab included — 9.5in cut = $3.11/LF, locker $1.79/LF, underplates $4.75/ea. National coping pricing ($28-45/LF) is ~4x Caza's real cost — do not use it."
+  }, {
+    id: "cm_m_fastdensity",
+    role: "Iso/coverboard fastening (flat roofs)",
+    standard: "Fully adhered (incl. SA) membrane: 16 fasteners + plates per 32SF board (top layer). Mechanically fastened: 6 per board PLUS 1 heavy-duty seam fastener per LF of membrane seam (seam LF = area / sheet width, not squares). Fastener length: stack above deck + penetration (steel +1in past flute; wood + deck + 1in), rounded UP to stocked 3/4/5/6/7/8in. Structural concrete = masonry anchors; gypsum/tectum = specialty toggles — flag both for manual pricing.",
+    subs: [],
+    note: "Field-rate density — verify perimeter/corner enhancement per the Elevate zone tables (detail book pending)."
   }, {
     id: "cm_m_cedartrim",
     role: "Cedar siding trim / J-channel",
@@ -3813,6 +3973,10 @@ const CAZA_MANUAL_DEFAULT = {
       id: "cm_v_ss",
       name: "Standing-seam panel supplier",
       note: "standing-seam metal"
+    }, {
+      id: "cm_v_rms",
+      name: "Roof Metals Supply",
+      note: "metal fab (Utica) — 4x10 sheet-yield pricing, 24ga Fabral Kynar"
     }],
     brands: [{
       id: "cm_b_oc",
@@ -4172,7 +4336,8 @@ async function callClaudeBackground(messages, opts) {
         maxTokens: opts.maxTokens || 4000,
         search: !!opts.search,
         trade: opts.trade || "",
-        priceBook: opts.priceBook || null
+        priceBook: opts.priceBook || null,
+        standingRules: opts.standingRules || null
       })
     });
   } catch (e) {
@@ -6630,7 +6795,8 @@ function App() {
       search: true,
       maxTokens: 4000,
       trade: mkey,
-      priceBook: enginePriceBookPayload()
+      priceBook: enginePriceBookPayload(),
+      standingRules: activeRuleTexts(mkey)
     });
     const d = parseJSON(text);
     let items = Array.isArray(d.items) ? d.items.map(it => ({
@@ -6962,6 +7128,8 @@ function App() {
       if (ests && ests.length) setEstimates(ests);
       const cjs = await pGet(COSTJOBS_KEY);
       if (Array.isArray(cjs)) setCostJobs(cjs);
+      const srs = await pGet(STANDING_RULES_KEY);
+      if (Array.isArray(srs)) setStandingRules(srs);
       const cjd = await pGet(CJ_DISMISSED_KEY);
       if (cjd && typeof cjd === "object") cjDismissedRef.current = cjd;
       const pna = await pGet(PERSONA_KEY);
@@ -7836,7 +8004,7 @@ function App() {
   };
   const AL_HOUSE_SYS = (ctx, voice) => {
     const tradeMenu = HOUSE_STATES.map(s => CAT_LABEL[s.key] + ": " + HOUSE_HOTSPOTS.filter(h => h.state === s.key).map(h => h.label + " (key=" + h.trade + ")").join(", ")).join("\n");
-    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " + "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " + "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " + (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") + "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" + "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " + "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " + "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " + "SCOPE PARTITION (critical — each physical item belongs to EXACTLY ONE trade, never counted in two): when one physical item could touch several trades, assign it to ONE owning trade and do NOT also list it under others. The cedar boards on a cedar-siding job belong to Siding ONLY — not also Trim or Paint. A PVC drain line belongs to Plumbing ONLY — not also Trim. A gutter splash-guard / drainage piece with no dedicated trade → assign it to ONE block, don't scatter it. Do NOT stand up a finish/paint trade unless the contractor EXPLICITLY asked to paint or finish — never invent a phantom 'repaint'. For each trade you put in `select`, also set `scope` to a short line describing ONLY that trade's slice of the work (e.g. Siding scope: 'cedar bevel siding + cedar starter, 120 SF') so each block bids only what it owns, exactly once. " + "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\", \"scope\": one-line description of THIS trade's slice of the work only (else \"\")}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false}";
+    return "You are AL, the estimator INSIDE the CazBid app — named after the grandfather who founded Caza Contractors: a sharp, plain-spoken foreman who takes down a job estimate by talking with the contractor. You are NOT a developer, planner, or assistant that asks permission to \"build\" anything — there is no \"build\" to approve. Your only job is to capture a roofing/exterior construction estimate by conversation. " + "HOW YOU WORK — the contractor talks in plain language and you ACT on it. Their WORDS are the input: NEVER tell them to click, tap, press, or select a button. If they name a trade, YOU select it (put it in `select`). If they give a number, you record it. Gather ONE thing at a time — ask one question, get the answer, move on; never present a list to click. " + "READ BACK what you capture before you rely on it — short and confirmable ('west slope ten twelve, valley into the dormer — got it?'): they may be driving and the readback is how a wrong number gets caught. Always confirm pitches, measurements, and material types this way. Talk like a foreman — plain, efficient, contractor number-speak ('ten twelve pitch', 'twenty-two squares', 'forty-eight thousand'); not chatty, not a salesbot. Stay in the home-construction estimating lane; if asked something off-topic, steer back. " + (voice ? "VOICE MODE — they're hands-free, often driving, and your reply is READ ALOUD: ONE short spoken sentence; read back any number they just gave; say numbers like a foreman; never read a list aloud; no emojis, symbols, or markdown (it gets spoken literally). " : "") + "SELECTING THE WORK (from their words — never make them click): when the contractor names what they're doing, put the matching trade key(s) in `select` and move forward. Available trades by category:\n" + tradeMenu + "\n" + "Examples: 'I'm doing flooring' -> select [{trade:\"flooring\"}], then ask the next flooring question. 'It's a reroof, standing seam' -> select [{trade:\"roofing\",type:\"Standing-seam metal\"}]. 'Roof and gutters' -> select roofing and trim. If their words don't clearly match a trade, ask a SHORT clarifying question — do NOT fall back to 'click the trade'. " + "LOCK IN MATERIALS: whenever the contractor states a material or system for a trade — even one already selected (e.g. they just say 'standing seam' or 'twenty-four gauge') — include {trade, type} in `select` so it's committed to the estimate. Never rely on re-reading the conversation to remember the material; if the context shows a trade with 'no type chosen yet' and they've told you one, set it now. " + "If the contractor asks to CHANGE/SWITCH a material for an already-selected trade, set materialChange {trade:key,type} and confirm it. Capture the CUSTOMER NAME and JOB ADDRESS whenever spoken (customer / address). " + "SCOPE PARTITION (critical — each physical item belongs to EXACTLY ONE trade, never counted in two): when one physical item could touch several trades, assign it to ONE owning trade and do NOT also list it under others. The cedar boards on a cedar-siding job belong to Siding ONLY — not also Trim or Paint. A PVC drain line belongs to Plumbing ONLY — not also Trim. A gutter splash-guard / drainage piece with no dedicated trade → assign it to ONE block, don't scatter it. Do NOT stand up a finish/paint trade unless the contractor EXPLICITLY asked to paint or finish — never invent a phantom 'repaint'. For each trade you put in `select`, also set `scope` to a short line describing ONLY that trade's slice of the work (e.g. Siding scope: 'cedar bevel siding + cedar starter, 120 SF') so each block bids only what it owns, exactly once. " + "STANDING RULES — when the contractor states a lasting requirement ('from now on…', 'always…', 'new code says…', 'never use X on Y'), that's a STANDING RULE to save, not a one-job note: restate it as ONE clean factual sentence with any code/warranty source, infer the scope (a specific trade key from the list, or global), and set standingRule {text, scope}; the app confirms before saving. Rules are KNOWLEDGE (codes, warranty terms, approved products, supplier notes, always-include lines). DECLINE to save anything that changes deterministic math or the app itself (margin formula, fastener-length calc, new input fields) — say that needs an app update and suggest a one-line spec for the queue. " + "FINISHING — confirm details as you go; do NOT hoard a sign-off. When the job is fully captured (every selected trade sized) AND the contractor signals they're done — they say that's everything / save it / send it, OR you ask ONCE 'anything else, or want me to save it?' and they say yes — set save=true. That SAVES the estimate; it is the only commit. Do NOT re-summarize the whole scope and ask to 'build' it. Once the context says the estimate is already saved, do NOT ask again — just tell them it's saved. " + "JOB CONTEXT (authoritative — never contradict it):\n" + ctx + "\n" + "Reply with ONLY raw JSON, no markdown: {\"message\": your reply (1-2 sentences), \"select\": [{\"trade\": a trade key from the list above, \"type\": material/system if they named one else \"\", \"scope\": one-line description of THIS trade's slice of the work only (else \"\")}] for trades they named THIS turn (else []), \"dims\": any NEW measurements as one compact string (e.g. \"west slope 8/12, 102 sq\") else \"\", \"inputs\": {tradeKey:{field:number}} only for a concrete dimension given (siding,concrete,drywall,trim,insulation,electrical,plumbing,hvac,framing) else {}, \"materialChange\": {\"trade\":key,\"type\":new} only on a change request else null, \"customer\": name if given else \"\", \"address\": address if given else \"\", \"save\": true ONLY when they confirm the finished estimate should be saved, else false, \"standingRule\": {\"text\": one clean dated-worthy rule sentence, \"scope\": trade key or \"global\"} ONLY when they stated a lasting requirement this turn, else null}";
   };
   const alOpener = () => {
     const sel = Object.keys(houseScope);
@@ -8367,6 +8535,19 @@ function App() {
       if (d.save === true && Object.keys(houseScope).length && estBusy !== "run" && !(estResult && estResult.trades && estResult.trades.length)) {
         buildUnifiedEstimate();
       }
+      // STANDING RULE capture — AL proposed one; confirm (never silent), check conflicts, respect the budget.
+      if (d.standingRule && d.standingRule.text) {
+        try {
+          const txt = String(d.standingRule.text).trim().slice(0, 300);
+          const scope = SR_SCOPES.indexOf(d.standingRule.scope) >= 0 ? d.standingRule.scope : "global";
+          const toks = txt.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+          const conflict = standingRules.find(r => r.active && toks.filter(w => r.text.toLowerCase().includes(w)).length >= Math.max(3, Math.floor(toks.length / 2)));
+          const q = conflict ? "A similar rule exists:\n\u201c" + conflict.text + "\u201d\n\nREPLACE it with:\n\u201c" + txt + "\u201d (" + scope + ")?\n\n(Cancel keeps both unsaved — nothing stacks silently.)" : "Save standing rule (" + scope + ")?\n\n\u201c" + txt + "\u201d\n\nIt will be injected into every future " + (scope === "global" ? "estimate" : scope + " estimate") + ".";
+          if (window.confirm(q)) {
+            if (srAdd(txt, scope, conflict ? conflict.id : null)) flash("Standing rule saved — it now rides into every " + (scope === "global" ? "" : scope + " ") + "estimate.");
+          }
+        } catch (e) {/* rule capture never breaks the conversation */}
+      }
       return;
     } catch (e) {
       setAlThread([...msgs, {
@@ -8534,7 +8715,8 @@ function App() {
           search: true,
           maxTokens: 5000,
           trade: __manualKey,
-          priceBook: enginePriceBookPayload()
+          priceBook: enginePriceBookPayload(),
+          standingRules: activeRuleTexts(__manualKey)
         });
       } // 5000: assemblyWalk adds ~300-800 output tokens
       catch (e1) {
@@ -8545,7 +8727,8 @@ function App() {
           search: true,
           maxTokens: 5000,
           trade: __manualKey,
-          priceBook: enginePriceBookPayload()
+          priceBook: enginePriceBookPayload(),
+          standingRules: activeRuleTexts(__manualKey)
         });
       }
       const __manualLoaded = !!__LAST_MANUAL_USED;
@@ -8976,7 +9159,8 @@ function App() {
             model: "claude-opus-4-8",
             endpoint: "estimate-background",
             laborSource: laborSrc,
-            rateFloored: !!__rateFloored
+            rateFloored: !!__rateFloored,
+            rulesApplied: activeRuleTexts(__manualKey)
           };
         })()
       };
@@ -9133,6 +9317,20 @@ function App() {
             [field]: val
           };
           const v = num(val);
+          if (field === "cutW") {
+            const y = sheetYield(v, it.sheetRate);
+            if (!y) return {
+              ...it,
+              cutW: v
+            };
+            return {
+              ...it,
+              cutW: v,
+              unitPrice: y.perLF,
+              cost: Math.round(y.perLF * (num(it.qty) || 0)),
+              priceNote: v + "in cut → " + y.pieces + "/sheet → $" + y.perLF + "/LF @ $" + (num(it.sheetRate) > 0 ? it.sheetRate : SHEET_RATE_24_KYNAR) + "/4x10 sheet"
+            };
+          }
           if (field === "qty") {
             const up = num(it.unitPrice);
             return {
@@ -10109,6 +10307,38 @@ function App() {
     setDiagLink("");
   };
   // ===== JOB COST TRACKING — state + handlers (store follows the estStore pattern: pGet/pSet, local-first) =====
+  // ===== STANDING RULES ("Tell AL") — user-writable knowledge layer on top of the manuals =====
+  // Precedence: standing rules > manual > model knowledge (rules are newer than the manual by
+  // definition). KNOWLEDGE only (codes, warranty terms, details, supplier notes) — deterministic
+  // math/UI stays code (AL declines those and suggests a spec one-liner).
+  const [standingRules, setStandingRules] = useState([]); // [{id,text,scope:"global"|tradeKey,createdDate,active}]
+  const saveStandingRules = nextOrFn => setStandingRules(prev => {
+    const next = typeof nextOrFn === "function" ? nextOrFn(prev) : nextOrFn;
+    pSet(STANDING_RULES_KEY, next);
+    return next;
+  });
+  const activeRulesChars = rules => (rules || []).filter(r => r.active).reduce((a, r) => a + String(r.text || "").length, 0);
+  const activeRuleTexts = tradeKey => standingRules.filter(r => r.active && (r.scope === "global" || r.scope === tradeKey)).map(r => String(r.text || "") + " (added " + (r.createdDate || "") + ")");
+  // ATOMIC add/replace: the budget check runs on the post-replace set BEFORE anything mutates, and
+  // a replace is ONE updater (never delete-then-maybe-fail-to-add). Text capped at 400 chars to
+  // match the server exactly — nothing silently truncates in flight.
+  const srAdd = (text, scope, replaceId) => {
+    const t = String(text || "").trim().slice(0, 400);
+    if (!t) return false;
+    const base = replaceId ? standingRules.filter(r => r.id !== replaceId) : standingRules;
+    if (activeRulesChars(base) + t.length > RULES_CHAR_BUDGET) {
+      flash("Standing rules are at the size cap — merge or retire stale rules first (Profile → Caza Manual). Nothing was changed.");
+      return false;
+    }
+    saveStandingRules(prev => [{
+      id: "sr" + rid(),
+      text: t,
+      scope: scope || "global",
+      createdDate: new Date().toISOString().slice(0, 10),
+      active: true
+    }, ...(replaceId ? prev.filter(r => r.id !== replaceId) : prev)]);
+    return true;
+  };
   const [costJobs, setCostJobs] = useState([]); // [{id,name,customerName,address,trade,planned{mats,labor,mh,contract},costs[],hoursLog[],burdenRate,laborFromHours,estimateId,afterTheFact,status,actualPerUnit?}]
   const [cjOpen, setCjOpen] = useState(null); // open job id (detail view on My Jobs)
   const [cjReceiptBusy, setCjReceiptBusy] = useState(false);
@@ -15321,6 +15551,127 @@ function App() {
     }, /*#__PURE__*/React.createElement(Plus, {
       size: 14
     }), " Add brand"));
+  })()), /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2"
+  }, "Standing rules ", /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, "tell AL once — applies to every estimate")), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: -2
+    }
+  }, "Teach AL new facts by talking to it (\"From now on, flat roofs need 2 layers of 3-inch iso\") — or add one here. Rules override the manual where they conflict. Knowledge only; math/app changes still need an update."), (() => {
+    const used = standingRules.filter(r => r.active).reduce((a, r) => a + String(r.text || "").length, 0);
+    const pct = Math.min(100, Math.round(used / RULES_CHAR_BUDGET * 100));
+    return /*#__PURE__*/React.createElement("div", {
+      className: "hint",
+      style: {
+        marginBottom: 6
+      }
+    }, standingRules.filter(r => r.active).length, " active · budget ", pct, "%", pct >= 80 ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#8A5A12",
+        fontWeight: 700
+      }
+    }, " — near the cap: merge or retire stale rules") : null);
+  })(), standingRules.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "6px 2px",
+      borderBottom: "1px solid #f0f0f0",
+      opacity: r.active ? 1 : 0.55
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!r.active,
+    title: r.active ? "Active — injected into estimates" : "Off — kept but not injected",
+    onChange: e => saveStandingRules(prev => prev.map(x => x.id === r.id ? {
+      ...x,
+      active: e.target.checked
+    } : x))
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      cursor: "pointer"
+    },
+    onClick: () => {
+      const n = window.prompt("Edit rule (max 400 chars)", r.text);
+      if (!n || !n.trim()) return;
+      const t = n.trim().slice(0, 400);
+      if (activeRulesChars(standingRules) - String(r.text || "").length + t.length > RULES_CHAR_BUDGET) {
+        flash("That edit exceeds the size cap — shorten it or retire another rule.");
+        return;
+      }
+      saveStandingRules(prev => prev.map(x => x.id === r.id ? {
+        ...x,
+        text: t
+      } : x));
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12.5
+    }
+  }, r.text), /*#__PURE__*/React.createElement("span", {
+    className: "hint",
+    style: {
+      display: "block"
+    }
+  }, r.scope === "global" ? "all trades" : r.scope, " · added ", r.createdDate)), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 6px"
+    },
+    onClick: () => {
+      if (window.confirm("Delete this rule?")) saveStandingRules(prev => prev.filter(x => x.id !== r.id));
+    }
+  }, "✕"))), standingRules.length === 0 && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No rules yet. Say one to AL (\"from now on…\") or add it here."), (() => {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("textarea", {
+      className: "desc",
+      rows: 2,
+      id: "srNewText",
+      placeholder: 'e.g. NY code: flat-roof insulation is 2 staggered layers of 3" polyiso (~R-34).'
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 4
+      }
+    }, /*#__PURE__*/React.createElement("select", {
+      id: "srNewScope",
+      className: "in",
+      style: {
+        maxWidth: 160
+      },
+      defaultValue: "global"
+    }, /*#__PURE__*/React.createElement("option", {
+      value: "global"
+    }, "All trades"), SR_SCOPES.map(t => /*#__PURE__*/React.createElement("option", {
+      key: t,
+      value: t
+    }, t.charAt(0).toUpperCase() + t.slice(1)))), /*#__PURE__*/React.createElement("button", {
+      className: "btn primary grow1",
+      onClick: () => {
+        const ta = document.getElementById("srNewText");
+        const sc = document.getElementById("srNewScope");
+        if (ta && ta.value.trim() && srAdd(ta.value.trim(), sc ? sc.value : "global")) {
+          ta.value = "";
+          flash("Standing rule saved.");
+        }
+      }
+    }, "＋ Add rule")));
   })())), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "secgroup accord" + (gOpen.al ? " open" : ""),
@@ -17315,7 +17666,16 @@ function App() {
         value: it.unit,
         onChange: e => estItemSet(ti, i, "unit", e.target.value),
         placeholder: "unit"
-      }), /*#__PURE__*/React.createElement("span", {
+      }), it.fabMetal ? /*#__PURE__*/React.createElement("span", {
+        className: "todollar",
+        title: "cut width — inches of flat stock (incl. hems); $/LF derives from 4x10 sheet yield"
+      }, "✂", /*#__PURE__*/React.createElement("input", {
+        className: "tocost",
+        type: "number",
+        step: "0.5",
+        value: it.cutW || "",
+        onChange: e => estItemSet(ti, i, "cutW", e.target.value)
+      })) : null, /*#__PURE__*/React.createElement("span", {
         className: "todollar",
         title: "unit price"
       }, "$", /*#__PURE__*/React.createElement("input", {
