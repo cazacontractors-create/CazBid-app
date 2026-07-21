@@ -1046,6 +1046,22 @@ function deckTypeOf(s) {
 // Iso fastener length: thread must reach >=1in PAST the deck bottom, rounded UP to stocked
 // lengths. Steel (22-20ga): stack + ~1in past the flute. Wood: stack + deck (~3/4in) + 1in.
 // Concrete/gypsum: different fastener family entirely — never standard HD screws.
+// PRODUCTION-RATE SANITY (warn only, never block): plausible MH-per-unit ranges keyed by unit.
+// Real incident: BUR removal entered 0.24 (meant 0.24 sq/hr = 4.17 MH/sq) — engine read 0.24 MH/sq,
+// underbidding an 84-sq tear-off ~17x (20 hrs instead of ~350). Known intentional outliers exist
+// (SS ridge cap 1.0 MH/LF is CORRECT) — hence sanityAck, never auto-"fixing".
+const RATE_SANITY = { sq: [0.1, 8], sqft: [0.005, 0.3], sf: [0.005, 0.3], lf: [0.01, 1.5], ea: [0.1, 6], pc: [0.1, 6], pcs: [0.1, 6] };
+// TASK-AWARE override (the spec's "per-category overrides"): per-sq TEAR-OFF/REMOVAL work never
+// runs under ~0.8 MH/sq — this is what catches the inverted BUR 0.24 without false-flagging legit
+// accessory rates (underlayment 0.15/sq, I&W 0.25/sq) that live inside the generic sq range.
+const rateSanityOf = (unit, task) => {
+  const u = String(unit || "").trim().toLowerCase();
+  const base = RATE_SANITY[u] || null;
+  if (base && u === "sq" && /tear.?off|remov|demo/i.test(String(task || ""))) return [0.8, 8];
+  return base;
+};
+const rateRecip = (v) => (num(v) > 0 ? Math.round((1 / num(v)) * 1000) / 1000 : 0);
+const rateOutOfRange = (r) => { const s = rateSanityOf(r.unit, r.task); return !!(s && !r.sanityAck && (num(r.rate) < s[0] || num(r.rate) > s[1])); };
 const FASTENER_STOCK = [3, 4, 5, 6, 7, 8, 10, 12];
 function isoFastenerLength(stackIn, deck) {
   if (!(stackIn > 0)) return null;
@@ -4926,6 +4942,32 @@ function App() {
   };
   const savePriceBook = (next) => { setPriceBook(next); pSet(PRICEBOOK_KEY, next); };
   const saveRateBook = (next) => { setRateBook(next); pSet(RATEBOOK_KEY, next); };
+  // RATE ENTRY direction toggle + draft buffer: canonical stored value stays MH/unit; "units/hr"
+  // entries convert (1/value, 3 decimals) on blur. Entry aid only — engine/CSV unchanged.
+  const [rtDraft, setRtDraft] = useState(null); // {id, raw, dir: "mh"|"upmh"} for the row being edited
+  const [rtAuditOpen, setRtAuditOpen] = useState(false);
+  const rtCommit = (r) => {
+    const d = rtDraft; if (!d || d.id !== r.id) return;
+    const v = num(d.raw);
+    if (!(v > 0)) { if (String(d.raw).trim() !== "") flash("Rate must be greater than 0 — nothing saved."); setRtDraft(null); return; }
+    const canonical = Math.round((d.dir === "upmh" ? 1 / v : v) * 1000) / 1000;
+    saveRateBook(rateBook.map((x) => (x.id === r.id ? { ...x, rate: canonical } : x)));
+    setRtDraft(null); // field re-displays canonical in hrs/unit mode
+  };
+  const rtAck = (id) => saveRateBook(rateBook.map((x) => (x.id === id ? { ...x, sanityAck: true } : x)));
+  const rtUseRecip = (r) => saveRateBook(rateBook.map((x) => (x.id === r.id ? { ...x, rate: rateRecip(r.rate), sanityAck: false } : x)));
+  // near-duplicate pairs (same unit, >=2 shared significant task tokens) — surfaced, never auto-deleted
+  const rtDupPairs = () => {
+    const toks = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((t) => t.length > 3 && ["layer", "install", "steep"].indexOf(t) < 0);
+    const out = [];
+    for (let i = 0; i < rateBook.length; i++) for (let j = i + 1; j < rateBook.length; j++) {
+      const a = rateBook[i], b = rateBook[j];
+      if (String(a.unit).toLowerCase() !== String(b.unit).toLowerCase()) continue;
+      const bt = new Set(toks(b.task));
+      if (toks(a.task).filter((t) => bt.has(t)).length >= 2) out.push([a, b]);
+    }
+    return out.slice(0, 8);
+  };
   // contractor material-cost CSV: columns like name,unit,cost (header row auto-detected)
   const handleMatCsv = async (file) => {
     if (!file) return;
@@ -7472,17 +7514,61 @@ function App() {
             {bookOpen === "rate" && (
               <div className="bookbody">
                 <p className="hint">Man-hours per unit of installed work (sq = 100 sqft). These drive the labor hours the estimator builds. Tune to YOUR crews.</p>
+                {/* RATE AUDIT — persistent until every flag is resolved/acked; duplicates surfaced, never auto-deleted */}
+                {(() => { const flags = rateBook.filter(rateOutOfRange); const dups = rtAuditOpen ? rtDupPairs() : []; return (flags.length > 0 || rtAuditOpen) ? (
+                  <div style={{ marginBottom: 8, padding: "8px 11px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 12.5, color: "#8A5A12" }}>📋 Rate review{flags.length ? " — " + flags.length + " unusual rate" + (flags.length === 1 ? "" : "s") : " — no unusual rates"} <button className="btn ghost" style={{ padding: "1px 8px", fontSize: 11.5, marginLeft: 6 }} onClick={() => setRtAuditOpen((o) => !o)}>{rtAuditOpen ? "hide" : "review"}</button></div>
+                    {rtAuditOpen && flags.map((r) => { const s = rateSanityOf(r.unit, r.task); return (
+                      <div key={r.id} style={{ fontSize: 11.5, marginTop: 4 }}>
+                        <b>{r.task}</b> — {r.rate} MH/{r.unit} (typical {s[0]}–{s[1]}) · reciprocal {rateRecip(r.rate)}
+                        <button className="btn ghost" style={{ padding: "1px 8px", fontSize: 11, marginLeft: 6 }} onClick={() => rtUseRecip(r)}>Use {rateRecip(r.rate)}</button>
+                        <button className="btn ghost" style={{ padding: "1px 8px", fontSize: 11, marginLeft: 4 }} onClick={() => rtAck(r.id)}>✓ Keep</button>
+                      </div>
+                    ); })}
+                    {rtAuditOpen && dups.length > 0 && (
+                      <div style={{ marginTop: 6, fontSize: 11.5 }}>
+                        <b>Possible duplicates</b> <span className="hint">— pick which survives (delete via × in the list; nothing auto-deletes):</span>
+                        {dups.map(([x, y], i) => (<div key={i} style={{ marginTop: 2 }}>• “{x.task}” ({x.rate}/{x.unit}) ↔ “{y.task}” ({y.rate}/{y.unit})</div>))}
+                      </div>
+                    )}
+                  </div>
+                ) : null; })()}
                 {[...new Set(rateBook.map((r) => r.cat))].map((cat) => (
                   <div key={cat} className="bookcat">
                     <div className="bookcathd">{cat}</div>
-                    {rateBook.filter((r) => r.cat === cat).map((r) => (
-                      <div className="bookrow" key={r.id}>
+                    {rateBook.filter((r) => r.cat === cat).map((r) => {
+                      const ed = rtDraft && rtDraft.id === r.id ? rtDraft : null;
+                      const rawV = ed ? num(ed.raw) : 0;
+                      const mh = ed && rawV > 0 ? (ed.dir === "upmh" ? 1 / rawV : rawV) : 0;
+                      const s = rateSanityOf(r.unit, r.task);
+                      const flagged = rateOutOfRange(r);
+                      return (
+                      <React.Fragment key={r.id}>
+                      <div className="bookrow">
                         <input className="in bkname" value={r.task} onChange={(e) => saveRateBook(rateBook.map((x) => x.id === r.id ? { ...x, task: e.target.value } : x))} />
                         <input className="in bkunit" value={r.unit} onChange={(e) => saveRateBook(rateBook.map((x) => x.id === r.id ? { ...x, unit: e.target.value } : x))} />
-                        <input className="in bkval" type="number" inputMode="decimal" step="0.01" value={r.rate} onChange={(e) => saveRateBook(rateBook.map((x) => x.id === r.id ? { ...x, rate: num(e.target.value) } : x))} />
+                        {/* DIRECTION TOGGLE — entry aid only; stored value is ALWAYS canonical MH/unit */}
+                        <button type="button" className="btn ghost" style={{ padding: "1px 6px", fontSize: 10, fontWeight: (!ed || ed.dir === "mh") ? 700 : 400, borderColor: (!ed || ed.dir === "mh") ? "#14a04a" : undefined }} title="the number you type = hours per unit (stored as-is)" onClick={() => setRtDraft({ id: r.id, raw: ed ? ed.raw : String(r.rate), dir: "mh" })}>hrs/{r.unit || "unit"}</button>
+                        <button type="button" className="btn ghost" style={{ padding: "1px 6px", fontSize: 10, fontWeight: (ed && ed.dir === "upmh") ? 700 : 400, borderColor: (ed && ed.dir === "upmh") ? "#14a04a" : undefined }} title="the number you type = units per hour (converted to hrs/unit on save)" onClick={() => setRtDraft({ id: r.id, raw: ed ? ed.raw : "", dir: "upmh" })}>{r.unit || "unit"}/hr</button>
+                        <input className="in bkval" type="number" inputMode="decimal" step="0.01" value={ed ? ed.raw : r.rate} onFocus={() => { if (!ed) setRtDraft({ id: r.id, raw: String(r.rate), dir: "mh" }); }} onChange={(e) => setRtDraft({ id: r.id, raw: e.target.value, dir: ed ? ed.dir : "mh" })} onBlur={() => rtCommit(r)} />
                         <button className="dimx" onClick={() => saveRateBook(rateBook.filter((x) => x.id !== r.id))}>×</button>
                       </div>
-                    ))}
+                      {/* LIVE PREVIEW — reads back both directions + a 100-unit gut check, so an inverted entry is obvious */}
+                      {ed && rawV > 0 && (() => { const mh3 = Math.round(mh * 1000) / 1000; const uph = Math.round((1 / mh) * 100) / 100; const h100 = Math.round(mh * 100); return (
+                        <div className="hint" style={{ margin: "-2px 0 4px 2px", fontSize: 11.5 }}>= {mh3} hrs per {r.unit || "unit"} · {uph} {r.unit || "unit"} per hr · 100 {r.unit || "unit"} ≈ {h100} hrs (~{Math.round(h100 / 8)} man-days)</div>
+                      ); })()}
+                      {/* SANITY (warn only): out of the plausible range for this unit — offer the reciprocal, allow ack */}
+                      {flagged && !ed && (
+                        <div style={{ margin: "-2px 0 6px 2px", padding: "6px 9px", background: "#FFF7E6", border: "1px solid #F2C98A", borderRadius: 8, fontSize: 11.5, color: "#8A5A12" }}>
+                          ⚠️ {r.rate} is unusual for {r.unit} tasks (typical {s[0]}–{s[1]} MH/{r.unit}). Double-check direction — did you mean {rateRecip(r.rate)}?
+                          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                            <button className="btn ghost" style={{ padding: "2px 9px", fontSize: 11.5 }} onClick={() => rtUseRecip(r)}>Use {rateRecip(r.rate)}</button>
+                            <button className="btn ghost" style={{ padding: "2px 9px", fontSize: 11.5 }} onClick={() => rtAck(r.id)}>✓ Keep — it's right</button>
+                          </div>
+                        </div>
+                      )}
+                      </React.Fragment>
+                    ); })}
                   </div>
                 ))}
                 <button className="btn ghost full" onClick={() => saveRateBook([...rateBook, { id: "u-" + rid(), cat: "Custom", task: "New task", unit: "sq", rate: 1 }])}>+ Add task</button>
