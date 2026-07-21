@@ -2692,6 +2692,30 @@ function App() {
     downloadText(csv, "caza-stale-prices-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
   };
   const openStaleSheet = () => { if (!staleRows().length) { flash("No stale prices — everything's up to date."); return; } setStaleSheetOpen(true); };
+  // FULL EXPORTS — every material price across all three stores (with provenance + whether the row
+  // actually WINS the enginePB-first dedup) and the whole production rate book. Same precedence walk
+  // as contractorPriceBook so "In use = yes" rows are exactly what estimates price from.
+  const exportAllPricesCSV = () => {
+    const seen = new Set(); const rows = [];
+    const push = (source, trade, cat, name, unit, cost, supplier, updated) => {
+      const nm = String(name || "").trim(); if (!nm || !(num(cost) > 0)) return;
+      const k = nm.toLowerCase(); const inUse = !seen.has(k); if (inUse) seen.add(k);
+      rows.push([source, inUse ? "yes" : "no (shadowed)", trade || "", cat || "", nm, unit || "", num(cost), supplier || "", updated || ""]);
+    };
+    (enginePB || []).forEach((e) => push("governed", e.trade, e.category, e.material, e.unit, e.unitCost, priceSupplier(e), priceDate(e) || "unknown"));
+    (matCosts || []).forEach((m) => push("legacy", "", "", m.name, m.unit, m.cost, "", ""));
+    (priceBook || []).forEach((p) => push("seed", "", p.cat, p.name, p.unit, p.price, "", ""));
+    if (!rows.length) { flash("No material prices to export yet."); return; }
+    const csv = ["Source,In use,Trade,Category,Material,Unit,$/unit,Supplier,Last updated"].concat(rows.map((r) => r.map(csvCell).join(","))).join("\n");
+    downloadText(csv, "cazbid-material-costs-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
+    flash(rows.length + " material prices exported (" + rows.filter((r) => r[1] === "yes").length + " in use).");
+  };
+  const exportRatesCSV = () => {
+    if (!rateBook.length) { flash("No production rates to export."); return; }
+    const csv = ["Category,Task,Unit,MH per unit"].concat(rateBook.map((r) => [r.cat || "", r.task || "", r.unit || "", num(r.rate) || 0].map(csvCell).join(","))).join("\n");
+    downloadText(csv, "cazbid-production-rates-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
+    flash(rateBook.length + " production rates exported.");
+  };
   const printStaleSheet = () => {
     const prev = document.title; document.title = "Caza — prices to reprice (" + new Date().toISOString().slice(0, 10) + ")";
     let done = false; const restore = () => { if (done) return; done = true; document.title = prev; window.removeEventListener("afterprint", restore); };
@@ -7292,6 +7316,11 @@ function App() {
               </div>
             )}
             <button className="btn ghost full" style={{ marginTop: 6 }} onClick={() => setWhPbOpen((o) => !o)}>{whPbOpen ? "▾ Hide price book" : "▸ View / edit price book"}</button>
+            {/* FULL CSV EXPORTS — every material price (all stores, provenance + in-use) and all production rates */}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button className="btn ghost grow1" onClick={exportAllPricesCSV}>⬇ Materials CSV <span className="hint">all sources</span></button>
+              <button className="btn ghost grow1" onClick={exportRatesCSV}>⬇ Production rates CSV</button>
+            </div>
           </section>
           {whPbOpen && (
             <div className="card" style={{ marginTop: 10 }}>
