@@ -54,6 +54,13 @@ export default async (req) => {
         if (!pin) return json({ error: "pin required" }, 400);
         return json({ jobs: jobs.filter((j) => j.active !== false && j.pin === pin).map(pubJob) });
       }
+      if (op === "all") {
+        // SCHEDULE VIEW: any crew member with a valid code can SEE the whole active board
+        // (name/trade/estimated man-hours — no pins, no cost on jobs that aren't theirs).
+        // Logging stays locked to jobs whose code they hold.
+        if (!pin || !jobs.some((j) => j.active !== false && j.pin === pin)) return json({ error: "a valid crew code is required" }, 403);
+        return json({ jobs: jobs.filter((j) => j.active !== false).map((j) => ({ id: j.id, name: j.name, trade: j.trade || "", estHours: N(j.estHours), mine: j.pin === pin, estCost: j.pin === pin ? N(j.estCost) : 0 })) });
+      }
       if (op === "log") {
         const jobId = S(url.searchParams.get("job"), 40);
         const job = jobs.find((j) => j.id === jobId);
