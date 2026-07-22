@@ -14030,7 +14030,63 @@ function App() {
       marginTop: 6
     },
     onClick: empAdd
-  }, "＋ Add employee"))), cjOpen && (() => {
+  }, "＋ Add employee"), crewBoard.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      borderTop: "1px solid #eee",
+      paddingTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "hint",
+    style: {
+      fontWeight: 700
+    }
+  }, "On crew phones right now:"), crewBoard.map(bj => /*#__PURE__*/React.createElement("div", {
+    key: bj.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "4px 0",
+      fontSize: 12.5
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, bj.name, costJobs.some(x => x.id === bj.id) ? "" : " · (crew-app only)", bj.estHours > 0 ? " · " + Math.round(bj.estHours) + " MH" : ""), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 9px",
+      fontSize: 11.5
+    },
+    onClick: async () => {
+      if (!window.confirm("Remove “" + bj.name + "” from all crew phones? (Its activity log is kept; re-link brings it back.)")) return;
+      try {
+        const r = await fetch("/.netlify/functions/crew", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            op: "close",
+            jobId: bj.id,
+            pin: cjBossPin()
+          })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "failed");
+        setCrewBoard(b => b.filter(x => x.id !== bj.id));
+        flash("“" + bj.name + "” removed from crew phones.");
+      } catch (e) {
+        flash("Couldn't remove — " + errMsg(e));
+      }
+    }
+  }, "✕ Remove")))))), cjOpen && (() => {
     const job = costJobs.find(j => j.id === cjOpen);
     if (!job) return null;
     const act = cjTotals(job);
