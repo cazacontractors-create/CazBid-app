@@ -135,7 +135,10 @@ export default async (req) => {
       const jobs = (await store.get("jobs", { type: "json" })) || [];
       const empsC = (await store.get("employees", { type: "json" })) || [];
       const job = jobs.find((j) => j.id === jobId);
-      if (!canLog(job, empsC, pin)) return json({ error: "not found" }, 404);
+      // auth: the job's own code / an assigned employee — OR any JOB code (boss/foreman
+      // credential, same gate as emp-list; cleans up stray test jobs from the main app).
+      const bossCred = jobs.some((j) => j.pin === pin);
+      if (!job || (!canLog(job, empsC, pin) && !bossCred)) return json({ error: "not found" }, 404);
       job.active = false;
       await store.setJSON("jobs", jobs);
       return json({ ok: true });
