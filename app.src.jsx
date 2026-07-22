@@ -4855,6 +4855,43 @@ function App() {
       flash("Linked — crew joins with code “" + p + "” at cazbid-crew.netlify.app.");
     } catch (e) { flash("Couldn't link — " + errMsg(e) + (String(e && e.message || "").indexOf("404") >= 0 ? " (crew endpoint not deployed yet?)" : "")); }
   };
+  // CREW ACTIVITY — read what the crew logged (GET ?op=log) and pull it into job costing.
+  // "Synced" on the crew phone means it's IN the store; this panel is where it shows up.
+  const [cjCrewLog, setCjCrewLog] = useState(null); // {jobId, entries, err, busy}
+  const fetchCrewLog = async (job) => {
+    if (!job || !job.crewPin) return;
+    setCjCrewLog({ jobId: job.id, entries: [], busy: true });
+    try {
+      const r = await fetch("/.netlify/functions/crew?op=log&job=" + encodeURIComponent(job.id) + "&pin=" + encodeURIComponent(job.crewPin));
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "load failed");
+      setCjCrewLog({ jobId: job.id, entries: Array.isArray(d.entries) ? d.entries : [], busy: false });
+    } catch (e) { setCjCrewLog({ jobId: job.id, entries: [], err: errMsg(e), busy: false }); }
+  };
+  useEffect(() => { const j = costJobs.find((x) => x.id === cjOpen); if (j && j.crewPin) fetchCrewLog(j); else setCjCrewLog(null); }, [cjOpen]); // eslint-disable-line
+  // Pull NEW crew entries into the job's actuals — dedup by crew entry id (j.crewImported), so
+  // repeat pulls are safe. Costs -> costs[]; timers/hours -> hoursLog (task+qty kept for the
+  // rate-book view); COs -> DRAFT change orders (Dustin approves via the existing CO flow).
+  const cjPullCrew = (job) => {
+    const log = (cjCrewLog && cjCrewLog.jobId === job.id) ? cjCrewLog.entries : [];
+    const done = (job.crewImported || {});
+    const fresh = log.filter((e) => e && e.id && !done[e.id]);
+    if (!fresh.length) { flash("Nothing new from the crew."); return; }
+    cjUpdate(job.id, (j) => {
+      const imp = Object.assign({}, j.crewImported || {});
+      const costs = (j.costs || []).slice(); const hoursL = (j.hoursLog || []).slice(); const cos = (j.changeOrders || []).slice();
+      fresh.forEach((e) => {
+        imp[e.id] = true;
+        const day = String(e.date || e.at || "").slice(0, 10);
+        if (e.kind === "cost") costs.unshift({ id: "cw-" + e.id, date: day, vendor: String(e.supplier || ""), amount: Math.round(num(e.amount) * 100) / 100, category: CJ_CATS.indexOf(e.category) >= 0 ? e.category : "Other", note: (e.note ? String(e.note) + " — " : "") + (e.crewName || "crew"), source: "crew", photo: null });
+        else if (e.kind === "timer") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.crewCount) || 1, hrs: num(e.hours) || 0, mh: num(e.manHours) || 0, task: String(e.task || ""), qty: num(e.qty) || 0, unit: String(e.unit || ""), note: (e.task || "task") + (num(e.qty) > 0 ? " — " + e.qty + " " + e.unit : "") + " (" + (e.crewName || "crew") + ")" });
+        else if (e.kind === "hours") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.guys) || 1, hrs: num(e.hoursEach) || 0, mh: num(e.manHours) || 0, note: (e.note ? String(e.note) + " " : "") + "(" + (e.crewName || "crew") + ")" });
+        else if (e.kind === "co") cos.unshift({ id: "cw-" + e.id, date: day, title: String(e.description || "Crew change order").slice(0, 60), description: String(e.description || "") + " — submitted by " + (e.crewName || "crew"), price: num(e.estCost) || 0, expMaterials: 0, expLabor: 0, expManHours: 0, status: "draft", approvedDate: null, approvedNote: "", photo: null });
+      });
+      j.crewImported = imp; j.costs = costs; j.hoursLog = hoursL; j.changeOrders = cos;
+    });
+    flash(fresh.length + " crew entr" + (fresh.length === 1 ? "y" : "ies") + " pulled into job costing" + (fresh.some((e) => e.kind === "co") ? " — crew change orders land as DRAFTS for your review." : "."));
+  };
   // CLOSE + CALIBRATE: actual MH per primary unit vs the rate book, and one tap feeds the EXISTING
   // logActuals loop (dampened blending) — this is how non-roofing rates finally get validated.
   const cjCloseJob = (job) => {
@@ -6851,7 +6888,7 @@ function App() {
                 <div className="seclabel" style={{ marginTop: 10 }}>Man-hours log <span className="hint">total {act.mh} MH</span></div>
                 {(job.hoursLog || []).map((h) => (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f0f0f0", fontSize: 12.5 }}>
-                    <span style={{ flex: 1 }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}</span>
+                    <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}{h.note ? " · " + h.note : ""}</span>
                     <b>{h.mh} MH</b>
                     <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelHours(job.id, h.id)}>✕</button>
                   </div>
@@ -6898,6 +6935,33 @@ function App() {
                 ) : (
                   <button className="btn ghost full" style={{ marginTop: 8 }} onClick={() => cjCrewLink(job)}>👷 Link to crew app <span className="hint">make a crew code for this job</span></button>
                 )}
+                {/* CREW ACTIVITY — the crew log, live; Pull merges new entries into this job's actuals */}
+                {job.crewPin && (() => {
+                  const cl = (cjCrewLog && cjCrewLog.jobId === job.id) ? cjCrewLog : null;
+                  const entries = (cl && cl.entries) || [];
+                  const fresh = entries.filter((e) => e && e.id && !((job.crewImported || {})[e.id]));
+                  return (
+                    <div style={{ marginTop: 8, padding: "9px 11px", background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <b style={{ flex: 1, fontSize: 12.5 }}>👷 Crew activity {cl && cl.busy ? <span className="hint">loading…</span> : <span className="hint">{entries.length} entr{entries.length === 1 ? "y" : "ies"}{fresh.length ? " · " + fresh.length + " new" : ""}</span>}</b>
+                        <button className="btn ghost" style={{ padding: "2px 9px", fontSize: 11.5 }} onClick={() => fetchCrewLog(job)}>↻</button>
+                      </div>
+                      {cl && cl.err && <div className="hint" style={{ color: "#8A5A12", marginTop: 3 }}>Couldn't load: {cl.err}</div>}
+                      {entries.slice(0, 25).map((e) => (
+                        <div key={e.id} style={{ display: "flex", gap: 7, alignItems: "center", padding: "4px 0", borderBottom: "1px solid #e7ece8", fontSize: 12 }}>
+                          <span style={{ width: 20, textAlign: "center" }}>{e.kind === "cost" ? "🧾" : e.kind === "timer" ? "⏱" : e.kind === "hours" ? "🕐" : "🔀"}</span>
+                          <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {e.kind === "cost" ? $0(e.amount) + " " + (e.category || "") + (e.supplier ? " · " + e.supplier : "") : e.kind === "timer" ? (e.task || "task") + " — " + (e.manHours || 0) + " MH" + (num(e.qty) > 0 ? " / " + e.qty + " " + e.unit : "") : e.kind === "hours" ? (e.manHours || 0) + " MH" : "CO: " + String(e.description || "").slice(0, 50)}
+                            <span className="hint"> · {e.crewName || "crew"} · {String(e.at || e.receivedAt || "").slice(5, 16).replace("T", " ")}</span>
+                          </span>
+                          {!((job.crewImported || {})[e.id]) && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#8A5A12" }}>new</span>}
+                        </div>
+                      ))}
+                      {entries.length === 0 && !(cl && cl.busy) && <div className="hint" style={{ marginTop: 3 }}>Nothing logged by the crew yet.</div>}
+                      {fresh.length > 0 && <button className="btn primary full" style={{ marginTop: 6 }} onClick={() => cjPullCrew(job)}>⇩ Pull {fresh.length} new into job costing <span className="hint" style={{ color: "#fff", opacity: .85 }}>costs · hours · COs as drafts</span></button>}
+                    </div>
+                  );
+                })()}
                 {/* CLOSE + CALIBRATION — actuals flow into the EXISTING logActuals loop + rate-book blend */}
                 {job.status !== "closed" ? (
                   <button className="btn primary full" style={{ marginTop: 8 }} onClick={() => cjCloseJob(job)}>✓ Close job{act.total > 0 ? " — lock in " + $0(act.total) + " actual" : ""}</button>
