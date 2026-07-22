@@ -10872,6 +10872,75 @@ function App() {
     });
     flash(fresh.length + " crew entr" + (fresh.length === 1 ? "y" : "ies") + " pulled into job costing" + (fresh.some(e => e.kind === "co") ? " — crew change orders land as DRAFTS for your review." : "."));
   };
+  // CREW & CODES — per-employee personal codes + job delegation, managed from the main app.
+  // An employee code is a second way into the crew app: it opens exactly the jobs Dustin checks
+  // off here. Job codes keep working (nobody in the field gets locked out).
+  const [crewEmps, setCrewEmps] = useState(null); // server roster [{id,name,phone,pin,jobIds,active}]
+  const [crewBoard, setCrewBoard] = useState([]); // all server jobs (for assignment checkboxes)
+  const [cjEmpOpen, setCjEmpOpen] = useState(null); // expanded employee id
+  const cjBossPin = () => {
+    const j = costJobs.find(x => x.crewPin);
+    return j ? j.crewPin : null;
+  };
+  const empLoad = async () => {
+    const bp = cjBossPin();
+    if (!bp) {
+      flash("Link at least one job to the crew app first — the roster unlocks with a job code.");
+      return;
+    }
+    try {
+      const [r1, r2] = await Promise.all([fetch("/.netlify/functions/crew?op=emp-list&pin=" + encodeURIComponent(bp)), fetch("/.netlify/functions/crew?op=all&pin=" + encodeURIComponent(bp))]);
+      const d1 = await r1.json();
+      const d2 = await r2.json();
+      if (r1.ok && Array.isArray(d1.employees)) setCrewEmps(d1.employees);else setCrewEmps([]);
+      if (r2.ok && Array.isArray(d2.jobs)) setCrewBoard(d2.jobs);
+    } catch (e) {
+      flash("Couldn't load the crew roster — " + errMsg(e));
+    }
+  };
+  const empSave = async emp => {
+    try {
+      const r = await fetch("/.netlify/functions/crew", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          op: "emp-set",
+          employee: emp
+        })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "save failed");
+      setCrewEmps(es => {
+        const list = es || [];
+        const i = list.findIndex(x => x.id === d.employee.id);
+        return i >= 0 ? list.map(x => x.id === d.employee.id ? d.employee : x) : list.concat(d.employee);
+      });
+      return true;
+    } catch (e) {
+      flash("Couldn't save — " + errMsg(e));
+      return false;
+    }
+  };
+  const empAdd = async () => {
+    const name = window.prompt("Employee name:");
+    if (!name || !name.trim()) return;
+    const sugg = (name.trim().split(/\s+/)[0].replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "CREW").toUpperCase() + Math.floor(10 + Math.random() * 90);
+    const pin = window.prompt("Personal code for " + name.trim() + " (4+ characters — they join the crew app with this):", sugg);
+    if (pin == null) return;
+    if (String(pin).trim().length < 4) {
+      flash("Code needs 4+ characters.");
+      return;
+    }
+    if (await empSave({
+      name: name.trim(),
+      phone: "",
+      pin: String(pin).trim(),
+      jobIds: [],
+      active: true
+    })) flash("Added — now check off their jobs and text them the code.");
+  };
   // CLOSE + CALIBRATE: actual MH per primary unit vs the rate book, and one tap feeds the EXISTING
   // logActuals loop (dampened blending) — this is how non-roofing rates finally get validated.
   const cjCloseJob = job => {
@@ -13816,7 +13885,152 @@ function App() {
     }, a.total > 0 ? $0(a.total) : "—", a.contract > 0 ? /*#__PURE__*/React.createElement("span", {
       className: "hint"
     }, " / ", $0(a.contract)) : null));
-  })), cjOpen && (() => {
+  })), !cjOpen && /*#__PURE__*/React.createElement("section", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "h2",
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center"
+    }
+  }, "👷 Crew & codes ", /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "3px 10px",
+      fontSize: 12.5
+    },
+    onClick: empLoad
+  }, crewEmps === null ? "Load roster" : "↻")), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: -2
+    }
+  }, "Give each employee a personal code and check off their jobs — their crew app shows exactly what you assign. Job codes keep working too."), crewEmps !== null && /*#__PURE__*/React.createElement("div", null, crewEmps.map(em => /*#__PURE__*/React.createElement("div", {
+    key: em.id,
+    style: {
+      borderBottom: "1px solid #f0f0f0",
+      padding: "6px 0",
+      opacity: em.active ? 1 : 0.55
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      cursor: "pointer"
+    },
+    onClick: () => setCjEmpOpen(cjEmpOpen === em.id ? null : em.id)
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 13.5
+    }
+  }, "👷 ", em.name, !em.active ? " · off" : ""), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 800,
+      background: "#E4F2E9",
+      color: "#14532d",
+      borderRadius: 8,
+      padding: "2px 9px"
+    }
+  }, em.pin), /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, (em.jobIds || []).length, " job", (em.jobIds || []).length === 1 ? "" : "s", " ", cjEmpOpen === em.id ? "▾" : "▸")), cjEmpOpen === em.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      margin: "6px 0 4px 6px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 9px",
+      fontSize: 11.5
+    },
+    onClick: () => {
+      try {
+        navigator.clipboard.writeText(em.pin);
+        flash("Code copied — text it to " + em.name + ".");
+      } catch (e) {}
+    }
+  }, "Copy code"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 9px",
+      fontSize: 11.5
+    },
+    onClick: async () => {
+      const p = window.prompt("New personal code for " + em.name + ":", em.pin);
+      if (p && String(p).trim().length >= 4) await empSave({
+        ...em,
+        pin: String(p).trim()
+      });
+    }
+  }, "Change code"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    style: {
+      padding: "2px 9px",
+      fontSize: 11.5
+    },
+    onClick: () => empSave({
+      ...em,
+      active: !em.active
+    })
+  }, em.active ? "Turn off" : "Turn on")), /*#__PURE__*/React.createElement("div", {
+    className: "hint",
+    style: {
+      marginTop: 6,
+      fontWeight: 700
+    }
+  }, "Delegated jobs:"), crewBoard.map(bj => /*#__PURE__*/React.createElement("label", {
+    key: bj.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 7,
+      fontSize: 12.5,
+      padding: "3px 0",
+      cursor: "pointer"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: (em.jobIds || []).indexOf(bj.id) >= 0,
+    onChange: e => {
+      const set = new Set(em.jobIds || []);
+      if (e.target.checked) set.add(bj.id);else set.delete(bj.id);
+      empSave({
+        ...em,
+        jobIds: Array.from(set)
+      });
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis"
+    }
+  }, bj.name), bj.estHours > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "hint"
+  }, Math.round(bj.estHours), " MH"))), !crewBoard.length && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No crew-linked jobs yet — link jobs below first.")))), !crewEmps.length && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No employees yet."), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost full",
+    style: {
+      marginTop: 6
+    },
+    onClick: empAdd
+  }, "＋ Add employee"))), cjOpen && (() => {
     const job = costJobs.find(j => j.id === cjOpen);
     if (!job) return null;
     const act = cjTotals(job);
