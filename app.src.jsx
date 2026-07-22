@@ -4883,9 +4883,9 @@ function App() {
       fresh.forEach((e) => {
         imp[e.id] = true;
         const day = String(e.date || e.at || "").slice(0, 10);
-        if (e.kind === "cost") costs.unshift({ id: "cw-" + e.id, date: day, vendor: String(e.supplier || ""), amount: Math.round(num(e.amount) * 100) / 100, category: CJ_CATS.indexOf(e.category) >= 0 ? e.category : "Other", note: (e.note ? String(e.note) + " — " : "") + (e.crewName || "crew"), source: "crew", photo: null });
-        else if (e.kind === "timer") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.crewCount) || 1, hrs: num(e.hours) || 0, mh: num(e.manHours) || 0, task: String(e.task || ""), qty: num(e.qty) || 0, unit: String(e.unit || ""), note: (e.task || "task") + (num(e.qty) > 0 ? " — " + e.qty + " " + e.unit : "") + " (" + (e.crewName || "crew") + ")" });
-        else if (e.kind === "hours") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.guys) || 1, hrs: num(e.hoursEach) || 0, mh: num(e.manHours) || 0, note: (e.note ? String(e.note) + " " : "") + "(" + (e.crewName || "crew") + ")" });
+        if (e.kind === "cost") costs.unshift({ id: "cw-" + e.id, date: day, vendor: String(e.supplier || ""), amount: Math.round(num(e.amount) * 100) / 100, category: CJ_CATS.indexOf(e.category) >= 0 ? e.category : "Other", note: String(e.note || ""), crew: e.crewName || "crew", source: "crew", photo: null });
+        else if (e.kind === "timer") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.crewCount) || 1, hrs: num(e.hours) || 0, mh: num(e.manHours) || 0, task: String(e.task || ""), qty: num(e.qty) || 0, unit: String(e.unit || ""), crew: e.crewName || "crew", note: (e.task || "task") + (num(e.qty) > 0 ? " — " + e.qty + " " + e.unit : "") });
+        else if (e.kind === "hours") hoursL.unshift({ id: "cw-" + e.id, date: day, guys: num(e.guys) || 1, hrs: num(e.hoursEach) || 0, mh: num(e.manHours) || 0, crew: e.crewName || "crew", note: String(e.note || "") });
         else if (e.kind === "co") cos.unshift({ id: "cw-" + e.id, date: day, title: String(e.description || "Crew change order").slice(0, 60), description: String(e.description || "") + " — submitted by " + (e.crewName || "crew"), price: num(e.estCost) || 0, expMaterials: 0, expLabor: 0, expManHours: 0, status: "draft", approvedDate: null, approvedNote: "", photo: null });
       });
       j.crewImported = imp; j.costs = costs; j.hoursLog = hoursL; j.changeOrders = cos;
@@ -6797,6 +6797,7 @@ function App() {
                       <b style={{ display: "block", fontSize: 12.5 }}>{c.vendor || c.category}</b>
                       <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[c.date, c.category, c.note].filter(Boolean).join(" · ")}</span>
                     </span>
+                    {c.crew && <span style={{ fontSize: 10.5, fontWeight: 800, background: "#E4F2E9", color: "#14532d", borderRadius: 8, padding: "2px 7px", whiteSpace: "nowrap" }}>👷 {c.crew}</span>}
                     <b style={{ whiteSpace: "nowrap" }}>{$0(c.amount)}</b>
                     <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelCost(job.id, c.id)}>✕</button>
                   </div>
@@ -6888,7 +6889,7 @@ function App() {
                 <div className="seclabel" style={{ marginTop: 10 }}>Man-hours log <span className="hint">total {act.mh} MH</span></div>
                 {(job.hoursLog || []).map((h) => (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f0f0f0", fontSize: 12.5 }}>
-                    <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}{h.note ? " · " + h.note : ""}</span>
+                    <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}{h.note ? " · " + h.note : ""}{h.crew ? <span style={{ fontSize: 10.5, fontWeight: 800, background: "#E4F2E9", color: "#14532d", borderRadius: 8, padding: "1px 7px", marginLeft: 6 }}>👷 {h.crew}</span> : null}</span>
                     <b>{h.mh} MH</b>
                     <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelHours(job.id, h.id)}>✕</button>
                   </div>
@@ -6951,8 +6952,8 @@ function App() {
                         <div key={e.id} style={{ display: "flex", gap: 7, alignItems: "center", padding: "4px 0", borderBottom: "1px solid #e7ece8", fontSize: 12 }}>
                           <span style={{ width: 20, textAlign: "center" }}>{e.kind === "cost" ? "🧾" : e.kind === "timer" ? "⏱" : e.kind === "hours" ? "🕐" : "🔀"}</span>
                           <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                            {e.kind === "cost" ? $0(e.amount) + " " + (e.category || "") + (e.supplier ? " · " + e.supplier : "") : e.kind === "timer" ? (e.task || "task") + " — " + (e.manHours || 0) + " MH" + (num(e.qty) > 0 ? " / " + e.qty + " " + e.unit : "") : e.kind === "hours" ? (e.manHours || 0) + " MH" : "CO: " + String(e.description || "").slice(0, 50)}
-                            <span className="hint"> · {e.crewName || "crew"} · {String(e.at || e.receivedAt || "").slice(5, 16).replace("T", " ")}</span>
+                            <b>{e.crewName || "crew"}</b> — {e.kind === "cost" ? $0(e.amount) + " " + (e.category || "") + (e.supplier ? " · " + e.supplier : "") : e.kind === "timer" ? (e.task || "task") + " — " + (e.manHours || 0) + " MH" + (num(e.qty) > 0 ? " / " + e.qty + " " + e.unit : "") : e.kind === "hours" ? (e.manHours || 0) + " MH" : "CO: " + String(e.description || "").slice(0, 50)}
+                            <span className="hint"> · {String(e.at || e.receivedAt || "").slice(5, 16).replace("T", " ")}</span>
                           </span>
                           {!((job.crewImported || {})[e.id]) && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#8A5A12" }}>new</span>}
                         </div>
