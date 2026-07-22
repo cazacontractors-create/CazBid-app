@@ -10727,6 +10727,49 @@ function App() {
     goTab("estimator");
     flash("Build the estimate — it attaches to “" + (job.name || "this job") + "” when it saves.");
   };
+  // CREW APP LINK — register this job with the /crew endpoint (same site's new additive function)
+  // so it appears in the CazBid Crew app under a crew code. job.id doubles as the crew-side id, so
+  // everything the crew logs keys straight back to this job (the Crew Activity panel reads log:<id>).
+  const cjCrewLink = async job => {
+    const rec0 = job.estimateId ? estimates.find(e => e.id === job.estimateId) : null;
+    const ev = rec0 ? cjEstVals(rec0) : null;
+    const suggested = job.crewPin || ((String(job.name || "JOB").replace(/[^a-zA-Z0-9]/g, "").slice(0, 6) || "JOB") + Math.floor(10 + Math.random() * 90)).toUpperCase();
+    const pin = window.prompt("Crew code for this job — the crew joins with this (4+ characters):", suggested);
+    if (pin == null) return;
+    const p = String(pin).trim();
+    if (p.length < 4) {
+      flash("Crew code needs 4+ characters.");
+      return;
+    }
+    try {
+      const r = await fetch("/.netlify/functions/crew", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          op: "setup",
+          currentPin: job.crewPin || undefined,
+          job: {
+            id: job.id,
+            name: job.name,
+            trade: job.trade || "",
+            pin: p,
+            estCost: ev ? ev.total : (num(job.planned.mats) || 0) + (num(job.planned.labor) || 0),
+            estHours: ev ? ev.mh : num(job.planned.mh) || 0
+          }
+        })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "link failed");
+      cjUpdate(job.id, j => {
+        j.crewPin = p;
+      });
+      flash("Linked — crew joins with code “" + p + "” at cazbid-crew.netlify.app.");
+    } catch (e) {
+      flash("Couldn't link — " + errMsg(e) + (String(e && e.message || "").indexOf("404") >= 0 ? " (crew endpoint not deployed yet?)" : ""));
+    }
+  };
   // CLOSE + CALIBRATE: actual MH per primary unit vs the rate book, and one tap feeds the EXISTING
   // logActuals loop (dampened blending) — this is how non-roofing rates finally get validated.
   const cjCloseJob = job => {
@@ -14730,7 +14773,51 @@ function App() {
       onClick: () => cjEstimateJob(job)
     }, "🧮 Estimate this job ", /*#__PURE__*/React.createElement("span", {
       className: "hint"
-    }, "what would CazBid have bid?")), job.status !== "closed" ? /*#__PURE__*/React.createElement("button", {
+    }, "what would CazBid have bid?")), job.crewPin ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        alignItems: "center",
+        marginTop: 8,
+        padding: "8px 11px",
+        background: "#F2FBF5",
+        border: "1px solid #BFE6CC",
+        borderRadius: 10,
+        fontSize: 12.5
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, "👷 Crew code: ", /*#__PURE__*/React.createElement("b", null, job.crewPin), " ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "— crew joins at cazbid-crew.netlify.app; their entries land on this job")), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "3px 9px"
+      },
+      onClick: () => {
+        try {
+          navigator.clipboard.writeText(job.crewPin);
+          flash("Code copied.");
+        } catch (e) {}
+      }
+    }, "Copy"), /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost",
+      style: {
+        padding: "3px 9px"
+      },
+      onClick: () => cjCrewLink(job)
+    }, "Change")) : /*#__PURE__*/React.createElement("button", {
+      className: "btn ghost full",
+      style: {
+        marginTop: 8
+      },
+      onClick: () => cjCrewLink(job)
+    }, "👷 Link to crew app ", /*#__PURE__*/React.createElement("span", {
+      className: "hint"
+    }, "make a crew code for this job")), job.status !== "closed" ? /*#__PURE__*/React.createElement("button", {
       className: "btn primary full",
       style: {
         marginTop: 8
