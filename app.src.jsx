@@ -4973,6 +4973,7 @@ function App() {
   // logActuals loop (dampened blending) — this is how non-roofing rates finally get validated.
   // JOB AUTOPSY — one Opus pass over the compiled dossier; result persists on the job.
   const [cjAutopsyBusy, setCjAutopsyBusy] = useState(null); // job id running
+  const [cjCostsOpen, setCjCostsOpen] = useState(true);      // entries list collapse (auto-collapses on receipt-heavy jobs)
   const cjRunAutopsy = async (job) => {
     const act = cjTotals(job);
     const rec = job.estimateId ? estimates.find((e) => e.id === job.estimateId) : null;
@@ -6773,7 +6774,7 @@ function App() {
               <p className="hint" style={{ marginTop: -2 }}>Receipts, labor, man-hours — compared against what you figured and what CazBid estimated.</p>
               {costJobs.length === 0 && <p className="hint">No jobs yet. Tap ＋ New Job — or build an estimate; every saved estimate creates its job here automatically.</p>}
               {costJobs.map((j) => { const a = cjTotals(j); return (
-                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjCoDraft(null); setCjOpen(j.id); }}>
+                <button type="button" key={j.id} style={{ display: "flex", width: "100%", textAlign: "left", alignItems: "center", gap: 8, background: "transparent", border: "none", borderBottom: "1px solid #f0f0f0", padding: "8px 2px", cursor: "pointer" }} onClick={() => { setCjDraft(null); setCjHoursDraft(null); setCjPbPick(null); setCjEstPick(null); setCjCoDraft(null); setCjCostsOpen((j.costs || []).length <= 6); setCjOpen(j.id); }}>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontSize: 13.5 }}>{j.name}{j.status === "closed" ? " · ✓ closed" : ""}</b>
                     <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[j.customerName, j.address, j.estimateId ? (j.afterTheFact ? "estimate (after the fact)" : "estimate ✓") : "no estimate"].filter(Boolean).join(" · ")}</span>
@@ -6875,7 +6876,7 @@ function App() {
                   </label>
                 </div>
                 {/* MY BID FIGURES — Dustin's own numbers, independent of any AI estimate */}
-                <div className="seclabel" style={{ marginTop: 10 }}>My bid figures <span className="hint">your numbers — not the AI's</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 9, padding: "7px 10px", fontSize: 14, fontWeight: 800, marginTop: 12 }}>My bid figures <span className="hint" style={{ fontWeight: 400 }}>your numbers — not the AI's</span></div>
                 <div className="estfields">
                   <label className="estf"><span>Materials $</span><input {...cjNumField(job, "pmats", () => job.planned.mats, (j, v) => { j.planned.mats = v; })} /></label>
                   <label className="estf"><span>Labor $</span><input {...cjNumField(job, "plabor", () => job.planned.labor, (j, v) => { j.planned.labor = v; })} /></label>
@@ -6883,7 +6884,7 @@ function App() {
                   <label className="estf"><span>Contract price $</span><input {...cjNumField(job, "pcontract", () => job.planned.contract, (j, v) => { j.planned.contract = v; })} /></label>
                 </div>
                 {/* CHANGE ORDERS — mid-job scope changes; only APPROVED ones touch the math (drafts parked) */}
-                <div className="seclabel" style={{ marginTop: 10 }}>Change orders {act.coCount > 0 && <span className="hint">{act.coCount} approved · +{$0(act.coPrice)}</span>}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 9, padding: "7px 10px", fontSize: 14, fontWeight: 800, marginTop: 12 }}>Change orders {act.coCount > 0 && <span className="hint" style={{ fontWeight: 400 }}>{act.coCount} approved · +{$0(act.coPrice)}</span>}</div>
                 {(job.changeOrders || []).map((c) => (
                   <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
                     {c.photo ? <img src={c.photo} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} /> : <span style={{ width: 34, textAlign: "center" }}>🔀</span>}
@@ -6946,26 +6947,30 @@ function App() {
                   </div>
                 )}
                 {/* COSTS — receipts + manual entries; per-category totals live in the comparison above */}
-                <div className="seclabel" style={{ marginTop: 10 }}>Costs <span className="hint">{(job.costs || []).length} entr{(job.costs || []).length === 1 ? "y" : "ies"}{act.total > 0 ? " · " + $0(act.total) + " total" : ""}</span></div>
-                {job.laborFromHours && act.laborComputed > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
-                    <span style={{ width: 34, textAlign: "center" }}>⚙</span>
-                    <span style={{ flex: 1 }}><b style={{ fontSize: 12.5 }}>Labor — computed from hours</b><span className="hint" style={{ display: "block" }}>{act.mh} MH × {$0(job.burdenRate)}/hr{act.laborEntries > 0 ? " (Labor entries ignored: " + $0(act.laborEntries) + ")" : ""}</span></span>
-                    <b>{$0(act.laborComputed)}</b>
+                <button type="button" onClick={() => setCjCostsOpen((o) => !o)} style={Object.assign({ width: "100%", textAlign: "left", cursor: "pointer" }, { display: "flex", alignItems: "center", gap: 6, background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 9, padding: "7px 10px", fontSize: 14, fontWeight: 800, marginTop: 12 })}>
+                  <span style={{ flex: 1 }}>Costs <span className="hint" style={{ fontWeight: 400 }}>{(job.costs || []).length} entr{(job.costs || []).length === 1 ? "y" : "ies"}{act.total > 0 ? " · " + $0(act.total) + " total" : ""}</span></span>
+                  <span style={{ fontWeight: 700 }}>{cjCostsOpen ? "▾" : "▸"}</span>
+                </button>
+                {cjCostsOpen && job.laborFromHours && act.laborComputed > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 2px", borderBottom: "1px solid #eef1ef" }}>
+                    <span style={{ width: 38, height: 38, borderRadius: 10, background: "#E8ECF9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>⚙</span>
+                    <span style={{ flex: 1 }}><b style={{ fontSize: 13.5 }}>Labor — computed from hours</b><span className="hint" style={{ display: "block", fontSize: 12 }}>{act.mh} MH × {$0(job.burdenRate)}/hr{act.laborEntries > 0 ? " (Labor entries ignored: " + $0(act.laborEntries) + ")" : ""}</span></span>
+                    <b style={{ fontSize: 14 }}>{$0(act.laborComputed)}</b>
                   </div>
                 )}
-                {(job.costs || []).map((c) => (
-                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: "1px solid #f0f0f0" }}>
-                    {c.photo ? <img src={c.photo} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} /> : <span style={{ width: 34, textAlign: "center" }}>{c.source === "receipt" ? "🧾" : "✎"}</span>}
+                {cjCostsOpen && (job.costs || []).map((c) => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 2px", borderBottom: "1px solid #eef1ef" }}>
+                    {c.photo ? <img src={c.photo} alt="" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 10, flexShrink: 0 }} /> : <span style={{ width: 38, height: 38, borderRadius: 10, background: c.source === "receipt" ? "#FDF0E4" : "#F1F3F1", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, flexShrink: 0 }}>{c.source === "receipt" ? "🧾" : "✎"}</span>}
                     <span style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setCjDraft({ jobId: job.id, editId: c.id, vendor: c.vendor || "", date: c.date || today, amount: c.amount, category: c.category, note: c.note || "", source: c.source, confidence: "high", photo: c.photo || null })}>
-                      <b style={{ display: "block", fontSize: 12.5 }}>{c.vendor || c.category}</b>
-                      <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[c.date, c.category, c.note].filter(Boolean).join(" · ")}</span>
+                      <b style={{ display: "block", fontSize: 13.5 }}>{c.vendor || c.category}</b>
+                      <span className="hint" style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontSize: 12 }}>{[c.date, c.category, c.note].filter(Boolean).join(" · ")}</span>
                     </span>
-                    {c.crew && <span style={{ fontSize: 10.5, fontWeight: 800, background: "#E4F2E9", color: "#14532d", borderRadius: 8, padding: "2px 7px", whiteSpace: "nowrap" }}>👷 {c.crew}</span>}
-                    <b style={{ whiteSpace: "nowrap" }}>{$0(c.amount)}</b>
-                    <button className="btn ghost" style={{ padding: "2px 6px" }} onClick={() => cjDelCost(job.id, c.id)}>✕</button>
+                    {c.crew && <span style={{ fontSize: 11, fontWeight: 800, background: "#E4F2E9", color: "#14532d", borderRadius: 8, padding: "2px 8px", whiteSpace: "nowrap" }}>👷 {c.crew}</span>}
+                    <b style={{ whiteSpace: "nowrap", fontSize: 14 }}>{$0(c.amount)}</b>
+                    <button className="btn ghost" style={{ padding: "4px 8px" }} onClick={() => cjDelCost(job.id, c.id)}>✕</button>
                   </div>
                 ))}
+                {!cjCostsOpen && (job.costs || []).length > 0 && <p className="hint" style={{ margin: "4px 0 0 2px" }}>Collapsed — tap the Costs bar to see all {(job.costs || []).length} entries. Adding still works below.</p>}
                 {cjDraft && cjDraft.jobId === job.id && (
                   <div style={{ border: "1px solid " + (cjDraft.confidence === "low" ? "#F2C98A" : "#DCE8DF"), background: cjDraft.confidence === "low" ? "#FFF7E6" : "#F6F8F7", borderRadius: 10, padding: "8px 10px", margin: "6px 0" }}>
                     {cjDraft.source === "receipt" && !cjDraft.editId && <div className="hint" style={{ fontWeight: 600, marginBottom: 4 }}>{cjDraft.confidence === "low" ? "⚠️ Hard to read — check everything before saving:" : "Read from the receipt — confirm:"}</div>}
@@ -6982,11 +6987,11 @@ function App() {
                     </div>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                  <button className="btn ghost grow1" disabled={cjReceiptBusy} onClick={() => { setCjPbPick(null); setCjEstPick(null); cjOpenReceipt(job.id); }}>{cjReceiptBusy ? "Reading receipt…" : "🧾 Receipt photo"}</button>
-                  <button className="btn ghost grow1" onClick={() => { setCjPbPick(null); setCjEstPick(null); cjManualEntry(job.id); }}>＋ Manual entry</button>
-                  <button className="btn ghost grow1" onClick={() => { setCjDraft(null); setCjEstPick(null); setCjPbPick({ jobId: job.id, q: "" }); }}>📗 From price book</button>
-                  {rec && <button className="btn ghost grow1" onClick={() => { setCjDraft(null); setCjPbPick(null); setCjEstPick({ jobId: job.id, checked: {} }); }}>📄 From estimate</button>}
+                <div style={{ display: "flex", gap: 7, marginTop: 8, flexWrap: "wrap" }}>
+                  <button className="btn ghost grow1" style={{ padding: "11px 12px", fontSize: 14.5, fontWeight: 700 }} disabled={cjReceiptBusy} onClick={() => { setCjPbPick(null); setCjEstPick(null); cjOpenReceipt(job.id); }}>{cjReceiptBusy ? "Reading receipt…" : "🧾 Receipt photo"}</button>
+                  <button className="btn ghost grow1" style={{ padding: "11px 12px", fontSize: 14.5, fontWeight: 700 }} onClick={() => { setCjPbPick(null); setCjEstPick(null); cjManualEntry(job.id); }}>＋ Manual entry</button>
+                  <button className="btn ghost grow1" style={{ padding: "11px 12px", fontSize: 14.5, fontWeight: 700 }} onClick={() => { setCjDraft(null); setCjEstPick(null); setCjPbPick({ jobId: job.id, q: "" }); }}>📗 From price book</button>
+                  {rec && <button className="btn ghost grow1" style={{ padding: "11px 12px", fontSize: 14.5, fontWeight: 700 }} onClick={() => { setCjDraft(null); setCjPbPick(null); setCjEstPick({ jobId: job.id, checked: {} }); }}>📄 From estimate</button>}
                 </div>
                 {/* FROM PRICE BOOK — search the merged book, qty × price (override = this entry only, never the book) */}
                 {cjPbPick && cjPbPick.jobId === job.id && (
@@ -7050,7 +7055,7 @@ function App() {
                   </div>
                 )}
                 {/* MAN-HOURS LOG — the number that calibrates the rate book */}
-                <div className="seclabel" style={{ marginTop: 10 }}>Man-hours log <span className="hint">total {act.mh} MH</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4F8F5", border: "1px solid #DCE8DF", borderRadius: 9, padding: "7px 10px", fontSize: 14, fontWeight: 800, marginTop: 12 }}>Man-hours log <span className="hint" style={{ fontWeight: 400 }}>total {act.mh} MH</span></div>
                 {(job.hoursLog || []).map((h) => (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", borderBottom: "1px solid #f0f0f0", fontSize: 12.5 }}>
                     <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h.date}{h.guys > 0 && h.hrs > 0 ? " · " + h.guys + " guys × " + h.hrs + " hrs" : ""}{h.note ? " · " + h.note : ""}{h.crew ? <span style={{ fontSize: 10.5, fontWeight: 800, background: "#E4F2E9", color: "#14532d", borderRadius: 8, padding: "1px 7px", marginLeft: 6 }}>👷 {h.crew}</span> : null}</span>
