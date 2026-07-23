@@ -3103,7 +3103,7 @@ function App() {
       const ests = await estStore.list();
       if (ests && ests.length) setEstimates(ests);
       const cjs = await pGet(COSTJOBS_KEY);
-      if (Array.isArray(cjs)) setCostJobs(cjs);
+      if (Array.isArray(cjs)) { setCostJobs(cjs); costJobsRef.current = cjs; }
       const srs = await pGet(STANDING_RULES_KEY);
       if (Array.isArray(srs)) setStandingRules(srs);
       const cjd = await pGet(CJ_DISMISSED_KEY);
@@ -4726,7 +4726,8 @@ function App() {
   // FUNCTIONAL updates ONLY — the 600ms auto-save timer holds stale closures over costJobs; a plain
   // setCostJobs(next) from that snapshot would silently erase jobs created/edited in the window (and
   // pSet would persist the loss). Updaters always see fresh state; pSet writes exactly what commits.
-  const saveCostJobs = (nextOrFn) => setCostJobs((prev) => { const next = (typeof nextOrFn === "function") ? nextOrFn(prev) : nextOrFn; pSet(COSTJOBS_KEY, next); return next; });
+  const costJobsRef = useRef([]); // live mirror — crew-sync fires from timeouts and must never see a stale closure
+  const saveCostJobs = (nextOrFn) => setCostJobs((prev) => { const next = (typeof nextOrFn === "function") ? nextOrFn(prev) : nextOrFn; costJobsRef.current = next; pSet(COSTJOBS_KEY, next); return next; });
   // shallow clone is sufficient: every mut() sets top-level scalars, planned.X, or REASSIGNS costs/
   // hoursLog with fresh arrays (map/filter/concat) — never mutates nested entries in place.
   const cjUpdate = (id, mut) => saveCostJobs((prev) => prev.map((j) => { if (j.id !== id) return j; const c = { ...j, planned: { ...(j.planned || {}) } }; mut(c); c.updatedAt = new Date().toISOString(); return c; }));
@@ -4736,7 +4737,7 @@ function App() {
     type: "number",
     value: (cjNumDraft && cjNumDraft.jobId === job.id && cjNumDraft.field === field) ? cjNumDraft.raw : (getV() || ""),
     onChange: (e) => setCjNumDraft({ jobId: job.id, field: field, raw: e.target.value }),
-    onBlur: () => { if (cjNumDraft && cjNumDraft.jobId === job.id && cjNumDraft.field === field) { const v = num(cjNumDraft.raw); cjUpdate(job.id, (j) => setV(j, v)); setCjNumDraft(null); } },
+    onBlur: () => { if (cjNumDraft && cjNumDraft.jobId === job.id && cjNumDraft.field === field) { const v = num(cjNumDraft.raw); cjUpdate(job.id, (j) => setV(j, v)); setCjNumDraft(null); setTimeout(() => cjCrewSync(job.id), 80); } },
   });
   const cjNew = () => {
     const name = window.prompt("Job name (e.g. Miller — cedar shake tear-off)");
@@ -4892,6 +4893,18 @@ function App() {
     });
     flash(fresh.length + " crew entr" + (fresh.length === 1 ? "y" : "ies") + " pulled into job costing" + (fresh.some((e) => e.kind === "co") ? " — crew change orders land as DRAFTS for your review." : "."));
   };
+  // CREW SYNC — the server job copy freezes values from LINK time; this re-pushes current
+  // name/trade/estimated hours/cost whenever they change (figures edited, estimate attached)
+  // and in bulk when the Crew & codes card loads. Silent; never blocks anything.
+  const cjCrewSync = async (jobId) => {
+    try {
+      const job = costJobsRef.current.find((x) => x.id === jobId);
+      if (!job || !job.crewPin) return;
+      const rec = job.estimateId ? estimates.find((e) => e.id === job.estimateId) : null;
+      const ev = rec ? cjEstVals(rec) : null;
+      await fetch("/.netlify/functions/crew", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "setup", currentPin: job.crewPin, job: { id: job.id, name: job.name, trade: job.trade || "", pin: job.crewPin, estCost: ev ? ev.total : ((num(job.planned && job.planned.mats) || 0) + (num(job.planned && job.planned.labor) || 0)), estHours: ev ? ev.mh : (num(job.planned && job.planned.mh) || 0) } }) });
+    } catch (e) { /* offline — the next card load re-syncs */ }
+  };
   // CREW & CODES — per-employee personal codes + job delegation, managed from the main app.
   // An employee code is a second way into the crew app: it opens exactly the jobs Dustin checks
   // off here. Job codes keep working (nobody in the field gets locked out).
@@ -4903,6 +4916,7 @@ function App() {
     const bp = cjBossPin();
     if (!bp) { flash("Link at least one job to the crew app first — the roster unlocks with a job code."); return; }
     try {
+      await Promise.all(costJobsRef.current.filter((j) => j.crewPin).map((j) => cjCrewSync(j.id))); // bulk: crew side always sees current hours
       const [r1, r2] = await Promise.all([
         fetch("/.netlify/functions/crew?op=emp-list&pin=" + encodeURIComponent(bp)),
         fetch("/.netlify/functions/crew?op=all&pin=" + encodeURIComponent(bp)),
@@ -4969,6 +4983,7 @@ function App() {
         if (target) {
           cjUpdate(target.id, (j) => { j.estimateId = id; j.afterTheFact = true; if (!j.customerName) j.customerName = estCustomer.trim(); if (!j.address) j.address = estAddress.trim(); });
           setCjLinkTarget(null); flash("Estimate attached to “" + target.name + "”.");
+          setTimeout(() => cjCrewSync(target.id), 120); // push the estimate's hours to the crew side
         } else {
           const now = new Date().toISOString();
           const newJob = { id: "cj" + Date.now().toString(36) + rid().slice(0, 3), createdAt: now, updatedAt: now, name: (estCustomer.trim() || title), customerName: estCustomer.trim(), address: estAddress.trim(), trade: (estResult.trades[0] && estResult.trades[0].tradeKey) || "", planned: { mats: 0, labor: 0, mh: 0, contract: 0 }, costs: [], hoursLog: [], burdenRate: 0, laborFromHours: false, estimateId: id, afterTheFact: false, status: "active" };
